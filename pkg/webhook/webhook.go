@@ -95,6 +95,9 @@ func (ws *Webhook) Initialize(cfg *rest.Config) error {
 	var err error
 
 	certWriter, err = writer.NewFSCertWriter(writer.FSCertWriterOptions{Path: webhookCertDir})
+	if err != nil {
+		return fmt.Errorf("failed to constructs FSCertWriter: %v", err)
+	}
 
 	certs, _, err := certWriter.EnsureCert(dnsName)
 	if err != nil {
