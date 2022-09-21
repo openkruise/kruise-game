@@ -1,0 +1,20 @@
+# permissions for end users to view gameserversets.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gameserverset-viewer-role
+rules:
+- apiGroups:
+  - game.kruise.io
+  resources:
+  - gameserversets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - game.kruise.io
+  resources:
+  - gameserversets/status
+  verbs:
+  - get

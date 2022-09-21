@@ -1,0 +1,25 @@
+domain: my.domain
+layout:
+- go.kubebuilder.io/v3
+projectName: kruise-game
+repo: github.com/openkruise/kruise-game
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: kruise.io
+  group: game
+  kind: GameServerSet
+  path: github.com/openkruise/kruise-game/apis/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: kruise.io
+  group: game
+  kind: GameServer
+  path: github.com/openkruise/kruise-game/apis/v1alpha1
+  version: v1alpha1
+version: "3"

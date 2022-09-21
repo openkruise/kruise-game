@@ -1,10 +1,7 @@
-# kruise-game
+# Introduction
 
-## Introduction
-`Kruise-Game` is an open source project based on OpenKruise, to solve the problem of game server landing in Kubernetes.
-
-<img width="250px" src="./docs/images/logo.jpg" alt="OpenKruiseGame logo"/>
-
+## What is Kruise-Game?
+Kruise-Game is an open source project based on OpenKruise, to solve the problem of game server landing in Kubernetes.
 
 ## Why is Kruise-Game?
 Game servers are stateful services, and there are differences in the operation and maintenance of each game server, which also increases with time. In Kubernetes, general workloads manages a batch of game servers according to pod templates, which cannot take into account the differences in game server status. Batch management and directional management are in conflict in k8s. **Kruise-Game** was born to resolve that. Kruise-Game contains two CRDs, GameServer and GameServerSet:
@@ -12,7 +9,7 @@ Game servers are stateful services, and there are differences in the operation a
 - `GameServer` is responsible for the management of game server status. Users can customize the game server status to reflect the differences between game servers;
 - `GameServerSet` is responsible for batch management of game servers. Users can customize update/reduction strategies according to the status of game servers.
 
-Features:
+## Features
 - Game server status management
     - Mark game servers status without effecting to its lifecycle
 - Flexible scaling/deletion mechanism
@@ -26,23 +23,8 @@ Features:
 - Custom service quality
     - Support probing game servers‘ containers and mark game servers status automatically
 
-## Quick Start
+## What's Next
+Here are some recommended next steps:
 
-- [Installation](./docs/getting_started/installation.md)
-- [Basic Usage](./docs/tutorials/basic_usage.md)
-
-## License
-
-Copyright 2022.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+- Start to [Install kruise-game](./installation.md).
+- Learn Kruise-Game's [Basic Usage](../tutorials/basic_usage.md).
