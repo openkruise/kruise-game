@@ -1,0 +1,24 @@
+# permissions for end users to edit gameservers.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gameserver-editor-role
+rules:
+- apiGroups:
+  - game.kruise.io
+  resources:
+  - gameservers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - game.kruise.io
+  resources:
+  - gameservers/status
+  verbs:
+  - get

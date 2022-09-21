@@ -1,16 +1,15 @@
+
 # Binaries for programs and plugins
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-bin/
-testbin/
-.temp
+bin
+testbin/*
 
 # Test binary, build with `go test -c`
 *.test
-test/e2e/generated/bindata.go
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
@@ -24,6 +23,3 @@ test/e2e/generated/bindata.go
 *.swp
 *.swo
 *~
-.vscode
-
-.DS_Store
