@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"strconv"
 )
 
 type Control interface {
@@ -156,6 +157,9 @@ func (manager GameServerManager) SyncToGs(qualities []gameKruiseV1alpha1.Service
 			}
 			newGsConditions = append(newGsConditions, serviceQualityCondition)
 			if toExecAction {
+				if toExec == nil {
+					toExec = make(map[string]string)
+				}
 				toExec[string(pc.Type)] = string(pc.Status)
 			}
 		}
@@ -163,9 +167,16 @@ func (manager GameServerManager) SyncToGs(qualities []gameKruiseV1alpha1.Service
 	if toExec != nil {
 		var spec gameKruiseV1alpha1.GameServerSpec
 		for _, sq := range qualities {
-			for name := range toExec {
+			for name, state := range toExec {
 				if sq.Name == name {
-					// TODO exec action
+					for _, action := range sq.ServiceQualityAction {
+						if state == strconv.FormatBool(action.State) {
+							spec.DeletionPriority = action.DeletionPriority
+							spec.UpdatePriority = action.UpdatePriority
+							spec.OpsState = action.OpsState
+							spec.NetworkDisabled = action.NetworkDisabled
+						}
+					}
 				}
 			}
 		}
