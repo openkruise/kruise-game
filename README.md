@@ -1,10 +1,16 @@
 # kruise-game
 
 ## Introduction
-`Kruise-Game` is an open source project based on OpenKruise, to solve the problem of game server landing in Kubernetes.
+Kruise-Game is a subproject of OpenKruise, to solve the problem of game server landing in Kubernetes.
 
 <img width="250px" src="./docs/images/logo.jpg" alt="OpenKruiseGame logo"/>
 
+Kruise-Game utilizes the features of [Kruise](https://github.com/openkruise/kruise), including:
+- In-Place Update
+- Update sequence
+- Ordinals reserve(skip)
+- Pod probe marker
+- …
 
 ## Why is Kruise-Game?
 Game servers are stateful services, and there are differences in the operation and maintenance of each game server, which also increases with time. In Kubernetes, general workloads manages a batch of game servers according to pod templates, which cannot take into account the differences in game server status. Batch management and directional management are in conflict in k8s. **Kruise-Game** was born to resolve that. Kruise-Game contains two CRDs, GameServer and GameServerSet:
