@@ -17,8 +17,7 @@
 # Generates a CA certificate, a server key, and a server certificate signed by the CA.
 
 set -e
-SCRIPT=`basename ${BASH_SOURCE[0]}`
-
+SCRIPT=$(basename "${BASH_SOURCE[0]}")
 function usage {
   cat<< EOF
   Usage: $SCRIPT
@@ -117,10 +116,10 @@ if [[ "$IN_POD" == "true" ]];  then
   TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
 
   # Base64 encode secrets and then remove the trailing newline to avoid issues in the curl command
-  ca_cert=$(cat ${TMP_DIR}/ca-cert.pem | base64 | tr -d '\n')
-  ca_key=$(cat ${TMP_DIR}/ca-key.pem | base64 | tr -d '\n')
-  server_cert=$(cat ${TMP_DIR}/server-cert.pem | base64 | tr -d '\n')
-  server_key=$(cat ${TMP_DIR}/server-key.pem | base64 | tr -d '\n')
+  ca_cert=$(cmd file | ${TMP_DIR}/ca-cert.pem | base64 | tr -d '\n')
+  ca_key=$(cmd file | ${TMP_DIR}/ca-key.pem | base64 | tr -d '\n')
+  server_cert=$(cmd file | ${TMP_DIR}/server-cert.pem | base64 | tr -d '\n')
+  server_key=$(cmd file | ${TMP_DIR}/server-key.pem | base64 | tr -d '\n')
 
   # Create the secret resource
   echo "Creating a secret for the certificate and keys"
@@ -166,5 +165,5 @@ else
 fi
 
 # Clean up after we're done.
-printf "\nDeleting ${TMP_DIR}.\n"
+printf "\nDeleting %s.\n" "${TMP_DIR}"
 rm -rf ${TMP_DIR}
