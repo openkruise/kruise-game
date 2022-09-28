@@ -1,0 +1,113 @@
+name: E2E-1.24
+
+on:
+  push:
+    branches:
+      - master
+      - release-*
+  pull_request: {}
+  workflow_dispatch: {}
+
+env:
+  # Common versions
+  GO_VERSION: '1.18'
+  KIND_ACTION_VERSION: 'v1.3.0'
+  KIND_VERSION: 'v0.14.0'
+  KIND_IMAGE: 'kindest/node:v1.24.2'
+  KIND_CLUSTER_NAME: 'ci-testing'
+
+jobs:
+
+  game-kruise:
+    runs-on: ubuntu-18.04
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+      - name: Setup Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Setup Kind Cluster
+        uses: helm/kind-action@v1.3.0
+        with:
+          node_image: ${{ env.KIND_IMAGE }}
+          cluster_name: ${{ env.KIND_CLUSTER_NAME }}
+          config: ./test/kind-conf.yaml
+          version: ${{ env.KIND_VERSION }}
+      - name: Build image
+        run: |
+          export IMAGE="openkruise/kruise-game-manager:e2e-${GITHUB_RUN_ID}"
+          docker build --pull --no-cache . -t $IMAGE
+          kind load docker-image --name=${KIND_CLUSTER_NAME} $IMAGE || { echo >&2 "kind not installed or error loading image: $IMAGE"; exit 1; }
+      - name: Install Kruise
+        run: |
+          set -ex
+          kubectl cluster-info
+          make helm
+          helm repo add openkruise https://openkruise.github.io/charts/
+          helm repo update
+          helm install kruise openkruise/kruise
+          for ((i=1;i<10;i++));
+          do
+            set +e
+            PODS=$(kubectl get pod -n kruise-system | grep '1/1' | grep kruise-controller-manager | wc -l)
+            set -e
+            if [ "$PODS" -eq "2" ]; then
+              break
+            fi
+            sleep 3
+          done
+          set +e
+          PODS=$(kubectl get pod -n kruise-system | grep '1/1' | grep kruise-controller-manager | wc -l)
+          set -e
+          if [ "$PODS" -eq "2" ]; then
+            echo "Wait for kruise-manager ready successfully"
+          else
+            echo "Timeout to wait for kruise-manager ready"
+            exit 1
+          fi
+      - name: Install Kruise Game
+        run: |
+          set -ex
+          kubectl cluster-info
+          IMG=openkruise/kruise-game-manager:e2e-${GITHUB_RUN_ID} ./scripts/deploy_kind.sh
+          for ((i=1;i<10;i++));
+          do
+            set +e
+            PODS=$(kubectl get pod -n kruise-game-system | grep '1/1' | wc -l)
+            set -e
+            if [ "$PODS" -eq "1" ]; then
+              break
+            fi
+            sleep 3
+          done
+          set +e
+          PODS=$(kubectl get pod -n kruise-game-system | grep '1/1' | wc -l)
+          kubectl get node -o yaml
+          kubectl get all -n kruise-game-system -o yaml
+          set -e
+          if [ "$PODS" -eq "1" ]; then
+            echo "Wait for kruise-game ready successfully"
+          else
+            echo "Timeout to wait for kruise-game ready"
+            exit 1
+          fi
+      - name: Run E2E Tests
+        run: |
+          export KUBECONFIG=/home/runner/.kube/config
+          make ginkgo
+          set +e
+          ./bin/ginkgo -timeout 60m -v test/e2e
+          retVal=$?
+          # kubectl get pod -n kruise-game-system --no-headers | grep manager | awk '{print $1}' | xargs kubectl logs -n kruise-game-system
+          restartCount=$(kubectl get pod -n kruise-game-system --no-headers | awk '{print $4}')
+          if [ "${restartCount}" -eq "0" ];then
+              echo "Kruise-game has not restarted"
+          else
+              kubectl get pod -n kruise-game-system --no-headers
+              echo "Kruise-game has restarted, abort!!!"
+              kubectl get pod -n kruise-game-system --no-headers| awk '{print $1}' | xargs kubectl logs -p -n kruise-game-system
+              exit 1
+          fi
+          exit $retVal
