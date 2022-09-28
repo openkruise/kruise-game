@@ -131,3 +131,10 @@ $(CONTROLLER_GEN): $(LOCALBIN)
 envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
 $(ENVTEST): $(LOCALBIN)
 	GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+
+HELM = $(shell pwd)/bin/helm
+helm: ## Download helm locally if necessary.
+	$(call go-get-tool,$(HELM),helm.sh/helm/v3@v3.8.1)
+
+ginkgo: ## Download ginkgo locally if necessary.
+	GOBIN=$(LOCALBIN) go install github.com/onsi/ginkgo/ginkgo@v1.16.5
