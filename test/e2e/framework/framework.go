@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
+	"strings"
 	"time"
 )
 
@@ -140,7 +141,7 @@ func (f *Framework) WaitForUpdated(gss *gamekruiseiov1alpha1.GameServerSet, name
 
 			for _, pod := range podList.Items {
 				for _, c := range pod.Status.ContainerStatuses {
-					if name == c.Name && image == c.Image {
+					if name == c.Name && strings.Contains(c.Image, image) {
 						updated++
 						break
 					}
