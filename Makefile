@@ -57,7 +57,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" go test ./... -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" go test ./pkg/... -coverprofile cover.out
 
 ##@ Build
 
@@ -131,3 +131,10 @@ $(CONTROLLER_GEN): $(LOCALBIN)
 envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
 $(ENVTEST): $(LOCALBIN)
 	GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+
+HELM = $(shell pwd)/bin/helm
+helm: ## Download helm locally if necessary.
+	$(call go-get-tool,$(HELM),helm.sh/helm/v3@v3.8.1)
+
+ginkgo: ## Download ginkgo locally if necessary.
+	GOBIN=$(LOCALBIN) go install github.com/onsi/ginkgo/ginkgo@v1.16.5
