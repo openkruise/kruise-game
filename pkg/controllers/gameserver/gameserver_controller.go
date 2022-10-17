@@ -71,10 +71,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		klog.Error(err)
 		return err
 	}
-	if err = c.Watch(&source.Kind{Type: &gamekruiseiov1alpha1.GameServer{}}, &handler.EnqueueRequestForOwner{
-		OwnerType:    &corev1.Pod{},
-		IsController: true,
-	}); err != nil {
+	if err = c.Watch(&source.Kind{Type: &gamekruiseiov1alpha1.GameServer{}}, &handler.EnqueueRequestForObject{}); err != nil {
 		klog.Error(err)
 		return err
 	}
@@ -150,28 +147,47 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// get pod
 	pod := &corev1.Pod{}
 	err := r.Get(ctx, namespacedName, pod)
+	podFound := true
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return reconcile.Result{}, nil
+			podFound = false
+		} else {
+			klog.Errorf("failed to find pod %s in %s, because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
+			return reconcile.Result{}, err
 		}
-		klog.Errorf("failed to find pod %s in %s, because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
-		return reconcile.Result{}, err
 	}
 
 	// get GameServer
 	gs := &gamekruiseiov1alpha1.GameServer{}
 	err = r.Get(ctx, namespacedName, gs)
+	gsFound := true
 	if err != nil {
 		if errors.IsNotFound(err) {
-			err := r.initGameServer(pod)
-			if err != nil && !errors.IsAlreadyExists(err) && !errors.IsNotFound(err) {
-				klog.Errorf("failed to create GameServer %s in %s, because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
+			gsFound = false
+		} else {
+			klog.Errorf("failed to find GameServer %s in %s, because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
+			return reconcile.Result{}, err
+		}
+	}
+
+	if podFound && !gsFound {
+		err := r.initGameServer(pod)
+		if err != nil && !errors.IsAlreadyExists(err) && !errors.IsNotFound(err) {
+			klog.Errorf("failed to create GameServer %s in %s, because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
+			return reconcile.Result{}, err
+		}
+		return reconcile.Result{}, nil
+	}
+
+	if !podFound {
+		if gsFound && gs.GetLabels()[gamekruiseiov1alpha1.GameServerDeletingKey] == "true" {
+			err := r.Client.Delete(context.Background(), gs)
+			if err != nil && !errors.IsNotFound(err) {
+				klog.Errorf("failed to delete GameServer %s in %s, because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
 				return reconcile.Result{}, err
 			}
-			return reconcile.Result{}, nil
 		}
-		klog.Errorf("failed to find GameServer %s in %s, because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
-		return reconcile.Result{}, err
+		return reconcile.Result{}, nil
 	}
 
 	gsm := NewGameServerManager(gs, pod, r.Client)
@@ -221,12 +237,16 @@ func (r *GameServerReconciler) initGameServer(pod *corev1.Pod) error {
 	gs.Namespace = pod.GetNamespace()
 
 	// set owner reference
+	gss, err := r.getGameServerSet(pod)
+	if err != nil {
+		return err
+	}
 	ors := make([]metav1.OwnerReference, 0)
 	or := metav1.OwnerReference{
-		APIVersion:         pod.APIVersion,
-		Kind:               pod.Kind,
-		Name:               pod.GetName(),
-		UID:                pod.GetUID(),
+		APIVersion:         gss.APIVersion,
+		Kind:               gss.Kind,
+		Name:               gss.GetName(),
+		UID:                gss.GetUID(),
 		Controller:         pointer.BoolPtr(true),
 		BlockOwnerDeletion: pointer.BoolPtr(true),
 	}

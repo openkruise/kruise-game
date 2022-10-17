@@ -74,5 +74,28 @@ func RunTestCases(f *framework.Framework) {
 			err = f.WaitForUpdated(gss, client.GameContainerName, "nginx:latest")
 			gomega.Expect(err).To(gomega.BeNil())
 		})
+
+		ginkgo.It("GameServer lifecycle", func() {
+
+			// deploy
+			gss, err := f.DeployGameServerSet()
+			gomega.Expect(err).To(gomega.BeNil())
+
+			err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
+			gomega.Expect(err).To(gomega.BeNil())
+
+			_, err = f.ChangeGameServerDeletionPriority(gss.GetName()+"-1", "100")
+			gomega.Expect(err).To(gomega.BeNil())
+
+			err = f.WaitForGsDeletionPriorityUpdated(gss.GetName()+"-1", "100")
+			gomega.Expect(err).To(gomega.BeNil())
+
+			err = f.DeletePodDirectly(1)
+			gomega.Expect(err).To(gomega.BeNil())
+
+			err = f.ExpectGsCorrect(gss.GetName()+"-1", "None", "100", "0")
+			gomega.Expect(err).To(gomega.BeNil())
+		})
+
 	})
 }

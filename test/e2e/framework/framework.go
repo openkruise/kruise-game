@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
+	"strconv"
 	"time"
 )
 
@@ -213,4 +214,22 @@ func (f *Framework) WaitForGsDeletionPriorityUpdated(gsName string, deletionPrio
 			}
 			return false, nil
 		})
+}
+
+func (f *Framework) DeletePodDirectly(index int) error {
+	gsName := client.GameServerSet + "-" + strconv.Itoa(index)
+	return f.client.DeletePod(gsName)
+}
+
+func (f *Framework) ExpectGsCorrect(gsName, opsState, dp, up string) error {
+	gs, err := f.client.GetGameServer(gsName)
+	if err != nil {
+		return err
+	}
+
+	if gs.Status.DeletionPriority.String() != dp || gs.Status.UpdatePriority.String() != up || string(gs.Spec.OpsState) != opsState {
+		return fmt.Errorf("current GameServer is wrong")
+	}
+
+	return nil
 }

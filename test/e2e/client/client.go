@@ -120,6 +120,10 @@ func (client *Client) PatchGameServer(gsName string, data []byte) (*gameKruiseV1
 	return client.kruisegameClient.GameV1alpha1().GameServers(Namespace).Patch(context.TODO(), gsName, types.MergePatchType, data, metav1.PatchOptions{})
 }
 
+func (client *Client) GetGameServer(gsName string) (*gameKruiseV1alpha1.GameServer, error) {
+	return client.kruisegameClient.GameV1alpha1().GameServers(Namespace).Get(context.TODO(), gsName, metav1.GetOptions{})
+}
+
 func (client *Client) PatchGameServerSet(data []byte) (*gameKruiseV1alpha1.GameServerSet, error) {
 	return client.kruisegameClient.GameV1alpha1().GameServerSets(Namespace).Patch(context.TODO(), GameServerSet, types.MergePatchType, data, metav1.PatchOptions{})
 }
@@ -134,4 +138,8 @@ func (client *Client) GetPodList(labelSelector string) (*corev1.PodList, error) 
 
 func (client *Client) GetPod(podName string) (*corev1.Pod, error) {
 	return client.kubeClint.CoreV1().Pods(Namespace).Get(context.TODO(), podName, metav1.GetOptions{})
+}
+
+func (client *Client) DeletePod(podName string) error {
+	return client.kubeClint.CoreV1().Pods(Namespace).Delete(context.TODO(), podName, metav1.DeleteOptions{})
 }

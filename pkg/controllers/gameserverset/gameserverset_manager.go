@@ -22,12 +22,16 @@ import (
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sort"
+	"strconv"
+	"sync"
+	"time"
 )
 
 type Control interface {
@@ -89,7 +93,7 @@ func (manager *GameServerSetManager) GameServerScale() error {
 
 	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas.", gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas)
 
-	newNotExistIds := computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, gsList)
+	newNotExistIds, deleteIds := computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, gsList)
 
 	asts.Spec.ReserveOrdinals = append(gssReserveIds, newNotExistIds...)
 	asts.Spec.Replicas = gss.Spec.Replicas
@@ -113,10 +117,10 @@ func (manager *GameServerSetManager) GameServerScale() error {
 		return err
 	}
 
-	return nil
+	return manager.deleteGameServers(deleteIds)
 }
 
-func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedReplicas int, pods []corev1.Pod) []int {
+func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedReplicas int, pods []corev1.Pod) ([]int, []int) {
 	workloadManageIds := util.GetIndexListFromPodList(pods)
 
 	var toAdd []int
@@ -178,7 +182,57 @@ func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedRepl
 		}
 	}
 
-	return newNotExistIds
+	deleteIds := util.GetSliceInANotInB(workloadManageIds, newManageIds)
+
+	return newNotExistIds, deleteIds
+}
+
+func (manager *GameServerSetManager) deleteGameServers(deleteIds []int) error {
+	gss := manager.gameServerSet
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	errch := make(chan error, len(deleteIds))
+	var wg sync.WaitGroup
+	for _, id := range deleteIds {
+		wg.Add(1)
+		id := id
+		go func(ctx context.Context) {
+			defer wg.Done()
+			defer ctx.Done()
+			gsName := gss.GetName() + "-" + strconv.Itoa(id)
+			gs := &gameKruiseV1alpha1.GameServer{}
+			err := manager.client.Get(ctx, types.NamespacedName{
+				Name:      gsName,
+				Namespace: gss.GetNamespace(),
+			}, gs)
+			if err != nil {
+				if !errors.IsNotFound(err) {
+					errch <- err
+				}
+				return
+			}
+			newLabels := gs.GetLabels()
+			if newLabels == nil {
+				newLabels = make(map[string]string)
+			}
+			newLabels[gameKruiseV1alpha1.GameServerDeletingKey] = "true"
+			gs.SetLabels(newLabels)
+			err = manager.client.Update(ctx, gs)
+			if err != nil {
+				errch <- err
+			}
+		}(ctx)
+	}
+	wg.Wait()
+	close(errch)
+	err := <-errch
+	if err != nil {
+		klog.Errorf("failed to delete GameServers %s in %s because of %s.", gss.GetNamespace(), err.Error())
+		return err
+	}
+
+	return nil
 }
 
 func (manager *GameServerSetManager) IsNeedToUpdateWorkload() bool {
