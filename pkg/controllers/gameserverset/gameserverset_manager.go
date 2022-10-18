@@ -18,10 +18,13 @@ package gameserverset
 
 import (
 	"context"
+	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/klog/v2"
@@ -198,7 +201,85 @@ func (manager *GameServerSetManager) UpdateWorkload() error {
 }
 
 func (manager *GameServerSetManager) SyncPodProbeMarker() error {
+	gss := manager.gameServerSet
+	sqs := gss.Spec.ServiceQualities
+	c := manager.client
+	ctx := context.Background()
+
+	// get ppm
+	ppm := &kruiseV1alpha1.PodProbeMarker{}
+	err := c.Get(ctx, types.NamespacedName{
+		Namespace: gss.GetNamespace(),
+		Name:      gss.GetName(),
+	}, ppm)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			if sqs == nil {
+				return nil
+			}
+			// create ppm
+			return c.Create(ctx, createPpm(gss))
+		}
+		return err
+	}
+
+	// delete ppm
+	if sqs == nil {
+		return c.Delete(ctx, ppm)
+	}
+
+	// update ppm
+	if util.GetHash(gss.Spec.ServiceQualities) != ppm.GetLabels()[gameKruiseV1alpha1.PpmHashKey] {
+		ppm.Spec.Probes = constructProbes(gss)
+		return c.Update(ctx, ppm)
+	}
 	return nil
+}
+
+func constructProbes(gss *gameKruiseV1alpha1.GameServerSet) []kruiseV1alpha1.PodContainerProbe {
+	var probes []kruiseV1alpha1.PodContainerProbe
+	for _, sq := range gss.Spec.ServiceQualities {
+		probe := kruiseV1alpha1.PodContainerProbe{
+			Name:          sq.Name,
+			ContainerName: sq.ContainerName,
+			Probe: kruiseV1alpha1.ContainerProbeSpec{
+				Probe: sq.Probe,
+			},
+			PodConditionType: util.AddPrefixGameKruise(sq.Name),
+		}
+		probes = append(probes, probe)
+	}
+	return probes
+}
+
+func createPpm(gss *gameKruiseV1alpha1.GameServerSet) *kruiseV1alpha1.PodProbeMarker {
+	// set owner reference
+	ors := make([]metav1.OwnerReference, 0)
+	or := metav1.OwnerReference{
+		APIVersion:         gss.APIVersion,
+		Kind:               gss.Kind,
+		Name:               gss.GetName(),
+		UID:                gss.GetUID(),
+		Controller:         pointer.BoolPtr(true),
+		BlockOwnerDeletion: pointer.BoolPtr(true),
+	}
+	ors = append(ors, or)
+	return &kruiseV1alpha1.PodProbeMarker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      gss.GetName(),
+			Namespace: gss.GetNamespace(),
+			Labels: map[string]string{
+				gameKruiseV1alpha1.PpmHashKey: util.GetHash(gss.Spec.ServiceQualities),
+			},
+			OwnerReferences: ors,
+		},
+		Spec: kruiseV1alpha1.PodProbeMarkerSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{gameKruiseV1alpha1.GameServerOwnerGssKey: gss.GetName()},
+			},
+			Probes: constructProbes(gss),
+		},
+	}
 }
 
 func (manager *GameServerSetManager) SyncStatus() error {

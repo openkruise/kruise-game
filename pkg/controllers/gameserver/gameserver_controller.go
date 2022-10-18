@@ -190,7 +190,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return reconcile.Result{Requeue: podUpdated}, err
 	}
 
-	err = gsm.SyncToGs(gss.Spec.ServiceQualities)
+	err = gsm.SyncToGs(gss)
 	if err != nil {
 		return reconcile.Result{}, err
 	}

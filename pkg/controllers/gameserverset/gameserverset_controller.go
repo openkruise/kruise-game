@@ -225,7 +225,6 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return reconcile.Result{}, nil
 	}
 
-	// TODO sync PodProbeMarker
 	err = gsm.SyncPodProbeMarker()
 	if err != nil {
 		klog.Errorf("GameServerSet %s failed to synchronize PodProbeMarker in %s,because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())

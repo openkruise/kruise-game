@@ -18,6 +18,7 @@ package main
 
 import (
 	"flag"
+	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	controller "github.com/openkruise/kruise-game/pkg/controllers"
 	"github.com/openkruise/kruise-game/pkg/webhook"
@@ -50,6 +51,7 @@ func init() {
 
 	utilruntime.Must(gamekruiseiov1alpha1.AddToScheme(scheme))
 	utilruntime.Must(kruiseV1beta1.AddToScheme(scheme))
+	utilruntime.Must(kruiseV1alpha1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 

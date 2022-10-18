@@ -472,6 +472,14 @@ spec:
                         to 10 seconds. Minimum value is 1.
                       format: int32
                       type: integer
+                    permanent:
+                      description: Whether to make GameServerSpec not change after
+                        the ServiceQualityAction is executed. When Permanent is true,
+                        regardless of the detection results, ServiceQualityAction
+                        will only be executed once. When Permanent is false, ServiceQualityAction
+                        can be executed again even though ServiceQualityAction has
+                        been executed.
+                      type: boolean
                     serviceQualityAction:
                       items:
                         properties:
@@ -484,8 +492,6 @@ spec:
                             type: boolean
                           opsState:
                             type: string
-                          permanent:
-                            type: boolean
                           state:
                             type: boolean
                           updatePriority:
@@ -545,6 +551,7 @@ spec:
                       type: integer
                   required:
                   - name
+                  - permanent
                   type: object
                 type: array
               updateStrategy:
