@@ -266,10 +266,10 @@ func (r *GameServerSetReconciler) initAsts(gss *gamekruiseiov1alpha1.GameServerS
 	ors = append(ors, or)
 	asts.SetOwnerReferences(ors)
 
-	// set label
-	astsLabels := make(map[string]string)
-	astsLabels[gamekruiseiov1alpha1.AstsHashKey] = util.GetAstsHash(gss)
-	asts.SetLabels(astsLabels)
+	// set annotations
+	astsAns := make(map[string]string)
+	astsAns[gamekruiseiov1alpha1.AstsHashKey] = util.GetAstsHash(gss)
+	asts.SetAnnotations(astsAns)
 
 	// set label selector
 	asts.Spec.Selector = &metav1.LabelSelector{

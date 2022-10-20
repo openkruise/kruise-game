@@ -185,7 +185,7 @@ func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedRepl
 }
 
 func (manager *GameServerSetManager) IsNeedToUpdateWorkload() bool {
-	return manager.asts.GetLabels()[gameKruiseV1alpha1.AstsHashKey] != util.GetAstsHash(manager.gameServerSet)
+	return manager.asts.GetAnnotations()[gameKruiseV1alpha1.AstsHashKey] != util.GetAstsHash(manager.gameServerSet)
 }
 
 func (manager *GameServerSetManager) UpdateWorkload() error {
@@ -194,9 +194,9 @@ func (manager *GameServerSetManager) UpdateWorkload() error {
 
 	// sync with Advanced StatefulSet
 	asts = util.GetNewAstsFromGss(gss, asts)
-	astsLabels := asts.GetLabels()
-	astsLabels[gameKruiseV1alpha1.AstsHashKey] = util.GetAstsHash(manager.gameServerSet)
-	asts.SetLabels(astsLabels)
+	astsAns := asts.GetAnnotations()
+	astsAns[gameKruiseV1alpha1.AstsHashKey] = util.GetAstsHash(manager.gameServerSet)
+	asts.SetAnnotations(astsAns)
 	return manager.client.Update(context.Background(), asts)
 }
 
@@ -229,7 +229,7 @@ func (manager *GameServerSetManager) SyncPodProbeMarker() error {
 	}
 
 	// update ppm
-	if util.GetHash(gss.Spec.ServiceQualities) != ppm.GetLabels()[gameKruiseV1alpha1.PpmHashKey] {
+	if util.GetHash(gss.Spec.ServiceQualities) != ppm.GetAnnotations()[gameKruiseV1alpha1.PpmHashKey] {
 		ppm.Spec.Probes = constructProbes(gss)
 		return c.Update(ctx, ppm)
 	}
@@ -268,7 +268,7 @@ func createPpm(gss *gameKruiseV1alpha1.GameServerSet) *kruiseV1alpha1.PodProbeMa
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      gss.GetName(),
 			Namespace: gss.GetNamespace(),
-			Labels: map[string]string{
+			Annotations: map[string]string{
 				gameKruiseV1alpha1.PpmHashKey: util.GetHash(gss.Spec.ServiceQualities),
 			},
 			OwnerReferences: ors,
