@@ -83,15 +83,14 @@ func (manager GameServerManager) SyncToPod() (bool, error) {
 			break
 		}
 		// GameServer Ready / NotReady
-		for _, con := range pod.Status.Conditions {
-			if con.Type == corev1.PodReady {
-				if con.Status == corev1.ConditionTrue {
-					gsState = gameKruiseV1alpha1.Ready
-				} else {
-					gsState = gameKruiseV1alpha1.NotReady
-				}
-				break
+		_, condition := util.GetPodConditionFromList(pod.Status.Conditions, corev1.PodReady)
+		if condition != nil {
+			if condition.Status == corev1.ConditionTrue {
+				gsState = gameKruiseV1alpha1.Ready
+			} else {
+				gsState = gameKruiseV1alpha1.NotReady
 			}
+			break
 		}
 	case corev1.PodFailed:
 		gsState = gameKruiseV1alpha1.Crash
@@ -180,30 +179,28 @@ func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, 
 	for _, sq := range serviceQualities {
 		var newSqCondition gameKruiseV1alpha1.ServiceQualityCondition
 		newSqCondition.Name = sq.Name
-		for _, podCondition := range podConditions {
-			if sq.Name == util.RemovePrefixGameKruise(string(podCondition.Type)) {
-				newSqCondition.Status = string(podCondition.Status)
-				newSqCondition.LastProbeTime = podCondition.LastProbeTime
-				var lastActionTransitionTime metav1.Time
-				sqCondition, exist := sqConditionsMap[sq.Name]
-				if !exist || (sqCondition.Status != string(podCondition.Status) && (sqCondition.LastActionTransitionTime.IsZero() || !sq.Permanent)) {
-					// exec action
-					for _, action := range sq.ServiceQualityAction {
-						state, err := strconv.ParseBool(string(podCondition.Status))
-						if err == nil && state == action.State {
-							spec.DeletionPriority = action.DeletionPriority
-							spec.UpdatePriority = action.UpdatePriority
-							spec.OpsState = action.OpsState
-							spec.NetworkDisabled = action.NetworkDisabled
-							lastActionTransitionTime = metav1.Now()
-						}
+		index, podCondition := util.GetPodConditionFromList(podConditions, corev1.PodConditionType(util.AddPrefixGameKruise(sq.Name)))
+		if index != -1 {
+			newSqCondition.Status = string(podCondition.Status)
+			newSqCondition.LastProbeTime = podCondition.LastProbeTime
+			var lastActionTransitionTime metav1.Time
+			sqCondition, exist := sqConditionsMap[sq.Name]
+			if !exist || (sqCondition.Status != string(podCondition.Status) && (sqCondition.LastActionTransitionTime.IsZero() || !sq.Permanent)) {
+				// exec action
+				for _, action := range sq.ServiceQualityAction {
+					state, err := strconv.ParseBool(string(podCondition.Status))
+					if err == nil && state == action.State {
+						spec.DeletionPriority = action.DeletionPriority
+						spec.UpdatePriority = action.UpdatePriority
+						spec.OpsState = action.OpsState
+						spec.NetworkDisabled = action.NetworkDisabled
+						lastActionTransitionTime = metav1.Now()
 					}
-				} else {
-					lastActionTransitionTime = sqCondition.LastActionTransitionTime
 				}
-				newSqCondition.LastActionTransitionTime = lastActionTransitionTime
-				break
+			} else {
+				lastActionTransitionTime = sqCondition.LastActionTransitionTime
 			}
+			newSqCondition.LastActionTransitionTime = lastActionTransitionTime
 		}
 		newSqCondition.LastTransitionTime = metav1.Now()
 		newGsConditions = append(newGsConditions, newSqCondition)

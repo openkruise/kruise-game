@@ -61,19 +61,15 @@ func NewGameServerSetManager(gss *gameKruiseV1alpha1.GameServerSet, asts *kruise
 func (manager *GameServerSetManager) IsNeedToScale() bool {
 	gss := manager.gameServerSet
 	asts := manager.asts
-	gsList := manager.podList
-
-	currentReplicas := len(gsList)
-	workloadReplicas := int(*asts.Spec.Replicas)
-	expectedReplicas := int(*gss.Spec.Replicas)
 
 	// workload is reconciling its replicas, don't interrupt
-	if currentReplicas != workloadReplicas {
+	if asts.Status.Replicas != *asts.Spec.Replicas {
 		return false
 	}
 
 	// no need to scale
-	return !(expectedReplicas == currentReplicas && util.IsSliceEqual(util.StringToIntSlice(gss.GetAnnotations()[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ","), gss.Spec.ReserveGameServerIds))
+	return !(*gss.Spec.Replicas == *asts.Spec.Replicas &&
+		util.IsSliceEqual(util.StringToIntSlice(gss.GetAnnotations()[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ","), gss.Spec.ReserveGameServerIds))
 }
 
 func (manager *GameServerSetManager) GameServerScale() error {
