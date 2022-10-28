@@ -33,8 +33,12 @@ import (
 )
 
 type Control interface {
-	SyncToPod() (bool, error)
-	SyncToGs(*gameKruiseV1alpha1.GameServerSet) error
+	// SyncGsToPod compares the pod with GameServer, and decide whether to update the pod based on the results.
+	// When the fields of the pod is different from that of GameServer,
+	// pod will be updated and true is returned; otherwise, the pod won't be updated and false is returned.
+	SyncGsToPod() (bool, error)
+	// SyncPodToGs compares the GameServer with pod, and update the GameServer.
+	SyncPodToGs(*gameKruiseV1alpha1.GameServerSet) error
 }
 
 type GameServerManager struct {
@@ -43,8 +47,7 @@ type GameServerManager struct {
 	client     client.Client
 }
 
-func (manager GameServerManager) SyncToPod() (bool, error) {
-	// compare GameServer Spec With Pod
+func (manager GameServerManager) SyncGsToPod() (bool, error) {
 	pod := manager.pod
 	gs := manager.gameServer
 	podLabels := pod.GetLabels()
@@ -120,7 +123,7 @@ func (manager GameServerManager) SyncToPod() (bool, error) {
 	return updated, nil
 }
 
-func (manager GameServerManager) SyncToGs(gss *gameKruiseV1alpha1.GameServerSet) error {
+func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerSet) error {
 	gs := manager.gameServer
 	pod := manager.pod
 
