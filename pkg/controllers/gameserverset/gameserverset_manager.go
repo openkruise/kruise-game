@@ -83,7 +83,7 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	expectedReplicas := int(*gss.Spec.Replicas)
 	as := gss.GetAnnotations()
 	reserveIds := util.StringToIntSlice(as[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ",")
-	notExistIds := util.StringToIntSlice(as[gameKruiseV1alpha1.GameServerSetNotExistIdsKey], ",")
+	notExistIds := util.GetSliceInANotInB(asts.Spec.ReserveOrdinals, reserveIds)
 	gssReserveIds := gss.Spec.ReserveGameServerIds
 
 	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas.", gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas)
@@ -103,7 +103,6 @@ func (manager *GameServerSetManager) GameServerScale() error {
 
 	gssAnnotations := make(map[string]string)
 	gssAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] = util.IntSliceToString(gssReserveIds, ",")
-	gssAnnotations[gameKruiseV1alpha1.GameServerSetNotExistIdsKey] = util.IntSliceToString(newNotExistIds, ",")
 	patchGss := map[string]interface{}{"metadata": map[string]map[string]string{"annotations": gssAnnotations}}
 	patchGssBytes, _ := json.Marshal(patchGss)
 	err = c.Patch(ctx, gss, client.RawPatch(types.MergePatchType, patchGssBytes))
