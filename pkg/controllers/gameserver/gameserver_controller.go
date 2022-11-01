@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+	"time"
 )
 
 var (
@@ -201,12 +202,12 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return reconcile.Result{}, err
 	}
 
-	podUpdated, err := gsm.SyncToPod()
+	podUpdated, err := gsm.SyncGsToPod()
 	if err != nil || podUpdated {
-		return reconcile.Result{Requeue: podUpdated}, err
+		return reconcile.Result{Requeue: podUpdated, RequeueAfter: 3 * time.Second}, err
 	}
 
-	err = gsm.SyncToGs(gss.Spec.ServiceQualities)
+	err = gsm.SyncPodToGs(gss)
 	if err != nil {
 		return reconcile.Result{}, err
 	}

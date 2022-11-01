@@ -59,9 +59,13 @@ const (
 )
 
 type ServiceQuality struct {
-	corev1.Probe         `json:",inline"`
-	Name                 string                 `json:"name"`
-	ContainerName        string                 `json:"containerName,omitempty"`
+	corev1.Probe  `json:",inline"`
+	Name          string `json:"name"`
+	ContainerName string `json:"containerName,omitempty"`
+	// Whether to make GameServerSpec not change after the ServiceQualityAction is executed.
+	// When Permanent is true, regardless of the detection results, ServiceQualityAction will only be executed once.
+	// When Permanent is false, ServiceQualityAction can be executed again even though ServiceQualityAction has been executed.
+	Permanent            bool                   `json:"permanent"`
 	ServiceQualityAction []ServiceQualityAction `json:"serviceQualityAction,omitempty"`
 }
 
@@ -74,7 +78,6 @@ type ServiceQualityCondition struct {
 }
 
 type ServiceQualityAction struct {
-	Permanent      bool `json:"permanent,omitempty"` // default: true
 	State          bool `json:"state"`
 	GameServerSpec `json:",inline"`
 }

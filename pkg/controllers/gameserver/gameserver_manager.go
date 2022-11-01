@@ -33,8 +33,12 @@ import (
 )
 
 type Control interface {
-	SyncToPod() (bool, error)
-	SyncToGs(qualities []gameKruiseV1alpha1.ServiceQuality) error
+	// SyncGsToPod compares the pod with GameServer, and decide whether to update the pod based on the results.
+	// When the fields of the pod is different from that of GameServer,
+	// pod will be updated and true is returned; otherwise, the pod won't be updated and false is returned.
+	SyncGsToPod() (bool, error)
+	// SyncPodToGs compares the GameServer with pod, and update the GameServer.
+	SyncPodToGs(*gameKruiseV1alpha1.GameServerSet) error
 }
 
 type GameServerManager struct {
@@ -43,8 +47,7 @@ type GameServerManager struct {
 	client     client.Client
 }
 
-func (manager GameServerManager) SyncToPod() (bool, error) {
-	// compare GameServer Spec With Pod
+func (manager GameServerManager) SyncGsToPod() (bool, error) {
 	pod := manager.pod
 	gs := manager.gameServer
 	podLabels := pod.GetLabels()
@@ -83,15 +86,14 @@ func (manager GameServerManager) SyncToPod() (bool, error) {
 			break
 		}
 		// GameServer Ready / NotReady
-		for _, con := range pod.Status.Conditions {
-			if con.Type == corev1.PodReady {
-				if con.Status == corev1.ConditionTrue {
-					gsState = gameKruiseV1alpha1.Ready
-				} else {
-					gsState = gameKruiseV1alpha1.NotReady
-				}
-				break
+		_, condition := util.GetPodConditionFromList(pod.Status.Conditions, corev1.PodReady)
+		if condition != nil {
+			if condition.Status == corev1.ConditionTrue {
+				gsState = gameKruiseV1alpha1.Ready
+			} else {
+				gsState = gameKruiseV1alpha1.NotReady
 			}
+			break
 		}
 	case corev1.PodFailed:
 		gsState = gameKruiseV1alpha1.Crash
@@ -121,78 +123,32 @@ func (manager GameServerManager) SyncToPod() (bool, error) {
 	return updated, nil
 }
 
-func (manager GameServerManager) SyncToGs(qualities []gameKruiseV1alpha1.ServiceQuality) error {
+func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerSet) error {
 	gs := manager.gameServer
 	pod := manager.pod
+
+	// sync DeletePriority/UpdatePriority/State
 	podLabels := pod.GetLabels()
 	podDeletePriority := intstr.FromString(podLabels[gameKruiseV1alpha1.GameServerDeletePriorityKey])
 	podUpdatePriority := intstr.FromString(podLabels[gameKruiseV1alpha1.GameServerUpdatePriorityKey])
 	podGsState := gameKruiseV1alpha1.GameServerState(podLabels[gameKruiseV1alpha1.GameServerStateKey])
 
-	gsConditions := gs.Status.ServiceQualitiesCondition
-	podConditions := pod.Status.Conditions
-	var sqNames []string
-	for _, sq := range qualities {
-		sqNames = append(sqNames, sq.Name)
-	}
-	var toExec map[string]string
-	var newGsConditions []gameKruiseV1alpha1.ServiceQualityCondition
-	for _, pc := range podConditions {
-		if util.IsStringInList(string(pc.Type), sqNames) {
-			toExecAction := true
-			lastActionTransitionTime := metav1.Now()
-			for _, gsc := range gsConditions {
-				if gsc.Name == string(pc.Type) && gsc.Status == string(pc.Status) {
-					toExecAction = false
-					lastActionTransitionTime = gsc.LastActionTransitionTime
-					break
-				}
-			}
-			serviceQualityCondition := gameKruiseV1alpha1.ServiceQualityCondition{
-				Name:                     string(pc.Type),
-				Status:                   string(pc.Status),
-				LastProbeTime:            pc.LastProbeTime,
-				LastTransitionTime:       pc.LastTransitionTime,
-				LastActionTransitionTime: lastActionTransitionTime,
-			}
-			newGsConditions = append(newGsConditions, serviceQualityCondition)
-			if toExecAction {
-				if toExec == nil {
-					toExec = make(map[string]string)
-				}
-				toExec[string(pc.Type)] = string(pc.Status)
-			}
-		}
-	}
-	if toExec != nil {
-		var spec gameKruiseV1alpha1.GameServerSpec
-		for _, sq := range qualities {
-			for name, state := range toExec {
-				if sq.Name == name {
-					for _, action := range sq.ServiceQualityAction {
-						if state == strconv.FormatBool(action.State) {
-							spec.DeletionPriority = action.DeletionPriority
-							spec.UpdatePriority = action.UpdatePriority
-							spec.OpsState = action.OpsState
-							spec.NetworkDisabled = action.NetworkDisabled
-						}
-					}
-				}
-			}
-		}
+	// sync Service Qualities
+	spec, newGsConditions := syncServiceQualities(gss.Spec.ServiceQualities, pod.Status.Conditions, gs.Status.ServiceQualitiesCondition)
 
-		patchSpec := map[string]interface{}{"spec": spec}
-		jsonPatchSpec, err := json.Marshal(patchSpec)
-		if err != nil {
-			return err
-		}
-		err = manager.client.Patch(context.TODO(), gs, client.RawPatch(types.MergePatchType, jsonPatchSpec))
-		if err != nil && !errors.IsNotFound(err) {
-			klog.Errorf("failed to patch GameServer spec %s in %s,because of %s.", gs.GetName(), gs.GetNamespace(), err.Error())
-			return err
-		}
+	// patch gs spec
+	patchSpec := map[string]interface{}{"spec": spec}
+	jsonPatchSpec, err := json.Marshal(patchSpec)
+	if err != nil {
+		return err
+	}
+	err = manager.client.Patch(context.TODO(), gs, client.RawPatch(types.MergePatchType, jsonPatchSpec))
+	if err != nil && !errors.IsNotFound(err) {
+		klog.Errorf("failed to patch GameServer spec %s in %s,because of %s.", gs.GetName(), gs.GetNamespace(), err.Error())
+		return err
 	}
 
+	// patch gs status
 	status := gameKruiseV1alpha1.GameServerStatus{
 		PodStatus:                 pod.Status,
 		CurrentState:              podGsState,
@@ -214,6 +170,45 @@ func (manager GameServerManager) SyncToGs(qualities []gameKruiseV1alpha1.Service
 	}
 
 	return nil
+}
+
+func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, podConditions []corev1.PodCondition, sqConditions []gameKruiseV1alpha1.ServiceQualityCondition) (gameKruiseV1alpha1.GameServerSpec, []gameKruiseV1alpha1.ServiceQualityCondition) {
+	var spec gameKruiseV1alpha1.GameServerSpec
+	var newGsConditions []gameKruiseV1alpha1.ServiceQualityCondition
+	sqConditionsMap := make(map[string]gameKruiseV1alpha1.ServiceQualityCondition)
+	for _, sqc := range sqConditions {
+		sqConditionsMap[sqc.Name] = sqc
+	}
+	for _, sq := range serviceQualities {
+		var newSqCondition gameKruiseV1alpha1.ServiceQualityCondition
+		newSqCondition.Name = sq.Name
+		index, podCondition := util.GetPodConditionFromList(podConditions, corev1.PodConditionType(util.AddPrefixGameKruise(sq.Name)))
+		if index != -1 {
+			newSqCondition.Status = string(podCondition.Status)
+			newSqCondition.LastProbeTime = podCondition.LastProbeTime
+			var lastActionTransitionTime metav1.Time
+			sqCondition, exist := sqConditionsMap[sq.Name]
+			if !exist || (sqCondition.Status != string(podCondition.Status) && (sqCondition.LastActionTransitionTime.IsZero() || !sq.Permanent)) {
+				// exec action
+				for _, action := range sq.ServiceQualityAction {
+					state, err := strconv.ParseBool(string(podCondition.Status))
+					if err == nil && state == action.State {
+						spec.DeletionPriority = action.DeletionPriority
+						spec.UpdatePriority = action.UpdatePriority
+						spec.OpsState = action.OpsState
+						spec.NetworkDisabled = action.NetworkDisabled
+						lastActionTransitionTime = metav1.Now()
+					}
+				}
+			} else {
+				lastActionTransitionTime = sqCondition.LastActionTransitionTime
+			}
+			newSqCondition.LastActionTransitionTime = lastActionTransitionTime
+		}
+		newSqCondition.LastTransitionTime = metav1.Now()
+		newGsConditions = append(newGsConditions, newSqCondition)
+	}
+	return spec, newGsConditions
 }
 
 func NewGameServerManager(gs *gameKruiseV1alpha1.GameServer, pod *corev1.Pod, c client.Client) Control {

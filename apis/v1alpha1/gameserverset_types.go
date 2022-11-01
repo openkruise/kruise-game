@@ -29,10 +29,10 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 const (
-	GameServerOwnerGssKey       = "game.kruise.io/owner-gss"
-	GameServerSetReserveIdsKey  = "game.kruise.io/reserve-ids"
-	GameServerSetNotExistIdsKey = "game.kruise.io/not-exist-ids"
-	AstsHashKey                 = "game.kruise.io/asts-hash"
+	GameServerOwnerGssKey      = "game.kruise.io/owner-gss"
+	GameServerSetReserveIdsKey = "game.kruise.io/reserve-ids"
+	AstsHashKey                = "game.kruise.io/asts-hash"
+	PpmHashKey                 = "game.kruise.io/ppm-hash"
 )
 
 // GameServerSetSpec defines the desired state of GameServerSet

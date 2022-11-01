@@ -108,3 +108,47 @@ func TestDeleteSequenceGs(t *testing.T) {
 		}
 	}
 }
+
+func TestAddPrefixGameKruise(t *testing.T) {
+	tests := []struct {
+		s      string
+		result string
+	}{
+		{
+			s:      "healthy",
+			result: "game.kruise.io/healthy",
+		},
+	}
+
+	for _, test := range tests {
+		actual := AddPrefixGameKruise(test.s)
+		expect := test.result
+		if expect != actual {
+			t.Errorf("expect %v but got %v", expect, actual)
+		}
+	}
+}
+
+func TestRemovePrefixGameKruise(t *testing.T) {
+	tests := []struct {
+		s      string
+		result string
+	}{
+		{
+			s:      "game.kruise.io/healthy",
+			result: "healthy",
+		},
+		{
+			s:      "game/healthy",
+			result: "game/healthy",
+		},
+	}
+
+	for _, test := range tests {
+		actual := RemovePrefixGameKruise(test.s)
+		expect := test.result
+		if expect != actual {
+			t.Errorf("expect %v but got %v", expect, actual)
+		}
+	}
+}

@@ -18,11 +18,13 @@ package gameserverset
 
 import (
 	"context"
+	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/klog/v2"
@@ -62,19 +64,15 @@ func NewGameServerSetManager(gss *gameKruiseV1alpha1.GameServerSet, asts *kruise
 func (manager *GameServerSetManager) IsNeedToScale() bool {
 	gss := manager.gameServerSet
 	asts := manager.asts
-	gsList := manager.podList
-
-	currentReplicas := len(gsList)
-	workloadReplicas := int(*asts.Spec.Replicas)
-	expectedReplicas := int(*gss.Spec.Replicas)
 
 	// workload is reconciling its replicas, don't interrupt
-	if currentReplicas != workloadReplicas {
+	if asts.Status.Replicas != *asts.Spec.Replicas {
 		return false
 	}
 
 	// no need to scale
-	return !(expectedReplicas == currentReplicas && util.IsSliceEqual(util.StringToIntSlice(gss.GetAnnotations()[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ","), gss.Spec.ReserveGameServerIds))
+	return !(*gss.Spec.Replicas == *asts.Spec.Replicas &&
+		util.IsSliceEqual(util.StringToIntSlice(gss.GetAnnotations()[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ","), gss.Spec.ReserveGameServerIds))
 }
 
 func (manager *GameServerSetManager) GameServerScale() error {
@@ -88,7 +86,7 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	expectedReplicas := int(*gss.Spec.Replicas)
 	as := gss.GetAnnotations()
 	reserveIds := util.StringToIntSlice(as[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ",")
-	notExistIds := util.StringToIntSlice(as[gameKruiseV1alpha1.GameServerSetNotExistIdsKey], ",")
+	notExistIds := util.GetSliceInANotInB(asts.Spec.ReserveOrdinals, reserveIds)
 	gssReserveIds := gss.Spec.ReserveGameServerIds
 
 	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas.", gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas)
@@ -108,7 +106,6 @@ func (manager *GameServerSetManager) GameServerScale() error {
 
 	gssAnnotations := make(map[string]string)
 	gssAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] = util.IntSliceToString(gssReserveIds, ",")
-	gssAnnotations[gameKruiseV1alpha1.GameServerSetNotExistIdsKey] = util.IntSliceToString(newNotExistIds, ",")
 	patchGss := map[string]interface{}{"metadata": map[string]map[string]string{"annotations": gssAnnotations}}
 	patchGssBytes, _ := json.Marshal(patchGss)
 	err = c.Patch(ctx, gss, client.RawPatch(types.MergePatchType, patchGssBytes))
@@ -236,7 +233,7 @@ func (manager *GameServerSetManager) deleteGameServers(deleteIds []int) error {
 }
 
 func (manager *GameServerSetManager) IsNeedToUpdateWorkload() bool {
-	return manager.asts.GetLabels()[gameKruiseV1alpha1.AstsHashKey] != util.GetAstsHash(manager.gameServerSet)
+	return manager.asts.GetAnnotations()[gameKruiseV1alpha1.AstsHashKey] != util.GetAstsHash(manager.gameServerSet)
 }
 
 func (manager *GameServerSetManager) UpdateWorkload() error {
@@ -245,14 +242,92 @@ func (manager *GameServerSetManager) UpdateWorkload() error {
 
 	// sync with Advanced StatefulSet
 	asts = util.GetNewAstsFromGss(gss, asts)
-	astsLabels := asts.GetLabels()
-	astsLabels[gameKruiseV1alpha1.AstsHashKey] = util.GetAstsHash(manager.gameServerSet)
-	asts.SetLabels(astsLabels)
+	astsAns := asts.GetAnnotations()
+	astsAns[gameKruiseV1alpha1.AstsHashKey] = util.GetAstsHash(manager.gameServerSet)
+	asts.SetAnnotations(astsAns)
 	return manager.client.Update(context.Background(), asts)
 }
 
 func (manager *GameServerSetManager) SyncPodProbeMarker() error {
+	gss := manager.gameServerSet
+	sqs := gss.Spec.ServiceQualities
+	c := manager.client
+	ctx := context.Background()
+
+	// get ppm
+	ppm := &kruiseV1alpha1.PodProbeMarker{}
+	err := c.Get(ctx, types.NamespacedName{
+		Namespace: gss.GetNamespace(),
+		Name:      gss.GetName(),
+	}, ppm)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			if sqs == nil {
+				return nil
+			}
+			// create ppm
+			return c.Create(ctx, createPpm(gss))
+		}
+		return err
+	}
+
+	// delete ppm
+	if sqs == nil {
+		return c.Delete(ctx, ppm)
+	}
+
+	// update ppm
+	if util.GetHash(gss.Spec.ServiceQualities) != ppm.GetAnnotations()[gameKruiseV1alpha1.PpmHashKey] {
+		ppm.Spec.Probes = constructProbes(gss)
+		return c.Update(ctx, ppm)
+	}
 	return nil
+}
+
+func constructProbes(gss *gameKruiseV1alpha1.GameServerSet) []kruiseV1alpha1.PodContainerProbe {
+	var probes []kruiseV1alpha1.PodContainerProbe
+	for _, sq := range gss.Spec.ServiceQualities {
+		probe := kruiseV1alpha1.PodContainerProbe{
+			Name:          sq.Name,
+			ContainerName: sq.ContainerName,
+			Probe: kruiseV1alpha1.ContainerProbeSpec{
+				Probe: sq.Probe,
+			},
+			PodConditionType: util.AddPrefixGameKruise(sq.Name),
+		}
+		probes = append(probes, probe)
+	}
+	return probes
+}
+
+func createPpm(gss *gameKruiseV1alpha1.GameServerSet) *kruiseV1alpha1.PodProbeMarker {
+	// set owner reference
+	ors := make([]metav1.OwnerReference, 0)
+	or := metav1.OwnerReference{
+		APIVersion:         gss.APIVersion,
+		Kind:               gss.Kind,
+		Name:               gss.GetName(),
+		UID:                gss.GetUID(),
+		Controller:         pointer.BoolPtr(true),
+		BlockOwnerDeletion: pointer.BoolPtr(true),
+	}
+	ors = append(ors, or)
+	return &kruiseV1alpha1.PodProbeMarker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      gss.GetName(),
+			Namespace: gss.GetNamespace(),
+			Annotations: map[string]string{
+				gameKruiseV1alpha1.PpmHashKey: util.GetHash(gss.Spec.ServiceQualities),
+			},
+			OwnerReferences: ors,
+		},
+		Spec: kruiseV1alpha1.PodProbeMarkerSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{gameKruiseV1alpha1.GameServerOwnerGssKey: gss.GetName()},
+			},
+			Probes: constructProbes(gss),
+		},
+	}
 }
 
 func (manager *GameServerSetManager) SyncStatus() error {
