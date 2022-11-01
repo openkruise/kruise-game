@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
@@ -54,6 +55,42 @@ func (f *Framework) AfterEach() error {
 
 func (f *Framework) DeployGameServerSet() (*gamekruiseiov1alpha1.GameServerSet, error) {
 	gss := f.client.DefaultGameServerSet()
+	return f.client.CreateGameServerSet(gss)
+}
+
+func (f *Framework) DeployGssWithServiceQualities() (*gamekruiseiov1alpha1.GameServerSet, error) {
+	gss := f.client.DefaultGameServerSet()
+	up := intstr.FromInt(20)
+	dp := intstr.FromInt(10)
+	sqs := []gamekruiseiov1alpha1.ServiceQuality{
+		{
+			Name:          "healthy",
+			ContainerName: client.GameContainerName,
+			Probe: corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{
+					Exec: &corev1.ExecAction{
+						Command: []string{"/bin/sh", "-c", "ls /"},
+					},
+				},
+			},
+			Permanent: false,
+			ServiceQualityAction: []gamekruiseiov1alpha1.ServiceQualityAction{
+				{
+					State: true,
+					GameServerSpec: gamekruiseiov1alpha1.GameServerSpec{
+						UpdatePriority: &up,
+					},
+				},
+				{
+					State: false,
+					GameServerSpec: gamekruiseiov1alpha1.GameServerSpec{
+						DeletionPriority: &dp,
+					},
+				},
+			},
+		},
+	}
+	gss.Spec.ServiceQualities = sqs
 	return f.client.CreateGameServerSet(gss)
 }
 
@@ -210,6 +247,21 @@ func (f *Framework) WaitForGsDeletionPriorityUpdated(gsName string, deletionPrio
 			}
 			currentPriority := pod.GetLabels()[gamekruiseiov1alpha1.GameServerDeletePriorityKey]
 			if currentPriority == deletionPriority {
+				return true, nil
+			}
+			return false, nil
+		})
+}
+
+func (f *Framework) WaitForGsUpdatePriorityUpdated(gsName string, updatePriority string) error {
+	return wait.PollImmediate(5*time.Second, 1*time.Minute,
+		func() (done bool, err error) {
+			pod, err := f.client.GetPod(gsName)
+			if err != nil {
+				return false, err
+			}
+			currentPriority := pod.GetLabels()[gamekruiseiov1alpha1.GameServerUpdatePriorityKey]
+			if currentPriority == updatePriority {
 				return true, nil
 			}
 			return false, nil

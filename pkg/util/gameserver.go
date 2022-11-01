@@ -162,3 +162,11 @@ func GetAstsHash(gss *gameKruiseV1alpha1.GameServerSet) string {
 		Template:       gss.Spec.GameServerTemplate,
 	})
 }
+
+func AddPrefixGameKruise(s string) string {
+	return "game.kruise.io/" + s
+}
+
+func RemovePrefixGameKruise(s string) string {
+	return strings.TrimPrefix(s, "game.kruise.io/")
+}

@@ -74,5 +74,22 @@ func RunTestCases(f *framework.Framework) {
 			err = f.WaitForUpdated(gss, client.GameContainerName, "nginx:latest")
 			gomega.Expect(err).To(gomega.BeNil())
 		})
+
+		ginkgo.It("service qualities", func() {
+
+			// deploy
+			gss, err := f.DeployGssWithServiceQualities()
+			gomega.Expect(err).To(gomega.BeNil())
+
+			err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
+			gomega.Expect(err).To(gomega.BeNil())
+
+			err = f.WaitForGsUpdatePriorityUpdated(gss.GetName()+"-0", "20")
+			gomega.Expect(err).To(gomega.BeNil())
+			err = f.WaitForGsUpdatePriorityUpdated(gss.GetName()+"-1", "20")
+			gomega.Expect(err).To(gomega.BeNil())
+			err = f.WaitForGsUpdatePriorityUpdated(gss.GetName()+"-2", "20")
+			gomega.Expect(err).To(gomega.BeNil())
+		})
 	})
 }

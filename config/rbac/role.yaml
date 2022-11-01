@@ -40,6 +40,18 @@ rules:
 - apiGroups:
   - apps.kruise.io
   resources:
+  - podprobemarkers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps.kruise.io
+  resources:
   - statefulsets
   verbs:
   - create
