@@ -27,6 +27,7 @@ const (
 	GameServerOpsStateKey       = "game.kruise.io/gs-opsState"
 	GameServerUpdatePriorityKey = "game.kruise.io/gs-update-priority"
 	GameServerDeletePriorityKey = "game.kruise.io/gs-delete-priority"
+	GameServerDeletingKey       = "game.kruise.io/gs-deleting"
 )
 
 // GameServerSpec defines the desired state of GameServer
