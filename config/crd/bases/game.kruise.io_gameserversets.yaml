@@ -638,6 +638,10 @@ spec:
               maintainingReplicas:
                 format: int32
                 type: integer
+              observedGeneration:
+                description: The generation observed by the controller.
+                format: int64
+                type: integer
               readyReplicas:
                 format: int32
                 type: integer

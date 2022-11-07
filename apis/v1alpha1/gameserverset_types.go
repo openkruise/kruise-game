@@ -139,6 +139,9 @@ type GameServerSetStatus struct {
 	WaitToBeDeletedReplicas *int32 `json:"waitToBeDeletedReplicas,omitempty"`
 	// LabelSelector is label selectors for query over pods that should match the replica count used by HPA.
 	LabelSelector string `json:"labelSelector,omitempty"`
+	// The generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 //+genclient
