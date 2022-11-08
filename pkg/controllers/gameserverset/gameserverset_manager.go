@@ -26,6 +26,7 @@ import (
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -368,7 +369,9 @@ func (manager *GameServerSetManager) SyncStatus() error {
 		LabelSelector:           asts.Status.LabelSelector,
 		ObservedGeneration:      gss.GetGeneration(),
 	}
-
+	if equality.Semantic.DeepEqual(gss.Status, status) {
+		return nil
+	}
 	patchStatus := map[string]interface{}{"status": status}
 	jsonPatch, err := json.Marshal(patchStatus)
 	if err != nil {
