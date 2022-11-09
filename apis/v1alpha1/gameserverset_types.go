@@ -128,6 +128,9 @@ type ScaleStrategy struct {
 
 // GameServerSetStatus defines the observed state of GameServerSet
 type GameServerSetStatus struct {
+	// The generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// replicas from advancedStatefulSet
 	Replicas                int32  `json:"replicas"`
 	ReadyReplicas           int32  `json:"readyReplicas"`
