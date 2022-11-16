@@ -17,6 +17,7 @@ limitations under the License.
 package util
 
 import (
+	"encoding/json"
 	appspub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
@@ -106,6 +107,14 @@ func GetNewAstsFromGss(gss *gameKruiseV1alpha1.GameServerSet, asts *kruiseV1beta
 
 	// set pod annotations
 	podAnnotations := gss.Spec.GameServerTemplate.GetAnnotations()
+	if gss.Spec.Network != nil {
+		if podAnnotations == nil {
+			podAnnotations = make(map[string]string)
+		}
+		networkConfig, _ := json.Marshal(gss.Spec.Network.NetworkConf)
+		podAnnotations[gameKruiseV1alpha1.GameServerNetworkConf] = string(networkConfig)
+		podAnnotations[gameKruiseV1alpha1.GameServerNetworkType] = gss.Spec.Network.NetworkType
+	}
 	asts.Spec.Template.SetAnnotations(podAnnotations)
 
 	// set template spec

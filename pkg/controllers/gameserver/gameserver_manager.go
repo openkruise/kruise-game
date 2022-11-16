@@ -20,6 +20,7 @@ import (
 	"context"
 	kruisePub "github.com/openkruise/kruise-api/apps/pub"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/cloudprovider/utils"
 	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -28,8 +29,16 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/klog/v2"
+	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strconv"
+	"time"
+)
+
+const (
+	NetworkTotalWaitTime = 60 * time.Second
+	NetworkIntervalTime  = 5 * time.Second
+	TimeFormat           = "2006-01-02 15:04:05"
 )
 
 type Control interface {
@@ -39,6 +48,8 @@ type Control interface {
 	SyncGsToPod() (bool, error)
 	// SyncPodToGs compares the GameServer with pod, and update the GameServer.
 	SyncPodToGs(*gameKruiseV1alpha1.GameServerSet) error
+	// WaitOrNot compare the current game server network status to decide whether to re-queue.
+	WaitOrNot() bool
 }
 
 type GameServerManager struct {
@@ -58,6 +69,7 @@ func (manager GameServerManager) SyncGsToPod() (bool, error) {
 
 	updated := false
 	newLabels := make(map[string]string)
+	newAnnotations := make(map[string]string)
 	if gs.Spec.DeletionPriority.String() != podDeletePriority {
 		newLabels[gameKruiseV1alpha1.GameServerDeletePriorityKey] = gs.Spec.DeletionPriority.String()
 		updated = true
@@ -107,8 +119,21 @@ func (manager GameServerManager) SyncGsToPod() (bool, error) {
 		updated = true
 	}
 
+	if gsState == gameKruiseV1alpha1.Ready && pod.Annotations[gameKruiseV1alpha1.GameServerNetworkType] != "" {
+		if pod.Annotations[gameKruiseV1alpha1.GameServerNetworkDisabled] != strconv.FormatBool(gs.Spec.NetworkDisabled) {
+			newAnnotations[gameKruiseV1alpha1.GameServerNetworkDisabled] = strconv.FormatBool(gs.Spec.NetworkDisabled)
+			updated = true
+		}
+
+		oldTime, err := time.Parse(TimeFormat, pod.Annotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime])
+		if (err == nil && time.Since(oldTime) > NetworkIntervalTime) || (pod.Annotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime] == "") {
+			newAnnotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime] = time.Now().Format(TimeFormat)
+			updated = true
+		}
+	}
+
 	if updated {
-		patchPod := map[string]interface{}{"metadata": map[string]map[string]string{"labels": newLabels}}
+		patchPod := map[string]interface{}{"metadata": map[string]map[string]string{"labels": newLabels, "annotations": newAnnotations}}
 		patchPodBytes, err := json.Marshal(patchPod)
 		if err != nil {
 			return updated, err
@@ -156,6 +181,7 @@ func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerS
 		UpdatePriority:            &podUpdatePriority,
 		DeletionPriority:          &podDeletePriority,
 		ServiceQualitiesCondition: newGsConditions,
+		NetworkStatus:             manager.syncNetworkStatus(),
 		LastTransitionTime:        metav1.Now(),
 	}
 	patchStatus := map[string]interface{}{"status": status}
@@ -170,6 +196,60 @@ func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerS
 	}
 
 	return nil
+}
+
+func (manager GameServerManager) WaitOrNot() bool {
+	networkStatus := manager.gameServer.Status.NetworkStatus
+	alreadyWait := time.Since(networkStatus.LastTransitionTime.Time)
+	if networkStatus.DesiredNetworkState != networkStatus.CurrentNetworkState && alreadyWait < NetworkTotalWaitTime {
+		klog.Infof("GameServer %s/%s DesiredNetworkState: %s CurrentNetworkState: %s. %v remaining",
+			manager.gameServer.GetNamespace(), manager.gameServer.GetName(), networkStatus.DesiredNetworkState, networkStatus.CurrentNetworkState, NetworkTotalWaitTime-alreadyWait)
+		return true
+	}
+	return false
+}
+
+func (manager GameServerManager) syncNetworkStatus() gameKruiseV1alpha1.NetworkStatus {
+	// No Network, return default
+	gsNetworkStatus := manager.gameServer.Status.NetworkStatus
+	nm := utils.NewNetworkManager(manager.pod, manager.client)
+	if nm == nil {
+		return gameKruiseV1alpha1.NetworkStatus{}
+	}
+
+	// NetworkStatus Init
+	if reflect.DeepEqual(gsNetworkStatus, gameKruiseV1alpha1.NetworkStatus{}) {
+		return gameKruiseV1alpha1.NetworkStatus{
+			NetworkType:         nm.GetNetworkType(),
+			DesiredNetworkState: gameKruiseV1alpha1.NetworkReady,
+			CreateTime:          metav1.Now(),
+			LastTransitionTime:  metav1.Now(),
+		}
+	}
+
+	// when pod NetworkStatus is nil
+	podNetworkStatus, _ := nm.GetNetworkStatus()
+	if podNetworkStatus == nil {
+		return gsNetworkStatus
+	}
+
+	gsNetworkStatus.InternalAddresses = podNetworkStatus.InternalAddresses
+	gsNetworkStatus.ExternalAddresses = podNetworkStatus.ExternalAddresses
+	gsNetworkStatus.CurrentNetworkState = podNetworkStatus.CurrentNetworkState
+
+	if gsNetworkStatus.DesiredNetworkState != desiredNetworkState(nm.GetNetworkDisabled()) {
+		gsNetworkStatus.DesiredNetworkState = desiredNetworkState(nm.GetNetworkDisabled())
+		gsNetworkStatus.LastTransitionTime = metav1.Now()
+	}
+
+	return gsNetworkStatus
+}
+
+func desiredNetworkState(disabled bool) gameKruiseV1alpha1.NetworkState {
+	if disabled {
+		return gameKruiseV1alpha1.NetworkNotReady
+	}
+	return gameKruiseV1alpha1.NetworkReady
 }
 
 func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, podConditions []corev1.PodCondition, sqConditions []gameKruiseV1alpha1.ServiceQualityCondition) (gameKruiseV1alpha1.GameServerSpec, []gameKruiseV1alpha1.ServiceQualityCondition) {

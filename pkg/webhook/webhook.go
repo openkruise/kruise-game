@@ -60,9 +60,13 @@ func init() {
 // +kubebuilder:rbac:groups=apps.kruise.io,resources=podprobemarkers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=nodes/status,verbs=get
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=mutatingwebhookconfigurations,verbs=create;get;list;watch;update;patch
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingwebhookconfigurations,verbs=create;get;list;watch;update;patch
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=alibabacloud.com,resources=poddnats,verbs=get;list;watch
+// +kubebuilder:rbac:groups=alibabacloud.com,resources=poddnats/status,verbs=get
 
 type Webhook struct {
 	mgr manager.Manager
@@ -83,7 +87,7 @@ func (ws *Webhook) SetupWithManager(mgr manager.Manager) *Webhook {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	server.Register(mutatePodPath, &webhook.Admission{Handler: &PodMutatingHandler{Client: mgr.GetClient(), decoder: decoder}})
+	server.Register(mutatePodPath, &webhook.Admission{Handler: NewPodMutatingHandler(mgr.GetClient(), decoder)})
 	server.Register(validateGssPath, &webhook.Admission{Handler: &GssValidaatingHandler{Client: mgr.GetClient(), decoder: decoder}})
 	return ws
 }
@@ -218,6 +222,22 @@ func createMutatingWebhook(dnsName string, kubeClient clientset.Interface, caBun
 				Rules: []admissionregistrationv1.RuleWithOperations{
 					{
 						Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create},
+						Rule: admissionregistrationv1.Rule{
+							APIGroups:   []string{""},
+							APIVersions: []string{"v1"},
+							Resources:   []string{"pods"},
+						},
+					},
+					{
+						Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Update},
+						Rule: admissionregistrationv1.Rule{
+							APIGroups:   []string{""},
+							APIVersions: []string{"v1"},
+							Resources:   []string{"pods"},
+						},
+					},
+					{
+						Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Delete},
 						Rule: admissionregistrationv1.Rule{
 							APIGroups:   []string{""},
 							APIVersions: []string{"v1"},

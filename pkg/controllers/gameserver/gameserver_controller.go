@@ -204,12 +204,16 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	podUpdated, err := gsm.SyncGsToPod()
 	if err != nil || podUpdated {
-		return reconcile.Result{Requeue: podUpdated, RequeueAfter: 3 * time.Second}, err
+		return reconcile.Result{RequeueAfter: 3 * time.Second}, err
 	}
 
 	err = gsm.SyncPodToGs(gss)
 	if err != nil {
 		return reconcile.Result{}, err
+	}
+
+	if gsm.WaitOrNot() {
+		return ctrl.Result{RequeueAfter: NetworkIntervalTime}, nil
 	}
 
 	return ctrl.Result{}, nil
