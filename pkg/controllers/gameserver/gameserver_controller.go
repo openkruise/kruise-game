@@ -191,7 +191,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return reconcile.Result{}, nil
 	}
 
-	gsm := NewGameServerManager(gs, pod, r.Client)
+	gsm := NewGameServerManager(gs, pod, r.Client, r.recorder)
 
 	gss, err := r.getGameServerSet(pod)
 	if err != nil {

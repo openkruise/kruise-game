@@ -18,6 +18,7 @@ package gameserverset
 
 import (
 	"context"
+	"k8s.io/client-go/tools/record"
 	"sort"
 	"strconv"
 	"sync"
@@ -48,19 +49,29 @@ type Control interface {
 	SyncPodProbeMarker() error
 }
 
+const (
+	ScaleReason          = "Scale"
+	CreatePPMReason      = "CreatePpm"
+	UpdatePPMReason      = "UpdatePpm"
+	CreateWorkloadReason = "CreateWorkload"
+	UpdateWorkloadReason = "UpdateWorkload"
+)
+
 type GameServerSetManager struct {
 	gameServerSet *gameKruiseV1alpha1.GameServerSet
 	asts          *kruiseV1beta1.StatefulSet
 	podList       []corev1.Pod
 	client        client.Client
+	eventRecorder record.EventRecorder
 }
 
-func NewGameServerSetManager(gss *gameKruiseV1alpha1.GameServerSet, asts *kruiseV1beta1.StatefulSet, gsList []corev1.Pod, c client.Client) Control {
+func NewGameServerSetManager(gss *gameKruiseV1alpha1.GameServerSet, asts *kruiseV1beta1.StatefulSet, gsList []corev1.Pod, c client.Client, recorder record.EventRecorder) Control {
 	return &GameServerSetManager{
 		gameServerSet: gss,
 		asts:          asts,
 		podList:       gsList,
 		client:        c,
+		eventRecorder: recorder,
 	}
 }
 
@@ -93,6 +104,7 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	gssReserveIds := gss.Spec.ReserveGameServerIds
 
 	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas.", gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas)
+	manager.eventRecorder.Eventf(gss, corev1.EventTypeNormal, ScaleReason, "scale from %d to %d", currentReplicas, expectedReplicas)
 
 	newNotExistIds, deleteIds := computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, gsList)
 
@@ -269,6 +281,7 @@ func (manager *GameServerSetManager) SyncPodProbeMarker() error {
 				return nil
 			}
 			// create ppm
+			manager.eventRecorder.Event(gss, corev1.EventTypeNormal, CreatePPMReason, "create PodProbeMarker")
 			return c.Create(ctx, createPpm(gss))
 		}
 		return err
@@ -282,6 +295,7 @@ func (manager *GameServerSetManager) SyncPodProbeMarker() error {
 	// update ppm
 	if util.GetHash(gss.Spec.ServiceQualities) != ppm.GetAnnotations()[gameKruiseV1alpha1.PpmHashKey] {
 		ppm.Spec.Probes = constructProbes(gss)
+		manager.eventRecorder.Event(gss, corev1.EventTypeNormal, UpdatePPMReason, "update PodProbeMarker")
 		return c.Update(ctx, ppm)
 	}
 	return nil

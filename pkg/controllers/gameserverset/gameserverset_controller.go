@@ -185,6 +185,7 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 				klog.Errorf("failed to create advanced statefulset %s in %s,because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
 				return reconcile.Result{}, err
 			}
+			r.recorder.Event(gss, corev1.EventTypeNormal, CreateWorkloadReason, "created Advanced StatefulSet")
 			return reconcile.Result{}, nil
 		}
 		klog.Errorf("failed to find advanced statefulset %s in %s,because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
@@ -203,7 +204,7 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return reconcile.Result{}, err
 	}
 
-	gsm := NewGameServerSetManager(gss, asts, podList.Items, r.Client)
+	gsm := NewGameServerSetManager(gss, asts, podList.Items, r.Client, r.recorder)
 
 	// scale game servers
 	if gsm.IsNeedToScale() {
@@ -222,6 +223,7 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			klog.Errorf("GameServerSet %s failed to synchronize workload in %s,because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
 			return reconcile.Result{}, err
 		}
+		r.recorder.Event(gss, corev1.EventTypeNormal, UpdateWorkloadReason, "updated Advanced StatefulSet")
 		return reconcile.Result{}, nil
 	}
 

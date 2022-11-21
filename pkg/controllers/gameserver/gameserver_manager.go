@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/json"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -39,6 +40,10 @@ const (
 	NetworkTotalWaitTime = 60 * time.Second
 	NetworkIntervalTime  = 5 * time.Second
 	TimeFormat           = "2006-01-02 15:04:05"
+)
+
+const (
+	StateReason = "GsStateChanged"
 )
 
 type Control interface {
@@ -53,9 +58,10 @@ type Control interface {
 }
 
 type GameServerManager struct {
-	gameServer *gameKruiseV1alpha1.GameServer
-	pod        *corev1.Pod
-	client     client.Client
+	gameServer    *gameKruiseV1alpha1.GameServer
+	pod           *corev1.Pod
+	client        client.Client
+	eventRecorder record.EventRecorder
 }
 
 func (manager GameServerManager) SyncGsToPod() (bool, error) {
@@ -72,14 +78,27 @@ func (manager GameServerManager) SyncGsToPod() (bool, error) {
 	newAnnotations := make(map[string]string)
 	if gs.Spec.DeletionPriority.String() != podDeletePriority {
 		newLabels[gameKruiseV1alpha1.GameServerDeletePriorityKey] = gs.Spec.DeletionPriority.String()
+		if podDeletePriority != "" {
+			manager.eventRecorder.Eventf(gs, corev1.EventTypeNormal, StateReason, "DeletionPriority turn from %s to %s ", podDeletePriority, gs.Spec.DeletionPriority.String())
+		}
 		updated = true
 	}
 	if gs.Spec.UpdatePriority.String() != podUpdatePriority {
 		newLabels[gameKruiseV1alpha1.GameServerUpdatePriorityKey] = gs.Spec.UpdatePriority.String()
+		if podUpdatePriority != "" {
+			manager.eventRecorder.Eventf(gs, corev1.EventTypeNormal, StateReason, "UpdatePriority turn from %s to %s ", podUpdatePriority, gs.Spec.UpdatePriority.String())
+		}
 		updated = true
 	}
 	if string(gs.Spec.OpsState) != podGsOpsState {
 		newLabels[gameKruiseV1alpha1.GameServerOpsStateKey] = string(gs.Spec.OpsState)
+		if podGsOpsState != "" {
+			eventType := corev1.EventTypeNormal
+			if gs.Spec.OpsState == gameKruiseV1alpha1.Maintaining {
+				eventType = corev1.EventTypeWarning
+			}
+			manager.eventRecorder.Eventf(gs, eventType, StateReason, "OpsState turn from %s to %s ", podGsOpsState, string(gs.Spec.OpsState))
+		}
 		updated = true
 	}
 
@@ -116,6 +135,13 @@ func (manager GameServerManager) SyncGsToPod() (bool, error) {
 	}
 	if string(gsState) != podGsState {
 		newLabels[gameKruiseV1alpha1.GameServerStateKey] = string(gsState)
+		if podGsState != "" {
+			eventType := corev1.EventTypeNormal
+			if gsState == gameKruiseV1alpha1.Crash {
+				eventType = corev1.EventTypeWarning
+			}
+			manager.eventRecorder.Eventf(gs, eventType, StateReason, "State turn from %s to %s ", podGsState, string(gsState))
+		}
 		updated = true
 	}
 
@@ -291,10 +317,11 @@ func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, 
 	return spec, newGsConditions
 }
 
-func NewGameServerManager(gs *gameKruiseV1alpha1.GameServer, pod *corev1.Pod, c client.Client) Control {
+func NewGameServerManager(gs *gameKruiseV1alpha1.GameServer, pod *corev1.Pod, c client.Client, recorder record.EventRecorder) Control {
 	return &GameServerManager{
-		gameServer: gs,
-		pod:        pod,
-		client:     c,
+		gameServer:    gs,
+		pod:           pod,
+		client:        c,
+		eventRecorder: recorder,
 	}
 }

@@ -69,6 +69,7 @@ func init() {
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=alibabacloud.com,resources=poddnats,verbs=get;list;watch
 // +kubebuilder:rbac:groups=alibabacloud.com,resources=poddnats/status,verbs=get
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 type Webhook struct {
 	mgr manager.Manager
