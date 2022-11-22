@@ -3,7 +3,7 @@
 ## What is Kruise-Game?
 Kruise-Game is a subproject of OpenKruise, to solve the problem of game server landing in Kubernetes.
 
-<img width="250px" src="../images/logo.jpg" alt="OpenKruiseGame logo"/>
+<img width="250px" src="../../images/logo.jpg" alt="OpenKruiseGame logo"/>
 
 Kruise-Game utilizes the features of [Kruise](https://github.com/openkruise/kruise), including:
 - In-Place Update
@@ -35,5 +35,5 @@ Game servers are stateful services, and there are differences in the operation a
 ## What's Next
 Here are some recommended next steps:
 
-- Start to [Install kruise-game](./installation.md).
+- Start to [Install kruise-game](installation.md).
 - Learn Kruise-Game's [Basic Usage](../tutorials/basic_usage.md).

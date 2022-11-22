@@ -1,9 +1,9 @@
 # Kruise-game
-
+English | <a href="docs/中文/说明文档.md">中文</a>
 ## Introduction
 Kruise-Game is a subproject of OpenKruise for solving the problem of game server landing in Kubernetes.
 
-<img width="250px" src="./docs/images/logo.jpg" alt="OpenKruiseGame logo"/>
+<img width="250px" src="docs/images/logo.jpg" alt="OpenKruiseGame logo"/>
 
 Kruise-Game utilizes the features of [Kruise](https://github.com/openkruise/kruise), including:
 - In-Place Update
@@ -34,8 +34,8 @@ Features:
 
 ## Quick Start
 
-- [Installation](./docs/getting_started/installation.md)
-- [Basic Usage](./docs/tutorials/basic_usage.md)
+- [Installation](docs/en/getting_started/installation.md)
+- [Basic Usage](docs/en/tutorials/basic_usage.md)
 
 ## License
 

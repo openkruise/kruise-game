@@ -1,6 +1,6 @@
 # Architecture
 
-<img src="../images/arch.png" alt="Architecture logo"/>
+<img src="../../images/arch.png" alt="Architecture logo"/>
 
 Kruise-Game utilizes the capabilities of Kruise, so the components of Kruise and the corresponding objects are introduced in the above figure. The turquoise part belongs to Kruise, and the light blue part belongs to Kurise-Game.
 
