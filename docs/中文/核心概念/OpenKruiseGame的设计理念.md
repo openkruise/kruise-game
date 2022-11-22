@@ -1,10 +1,10 @@
-<center><img src="../../images/logo.jpg" style="width:300px"/></center>
+<center><img src="../../images/logo.jpg" style="width:500px"/></center>
 
-### 开源OpenKruiseGame（OKG)的初衷
+## 开源OpenKruiseGame（OKG)的初衷
 <img src="../../images/zen-01-zh.png"/>
 <img src="../../images/zen-02-zh.png"/>
 
-### 为什么OpenKruiseGame（OKG）是一个工作负载
+## 为什么OpenKruiseGame（OKG）是一个工作负载
 
 ![workload](../../images/workload.png)
 
@@ -12,42 +12,34 @@
 
 此外，Kubernetes中的工作负载还承担了与基础设施无缝整合的重要枢纽角色。例如：通过Annotations中的字段，自动实现监控系统、日志系统与应用的对接；通过nodeSelector字段，实现应用与底层资源的调度绑定关系；通过labels中的字段，记录分组等元数据信息，替代传统的CMDB系统。这些都让自定义工作负载成为了Kubernetes中适配不同类型应用的最佳方式，OpenKruiseGame（OKG）是一个完全面向游戏场景的Kubernetes工作负载，通过OpenKruiseGame（OKG），开发者不止可以获得更好的游戏服的生命周期管理和游戏服的运维管理，还可以以OpenKruiseGame（OKG）为纽带，无需开发额外的代码，充分发挥云产品带来的强大能力。
 
-### OpenKruiseGame（OKG）的设计理念
+## OpenKruiseGame（OKG）的设计理念
 
 OpenKruiseGame（OKG）只包含两个CRD对象：GameServerSet与GameServer。OpenKruiseGame（OKG）的设计理念是基于状态控制的，将不同的职责划分在不同的工作负载维度来控制。
 
 * GameServerSet（生命周期管理）
-
-  对一组GameServer的生命周期管理的抽象，主要用于副本数目管理、游戏服发布等生命周期控制。
+对一组GameServer的生命周期管理的抽象，主要用于副本数目管理、游戏服发布等生命周期控制。
 
 * GameServer（定向管理运维动作）
-
-  对一个GameServer的运维/管理动作的抽象，主要用于更新顺序控制、游戏服状态控制、游戏服网络变更等定向运维管理动作。
+对一个GameServer的运维/管理动作的抽象，主要用于更新顺序控制、游戏服状态控制、游戏服网络变更等定向运维管理动作。
 
 当我们理解了OpenKruiseGame（OKG）的设计理念后，一些非常有趣的推论就可以快速的得出，例如：
 
 1. 当不小心删除GameServer的时候会触发游戏服的删除吗？
-
-   不会，GameServer只是游戏服的差异性运维动作的状态记录，如果删除GameServer之后，会重新创建一个使用默认配置的GameServer对象。此时，你的GameServer也会重置为默认定义在GameServerSet中的游戏服模板配置。
+不会，GameServer只是游戏服的差异性运维动作的状态记录，如果删除GameServer之后，会重新创建一个使用默认配置的GameServer对象。此时，你的GameServer也会重置为默认定义在GameServerSet中的游戏服模板配置。
 
 2. 如何让匹配服务与自动伸缩更好的配合防止出现玩家被强制下线？
+可以通过服务质量能力，将游戏的玩家任务转换为GameServer的状态，匹配框架感知GameServer的状态并控制伸缩的副本数目，GameServerSet也会根据GameServer的状态来判断删除的顺序，从而实现优雅下线。
 
-   可以通过服务质量能力，将游戏的玩家任务转换为GameServer的状态，匹配框架感知GameServer的状态并控制伸缩的副本数目，GameServerSet也会根据GameServer的状态来判断删除的顺序，从而实现优雅下线。
-
-### OpenKruiseGame（OKG）的部署架构
+## OpenKruiseGame（OKG）的部署架构
 
 ![arch](../../images/arch.png)
-
 OpenKruiseGame（OKG）的部署模型分为三个部分：
 
 1. OpenKruiseGame（OKG）控制器
-
-   负责管理GameServerSet与GameServer的生命周期管理，在OpenKruiseGame控制器中，内置一个Cloud Provider模块，用来适配不同云服务厂商在网络插件等场景下的差异，让OpenKruiseGame可以真正做到一套代码无差异部署。
+负责管理GameServerSet与GameServer的生命周期管理，在OpenKruiseGame控制器中，内置一个Cloud Provider模块，用来适配不同云服务厂商在网络插件等场景下的差异，让OpenKruiseGame可以真正做到一套代码无差异部署。
 
 2. OpenKruise控制器
-
-   负责管理Pod的生命周期管理，是OpenKruiseGame（OKG）的依赖组件，对OpenKruiseGame（OKG）使用者/开发者是无感的。
+负责管理Pod的生命周期管理，是OpenKruiseGame（OKG）的依赖组件，对OpenKruiseGame（OKG）使用者/开发者是无感的。
 
 3. OpenKruiseGame（OKG）运维后台【待完成】
-
-   针对希望白屏化使用OpenKruiseGame（OKG）的开发者提供的运维后台与API，主要提供游戏服的生命周期管理和编排能力。
+针对希望白屏化使用OpenKruiseGame（OKG）的开发者提供的运维后台与API，主要提供游戏服的生命周期管理和编排能力。
