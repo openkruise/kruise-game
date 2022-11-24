@@ -82,11 +82,6 @@ func mutatingPod(cpm *cloudprovider.ProviderManager, pod *corev1.Pod, req admiss
 		return pod, nil
 	}
 
-	err := plugin.Init(client)
-	if err != nil {
-		return pod, err
-	}
-
 	switch action {
 	case admissionv1.Create:
 		p, err := plugin.OnPodAdded(client, pod)
@@ -113,30 +108,10 @@ func mutatingPod(cpm *cloudprovider.ProviderManager, pod *corev1.Pod, req admiss
 	return pod, nil
 }
 
-func NewPodMutatingHandler(client client.Client, decoder *admission.Decoder) *PodMutatingHandler {
-	cloudProviderManager, err := cloudprovider.NewProviderManager()
-	if err != nil {
-		klog.Fatalf("Failed to initialize cloud provider manager,because of %s", err.Error())
-	}
-
-	cloudProviders := cloudProviderManager.CloudProviders
-
-	for _, p := range cloudProviders {
-		name := p.Name()
-		plugins, err := p.ListPlugins()
-		if err != nil {
-			klog.Warningf("Failed to register Cloud Provider %s with 0 plugins,because of %s", name, err.Error())
-			continue
-		}
-		klog.Infof("Cloud Provider [%s] has been registered with %d plugins.", name, len(plugins))
-		for _, p := range plugins {
-			klog.Infof("[Plugin %s] has been registered.", p.Name())
-		}
-	}
-
+func NewPodMutatingHandler(client client.Client, decoder *admission.Decoder, cpm *cloudprovider.ProviderManager) *PodMutatingHandler {
 	return &PodMutatingHandler{
 		Client:               client,
 		decoder:              decoder,
-		CloudProviderManager: cloudProviderManager,
+		CloudProviderManager: cpm,
 	}
 }

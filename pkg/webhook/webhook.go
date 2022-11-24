@@ -20,6 +20,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/openkruise/kruise-game/pkg/webhook/cloudprovider"
 	"github.com/openkruise/kruise-game/pkg/webhook/util/generator"
 	"github.com/openkruise/kruise-game/pkg/webhook/util/writer"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
@@ -73,11 +74,13 @@ func init() {
 
 type Webhook struct {
 	mgr manager.Manager
+	cpm *cloudprovider.ProviderManager
 }
 
-func NewWebhookServer(mgr manager.Manager) *Webhook {
+func NewWebhookServer(mgr manager.Manager, cpm *cloudprovider.ProviderManager) *Webhook {
 	return &Webhook{
 		mgr: mgr,
+		cpm: cpm,
 	}
 }
 
@@ -90,7 +93,7 @@ func (ws *Webhook) SetupWithManager(mgr manager.Manager) *Webhook {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	server.Register(mutatePodPath, &webhook.Admission{Handler: NewPodMutatingHandler(mgr.GetClient(), decoder)})
+	server.Register(mutatePodPath, &webhook.Admission{Handler: NewPodMutatingHandler(mgr.GetClient(), decoder, ws.cpm)})
 	server.Register(validateGssPath, &webhook.Admission{Handler: &GssValidaatingHandler{Client: mgr.GetClient(), decoder: decoder}})
 	return ws
 }

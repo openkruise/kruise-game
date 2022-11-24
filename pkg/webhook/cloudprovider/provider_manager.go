@@ -23,6 +23,7 @@ import (
 	"github.com/openkruise/kruise-game/cloudprovider/kubernetes"
 	corev1 "k8s.io/api/core/v1"
 	log "k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type ProviderManager struct {
@@ -60,6 +61,24 @@ func (pm *ProviderManager) FindAvailablePlugins(pod *corev1.Pod) (cloudprovider.
 		}
 	}
 	return nil, false
+}
+
+func (pm *ProviderManager) Init(client client.Client) {
+	for _, p := range pm.CloudProviders {
+		name := p.Name()
+		plugins, err := p.ListPlugins()
+		if err != nil {
+			continue
+		}
+		log.Infof("Cloud Provider [%s] has been registered with %d plugins", name, len(plugins))
+		for _, p := range plugins {
+			err := p.Init(client)
+			if err != nil {
+				continue
+			}
+			log.Infof("plugin [%s] has been registered", p.Name())
+		}
+	}
 }
 
 // NewProviderManager return a new cloud provider manager instance
