@@ -104,6 +104,7 @@ func (s *SlbPlugin) OnPodAdded(c client.Client, pod *corev1.Pod) (*corev1.Pod, e
 	svcPorts := make([]corev1.ServicePort, 0)
 	for i := 0; i < len(ports); i++ {
 		svcPorts = append(svcPorts, corev1.ServicePort{
+			Name:       strconv.Itoa(ports[i]),
 			Port:       s.allocate(lbId),
 			Protocol:   protocol[i],
 			TargetPort: intstr.FromInt(ports[i]),
