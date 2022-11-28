@@ -288,7 +288,7 @@ func getPorts(ports []corev1.ServicePort) []int32 {
 func (s *SlbPlugin) createSvc(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.Pod, c client.Client) *corev1.Service {
 	lbId, targetPorts, protocol, isFixed := parseLbConfig(conf)
 
-	ports := make([]int32, 0)
+	var ports []int32
 	allocatedPorts := pod.Annotations[allocatedPortsKey]
 	if allocatedPorts != "" {
 		ports = util.StringToInt32Slice(allocatedPorts, ",")
