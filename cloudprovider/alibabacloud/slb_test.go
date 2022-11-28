@@ -30,6 +30,7 @@ func TestAllocate(t *testing.T) {
 	test := struct {
 		lbId string
 		slb  *SlbPlugin
+		num  int
 	}{
 		lbId: "xxx-A",
 		slb: &SlbPlugin{
@@ -38,16 +39,19 @@ func TestAllocate(t *testing.T) {
 			cache:   make(map[string]portAllocated),
 			mutex:   sync.RWMutex{},
 		},
+		num: 3,
 	}
 
-	port := test.slb.allocate(test.lbId)
-	if port > test.slb.maxPort || port < test.slb.minPort {
-		t.Errorf("allocate port %d, unexpected", port)
-	}
+	ports := test.slb.allocate(test.lbId, test.num)
+	for _, port := range ports {
+		if port > test.slb.maxPort || port < test.slb.minPort {
+			t.Errorf("allocate port %d, unexpected", port)
+		}
 
-	test.slb.deAllocate(test.lbId, port)
-	if test.slb.cache[test.lbId][port] == true {
-		t.Errorf("deAllocate port %d failed", port)
+		test.slb.deAllocate(test.lbId, port)
+		if test.slb.cache[test.lbId][port] == true {
+			t.Errorf("deAllocate port %d failed", port)
+		}
 	}
 }
 
@@ -57,6 +61,7 @@ func TestParseLbConfig(t *testing.T) {
 		lbId     string
 		ports    []int
 		protocol []corev1.Protocol
+		isFixed  bool
 	}{
 		{
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
@@ -72,6 +77,7 @@ func TestParseLbConfig(t *testing.T) {
 			lbId:     "xxx-A",
 			ports:    []int{80},
 			protocol: []corev1.Protocol{corev1.ProtocolTCP},
+			isFixed:  false,
 		},
 		{
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
@@ -83,15 +89,20 @@ func TestParseLbConfig(t *testing.T) {
 					Name:  PortProtocolConfigName,
 					Value: "81/UDP,82,83/TCP",
 				},
+				{
+					Name:  FixedConfigName,
+					Value: "true",
+				},
 			},
 			lbId:     "xxx-A",
 			ports:    []int{81, 82, 83},
 			protocol: []corev1.Protocol{corev1.ProtocolUDP, corev1.ProtocolTCP, corev1.ProtocolTCP},
+			isFixed:  true,
 		},
 	}
 
 	for _, test := range tests {
-		lbId, ports, protocol := parseLbConfig(test.conf)
+		lbId, ports, protocol, isFixed := parseLbConfig(test.conf)
 		if lbId != test.lbId {
 			t.Errorf("lbId expect: %s, actual: %s", test.lbId, lbId)
 		}
@@ -105,6 +116,9 @@ func TestParseLbConfig(t *testing.T) {
 			if protocol[i] != test.protocol[i] {
 				t.Errorf("protocol expect: %v, actual: %v", test.protocol, protocol)
 			}
+		}
+		if isFixed != test.isFixed {
+			t.Errorf("protocol expect: %v, actual: %v", test.isFixed, isFixed)
 		}
 	}
 }

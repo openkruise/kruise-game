@@ -17,12 +17,15 @@ limitations under the License.
 package util
 
 import (
+	"context"
 	"encoding/json"
 	appspub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strconv"
 	"strings"
 )
@@ -178,4 +181,14 @@ func AddPrefixGameKruise(s string) string {
 
 func RemovePrefixGameKruise(s string) string {
 	return strings.TrimPrefix(s, "game.kruise.io/")
+}
+
+func GetGameServerSetOfPod(pod *corev1.Pod, c client.Client) (*gameKruiseV1alpha1.GameServerSet, error) {
+	gssName := pod.GetLabels()[gameKruiseV1alpha1.GameServerOwnerGssKey]
+	gss := &gameKruiseV1alpha1.GameServerSet{}
+	err := c.Get(context.Background(), types.NamespacedName{
+		Namespace: pod.GetNamespace(),
+		Name:      gssName,
+	}, gss)
+	return gss, err
 }

@@ -20,10 +20,13 @@ import (
 	"context"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
+	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strconv"
 	"strings"
@@ -39,6 +42,7 @@ const (
 	SlbIdAnnotationKey     = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-id"
 	SlbIdLabelKey          = "service.k8s.alibaba/loadbalancer-id"
 	SvcSelectorKey         = "statefulset.kubernetes.io/pod-name"
+	allocatedPortsKey      = "game.kruise.io/Ali-SLB-svc-ports-allocated"
 )
 
 type portAllocated map[int32]bool
@@ -98,38 +102,7 @@ func initLbCache(svcList []corev1.Service, minPort, maxPort int32) map[string]po
 
 func (s *SlbPlugin) OnPodAdded(c client.Client, pod *corev1.Pod) (*corev1.Pod, error) {
 	networkManager := utils.NewNetworkManager(pod, c)
-	conf := networkManager.GetNetworkConfig()
-	lbId, ports, protocol := parseLbConfig(conf)
-
-	svcPorts := make([]corev1.ServicePort, 0)
-	for i := 0; i < len(ports); i++ {
-		svcPorts = append(svcPorts, corev1.ServicePort{
-			Name:       strconv.Itoa(ports[i]),
-			Port:       s.allocate(lbId),
-			Protocol:   protocol[i],
-			TargetPort: intstr.FromInt(ports[i]),
-		})
-	}
-
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pod.GetName(),
-			Namespace: pod.GetNamespace(),
-			Annotations: map[string]string{
-				SlbListenerOverrideKey: "true",
-				SlbIdAnnotationKey:     lbId,
-			},
-		},
-		Spec: corev1.ServiceSpec{
-			Type: corev1.ServiceTypeLoadBalancer,
-			Selector: map[string]string{
-				SvcSelectorKey: pod.GetName(),
-			},
-			Ports: svcPorts,
-		},
-	}
-
-	err := c.Create(context.Background(), svc)
+	err := c.Create(context.Background(), s.createSvc(networkManager.GetNetworkConfig(), pod, c))
 	return pod, err
 }
 
@@ -150,7 +123,11 @@ func (s *SlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod) (*corev1.Pod,
 		Namespace: pod.GetNamespace(),
 	}, svc)
 	if err != nil {
-		return pod, nil
+		if errors.IsNotFound(err) {
+			err := c.Create(context.Background(), s.createSvc(networkManager.GetNetworkConfig(), pod, c))
+			return pod, err
+		}
+		return pod, err
 	}
 
 	// disable network
@@ -220,29 +197,33 @@ func (s *SlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod) error {
 		s.deAllocate(svc.Annotations[SlbIdAnnotationKey], port)
 	}
 
-	return c.Delete(context.Background(), svc)
+	return nil
 }
 
-func (s *SlbPlugin) allocate(lbId string) int32 {
+func (s *SlbPlugin) allocate(lbId string, num int) []int32 {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.cache[lbId] == nil {
-		s.cache[lbId] = make(portAllocated, s.maxPort-s.minPort+1)
-		for i := s.minPort; i <= s.maxPort; i++ {
-			s.cache[lbId][i] = false
+	var ports []int32
+	for i := 0; i < num; i++ {
+		var port int32
+		if s.cache[lbId] == nil {
+			s.cache[lbId] = make(portAllocated, s.maxPort-s.minPort+1)
+			for i := s.minPort; i <= s.maxPort; i++ {
+				s.cache[lbId][i] = false
+			}
 		}
-	}
 
-	var ret int32
-	for port, allocated := range s.cache[lbId] {
-		if !allocated {
-			ret = port
-			break
+		for p, allocated := range s.cache[lbId] {
+			if !allocated {
+				port = p
+				break
+			}
 		}
+		s.cache[lbId][port] = true
+		ports = append(ports, port)
 	}
-	s.cache[lbId][ret] = true
-	return ret
+	return ports
 }
 
 func (s *SlbPlugin) deAllocate(lbId string, port int32) {
@@ -262,10 +243,11 @@ func init() {
 	alibabaCloudProvider.registerPlugin(&slbPlugin)
 }
 
-func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (string, []int, []corev1.Protocol) {
+func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (string, []int, []corev1.Protocol, bool) {
 	var lbId string
 	ports := make([]int, 0)
 	protocols := make([]corev1.Protocol, 0)
+	isFixed := false
 	for _, c := range conf {
 		switch c.Name {
 		case SlbIdConfigName:
@@ -284,9 +266,15 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (string, []int
 					protocols = append(protocols, corev1.Protocol(ppSlice[1]))
 				}
 			}
+		case FixedConfigName:
+			v, err := strconv.ParseBool(c.Value)
+			if err != nil {
+				continue
+			}
+			isFixed = v
 		}
 	}
-	return lbId, ports, protocols
+	return lbId, ports, protocols, isFixed
 }
 
 func getPorts(ports []corev1.ServicePort) []int32 {
@@ -295,4 +283,76 @@ func getPorts(ports []corev1.ServicePort) []int32 {
 		ret = append(ret, port.Port)
 	}
 	return ret
+}
+
+func (s *SlbPlugin) createSvc(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.Pod, c client.Client) *corev1.Service {
+	lbId, targetPorts, protocol, isFixed := parseLbConfig(conf)
+
+	ports := make([]int32, 0)
+	allocatedPorts := pod.Annotations[allocatedPortsKey]
+	if allocatedPorts != "" {
+		ports = util.StringToInt32Slice(allocatedPorts, ",")
+	} else {
+		ports = s.allocate(lbId, len(targetPorts))
+		pod.Annotations[allocatedPortsKey] = util.Int32SliceToString(ports, ",")
+	}
+
+	svcPorts := make([]corev1.ServicePort, 0)
+	for i := 0; i < len(targetPorts); i++ {
+		svcPorts = append(svcPorts, corev1.ServicePort{
+			Name:       strconv.Itoa(targetPorts[i]),
+			Port:       ports[i],
+			Protocol:   protocol[i],
+			TargetPort: intstr.FromInt(targetPorts[i]),
+		})
+	}
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pod.GetName(),
+			Namespace: pod.GetNamespace(),
+			Annotations: map[string]string{
+				SlbListenerOverrideKey: "true",
+				SlbIdAnnotationKey:     lbId,
+			},
+			OwnerReferences: getSvcOwnerReference(pod, c, isFixed),
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeLoadBalancer,
+			Selector: map[string]string{
+				SvcSelectorKey: pod.GetName(),
+			},
+			Ports: svcPorts,
+		},
+	}
+	return svc
+}
+
+func getSvcOwnerReference(pod *corev1.Pod, c client.Client, isFixed bool) []metav1.OwnerReference {
+	ownerReferences := []metav1.OwnerReference{
+		{
+			APIVersion:         pod.APIVersion,
+			Kind:               pod.Kind,
+			Name:               pod.GetName(),
+			UID:                pod.GetUID(),
+			Controller:         pointer.BoolPtr(true),
+			BlockOwnerDeletion: pointer.BoolPtr(true),
+		},
+	}
+	if isFixed {
+		gss, err := util.GetGameServerSetOfPod(pod, c)
+		if err == nil {
+			ownerReferences = []metav1.OwnerReference{
+				{
+					APIVersion:         gss.APIVersion,
+					Kind:               gss.Kind,
+					Name:               gss.GetName(),
+					UID:                gss.GetUID(),
+					Controller:         pointer.BoolPtr(true),
+					BlockOwnerDeletion: pointer.BoolPtr(true),
+				},
+			}
+		}
+	}
+	return ownerReferences
 }
