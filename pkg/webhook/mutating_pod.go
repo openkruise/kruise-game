@@ -19,7 +19,7 @@ package webhook
 import (
 	"context"
 	"encoding/json"
-	"github.com/openkruise/kruise-game/pkg/webhook/cloudprovider"
+	"github.com/openkruise/kruise-game/cloudprovider/manager"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
@@ -31,7 +31,7 @@ import (
 type PodMutatingHandler struct {
 	Client               client.Client
 	decoder              *admission.Decoder
-	CloudProviderManager *cloudprovider.ProviderManager
+	CloudProviderManager *manager.ProviderManager
 }
 
 func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request) admission.Response {
@@ -73,7 +73,7 @@ func (pmh *PodMutatingHandler) handleNormal(ctx context.Context, req admission.R
 	return admission.PatchResponseFromRaw(req.Object.Raw, marshaledPod)
 }
 
-func mutatingPod(cpm *cloudprovider.ProviderManager, pod *corev1.Pod, req admission.Request, client client.Client) (*corev1.Pod, error) {
+func mutatingPod(cpm *manager.ProviderManager, pod *corev1.Pod, req admission.Request, client client.Client) (*corev1.Pod, error) {
 	action := req.Operation
 
 	plugin, ok := cpm.FindAvailablePlugins(pod)
@@ -108,7 +108,7 @@ func mutatingPod(cpm *cloudprovider.ProviderManager, pod *corev1.Pod, req admiss
 	return pod, nil
 }
 
-func NewPodMutatingHandler(client client.Client, decoder *admission.Decoder, cpm *cloudprovider.ProviderManager) *PodMutatingHandler {
+func NewPodMutatingHandler(client client.Client, decoder *admission.Decoder, cpm *manager.ProviderManager) *PodMutatingHandler {
 	return &PodMutatingHandler{
 		Client:               client,
 		decoder:              decoder,

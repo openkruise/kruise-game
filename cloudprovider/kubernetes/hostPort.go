@@ -19,6 +19,8 @@ package kubernetes
 import (
 	"context"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/cloudprovider"
+	provideroptions "github.com/openkruise/kruise-game/cloudprovider/options"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -50,12 +52,8 @@ type HostPortPlugin struct {
 
 func init() {
 	hostPortPlugin := HostPortPlugin{
-		maxPort:     int32(9000),
-		minPort:     int32(8000),
 		mutex:       sync.RWMutex{},
 		isAllocated: make(map[string]bool),
-		portAmount:  nil,
-		amountStat:  nil,
 	}
 	kubernetesProvider.registerPlugin(&hostPortPlugin)
 }
@@ -176,13 +174,13 @@ func (hpp *HostPortPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod) error 
 	return nil
 }
 
-func (hpp *HostPortPlugin) Init(c client.Client) error {
+func (hpp *HostPortPlugin) Init(c client.Client, options cloudprovider.CloudProviderOptions) error {
 	hpp.mutex.Lock()
 	defer hpp.mutex.Unlock()
 
-	if hpp.portAmount != nil {
-		return nil
-	}
+	hostPortOptions := options.(provideroptions.KubernetesOptions).HostPort
+	hpp.maxPort = hostPortOptions.MaxPort
+	hpp.minPort = hostPortOptions.MinPort
 
 	newPortAmount := make(map[int32]int, hpp.maxPort-hpp.minPort+1)
 	for i := hpp.minPort; i <= hpp.maxPort; i++ {

@@ -19,6 +19,8 @@ package alibabacloud
 import (
 	"context"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/cloudprovider"
+	provideroptions "github.com/openkruise/kruise-game/cloudprovider/options"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
 	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
@@ -62,12 +64,12 @@ func (s *SlbPlugin) Alias() string {
 	return AliasSLB
 }
 
-func (s *SlbPlugin) Init(c client.Client) error {
-	if s.cache != nil {
-		return nil
-	}
+func (s *SlbPlugin) Init(c client.Client, options cloudprovider.CloudProviderOptions) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	slbOptions := options.(provideroptions.AlibabaCloudOptions).SLBOptions
+	s.minPort = slbOptions.MinPort
+	s.maxPort = slbOptions.MaxPort
 
 	svcList := &corev1.ServiceList{}
 	err := c.List(context.Background(), svcList)
@@ -85,8 +87,8 @@ func initLbCache(svcList []corev1.Service, minPort, maxPort int32) map[string]po
 		lbId := svc.Labels[SlbIdLabelKey]
 		if lbId != "" && svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
 			if newCache[lbId] == nil {
-				newCache[lbId] = make(portAllocated, maxPort-minPort+1)
-				for i := minPort; i <= maxPort; i++ {
+				newCache[lbId] = make(portAllocated, maxPort-minPort)
+				for i := minPort; i < maxPort; i++ {
 					newCache[lbId][i] = false
 				}
 			}
@@ -208,8 +210,8 @@ func (s *SlbPlugin) allocate(lbId string, num int) []int32 {
 	for i := 0; i < num; i++ {
 		var port int32
 		if s.cache[lbId] == nil {
-			s.cache[lbId] = make(portAllocated, s.maxPort-s.minPort+1)
-			for i := s.minPort; i <= s.maxPort; i++ {
+			s.cache[lbId] = make(portAllocated, s.maxPort-s.minPort)
+			for i := s.minPort; i < s.maxPort; i++ {
 				s.cache[lbId][i] = false
 			}
 		}
@@ -235,10 +237,7 @@ func (s *SlbPlugin) deAllocate(lbId string, port int32) {
 
 func init() {
 	slbPlugin := SlbPlugin{
-		maxPort: int32(712),
-		minPort: int32(512),
-		cache:   nil,
-		mutex:   sync.RWMutex{},
+		mutex: sync.RWMutex{},
 	}
 	alibabaCloudProvider.registerPlugin(&slbPlugin)
 }

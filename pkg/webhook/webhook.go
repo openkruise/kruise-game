@@ -20,7 +20,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/openkruise/kruise-game/pkg/webhook/cloudprovider"
+	manager2 "github.com/openkruise/kruise-game/cloudprovider/manager"
 	"github.com/openkruise/kruise-game/pkg/webhook/util/generator"
 	"github.com/openkruise/kruise-game/pkg/webhook/util/writer"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
@@ -74,10 +74,10 @@ func init() {
 
 type Webhook struct {
 	mgr manager.Manager
-	cpm *cloudprovider.ProviderManager
+	cpm *manager2.ProviderManager
 }
 
-func NewWebhookServer(mgr manager.Manager, cpm *cloudprovider.ProviderManager) *Webhook {
+func NewWebhookServer(mgr manager.Manager, cpm *manager2.ProviderManager) *Webhook {
 	return &Webhook{
 		mgr: mgr,
 		cpm: cpm,

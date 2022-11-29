@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package cloudprovider
+package manager
 
 import (
 	"github.com/openkruise/kruise-game/apis/v1alpha1"
@@ -28,19 +28,23 @@ import (
 
 type ProviderManager struct {
 	CloudProviders map[string]cloudprovider.CloudProvider
+	CPOptions      map[string]cloudprovider.CloudProviderOptions
 }
 
-func (pm *ProviderManager) RegisterCloudProvider(provider cloudprovider.CloudProvider) {
+func (pm *ProviderManager) FindConfigs(cpName string) cloudprovider.CloudProviderOptions {
+	return pm.CPOptions[cpName]
+}
+
+func (pm *ProviderManager) RegisterCloudProvider(provider cloudprovider.CloudProvider, options cloudprovider.CloudProviderOptions) {
 	if provider.Name() == "" {
 		log.Fatal("EmptyCloudProviderName")
 	}
 
 	pm.CloudProviders[provider.Name()] = provider
+	pm.CPOptions[provider.Name()] = options
 }
 
 func (pm *ProviderManager) FindAvailablePlugins(pod *corev1.Pod) (cloudprovider.Plugin, bool) {
-	// TODO add config file for cloud provider
-
 	pluginType, ok := pod.Annotations[v1alpha1.GameServerNetworkType]
 	if !ok {
 		log.V(5).Infof("Pod %s has no plugin configured and skip", pod.Name)
@@ -64,15 +68,15 @@ func (pm *ProviderManager) FindAvailablePlugins(pod *corev1.Pod) (cloudprovider.
 }
 
 func (pm *ProviderManager) Init(client client.Client) {
-	for _, p := range pm.CloudProviders {
-		name := p.Name()
-		plugins, err := p.ListPlugins()
+	for _, cp := range pm.CloudProviders {
+		name := cp.Name()
+		plugins, err := cp.ListPlugins()
 		if err != nil {
 			continue
 		}
 		log.Infof("Cloud Provider [%s] has been registered with %d plugins", name, len(plugins))
 		for _, p := range plugins {
-			err := p.Init(client)
+			err := p.Init(client, pm.FindConfigs(cp.Name()))
 			if err != nil {
 				continue
 			}
@@ -83,25 +87,32 @@ func (pm *ProviderManager) Init(client client.Client) {
 
 // NewProviderManager return a new cloud provider manager instance
 func NewProviderManager() (*ProviderManager, error) {
+	configFile := cloudprovider.NewConfigFile(cloudprovider.Opt.CloudProviderConfigFile)
+	configs := configFile.Parse()
 
 	pm := &ProviderManager{
 		CloudProviders: make(map[string]cloudprovider.CloudProvider),
+		CPOptions:      make(map[string]cloudprovider.CloudProviderOptions),
 	}
 
-	// Register default kubernetes network provider
-	kp, err := kubernetes.NewKubernetesProvider()
-	if err != nil {
-		log.Errorf("Failed to initialized kubernetes provider,because of %s", err.Error())
-	} else {
-		pm.RegisterCloudProvider(kp)
+	if configs.KubernetesOptions.Valid() && configs.KubernetesOptions.Enabled() {
+		// Register default kubernetes network provider
+		kp, err := kubernetes.NewKubernetesProvider()
+		if err != nil {
+			log.Errorf("Failed to initialized kubernetes provider,because of %s", err.Error())
+		} else {
+			pm.RegisterCloudProvider(kp, configs.KubernetesOptions)
+		}
 	}
 
-	// build and register alibaba cloud provider
-	acp, err := alibabacloud.NewAlibabaCloudProvider()
-	if err != nil {
-		log.Errorf("Failed to initialize alibabacloud provider.because of %s", err.Error())
-	} else {
-		pm.RegisterCloudProvider(acp)
+	if configs.AlibabaCloudOptions.Valid() && configs.AlibabaCloudOptions.Enabled() {
+		// build and register alibaba cloud provider
+		acp, err := alibabacloud.NewAlibabaCloudProvider()
+		if err != nil {
+			log.Errorf("Failed to initialize alibabacloud provider.because of %s", err.Error())
+		} else {
+			pm.RegisterCloudProvider(acp, configs.AlibabaCloudOptions)
+		}
 	}
 
 	return pm, nil

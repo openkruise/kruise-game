@@ -7,6 +7,7 @@ generatorOptions:
 configMapGenerator:
 - files:
   - controller_manager_config.yaml
+  - config.toml
   name: manager-config
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization

@@ -20,9 +20,10 @@ import (
 	"flag"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
+	"github.com/openkruise/kruise-game/cloudprovider"
+	cpmanager "github.com/openkruise/kruise-game/cloudprovider/manager"
 	controller "github.com/openkruise/kruise-game/pkg/controllers"
 	"github.com/openkruise/kruise-game/pkg/webhook"
-	"github.com/openkruise/kruise-game/pkg/webhook/cloudprovider"
 	"os"
 	"time"
 
@@ -74,6 +75,9 @@ func main() {
 		"Namespace if specified restricts the manager's cache to watch objects in the desired namespace. Defaults to all namespaces.")
 	flag.StringVar(&syncPeriodStr, "sync-period", "", "Determines the minimum frequency at which watched resources are reconciled.")
 
+	// Add cloud provider flags
+	cloudprovider.InitCloudProviderFlags()
+
 	opts := zap.Options{
 		Development: true,
 	}
@@ -121,7 +125,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	cloudProviderManager, err := cloudprovider.NewProviderManager()
+	cloudProviderManager, err := cpmanager.NewProviderManager()
 	if err != nil {
 		setupLog.Error(err, "unable to set up cloud provider manager")
 		os.Exit(1)

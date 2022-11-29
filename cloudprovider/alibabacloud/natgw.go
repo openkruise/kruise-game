@@ -19,6 +19,7 @@ package alibabacloud
 import (
 	"context"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/cloudprovider"
 	"github.com/openkruise/kruise-game/cloudprovider/alibabacloud/apis/v1"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
 	corev1 "k8s.io/api/core/v1"
@@ -51,7 +52,7 @@ func (n NatGwPlugin) Alias() string {
 	return AliasNawGw
 }
 
-func (n NatGwPlugin) Init(c client.Client) error {
+func (n NatGwPlugin) Init(c client.Client, options cloudprovider.CloudProviderOptions) error {
 	return nil
 }
 

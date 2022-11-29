@@ -34,7 +34,7 @@ type Plugin interface {
 	Name() string
 	// Alias define the plugin with similar func cross multi cloud provider
 	Alias() string
-	Init(client client.Client) error
+	Init(client client.Client, options CloudProviderOptions) error
 	// Pod Event handler
 	OnPodAdded(client client.Client, pod *corev1.Pod) (*corev1.Pod, error)
 	OnPodUpdated(client client.Client, pod *corev1.Pod) (*corev1.Pod, error)
@@ -47,6 +47,6 @@ type CloudProvider interface {
 }
 
 type CloudProviderOptions interface {
-	Disabled() bool
-	Valid() (bool, error)
+	Enabled() bool
+	Valid() bool
 }
