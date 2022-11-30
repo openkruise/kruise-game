@@ -36,15 +36,15 @@ import (
 )
 
 const (
-	SlbNetwork             = "Ali-SLB"
-	AliasSLB               = "LB"
-	SlbIdConfigName        = "Lb-Id"
-	PortProtocolConfigName = "Port-Protocol"
-	SlbListenerOverrideKey = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-force-override-listeners"
-	SlbIdAnnotationKey     = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-id"
-	SlbIdLabelKey          = "service.k8s.alibaba/loadbalancer-id"
-	SvcSelectorKey         = "statefulset.kubernetes.io/pod-name"
-	allocatedPortsKey      = "game.kruise.io/Ali-SLB-svc-ports-allocated"
+	SlbNetwork              = "AlibabaCloud-SLB"
+	AliasSLB                = "LB-Network"
+	SlbIdsConfigName        = "SlbIds"
+	PortProtocolsConfigName = "PortProtocols"
+	SlbListenerOverrideKey  = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-force-override-listeners"
+	SlbIdAnnotationKey      = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-id"
+	SlbIdLabelKey           = "service.k8s.alibaba/loadbalancer-id"
+	SvcSelectorKey          = "statefulset.kubernetes.io/pod-name"
+	allocatedPortsKey       = "game.kruise.io/Ali-SLB-svc-ports-allocated"
 )
 
 type portAllocated map[int32]bool
@@ -249,9 +249,9 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (string, []int
 	isFixed := false
 	for _, c := range conf {
 		switch c.Name {
-		case SlbIdConfigName:
+		case SlbIdsConfigName:
 			lbId = c.Value
-		case PortProtocolConfigName:
+		case PortProtocolsConfigName:
 			for _, pp := range strings.Split(c.Value, ",") {
 				ppSlice := strings.Split(pp, "/")
 				port, err := strconv.Atoi(ppSlice[0])

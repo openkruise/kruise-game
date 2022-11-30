@@ -30,8 +30,8 @@ import (
 )
 
 const (
-	NatGwNetwork       = "Ali-NatGw"
-	AliasNawGw         = "NatGwNetwork"
+	NATGWNetwork       = "AlibabaCloud-NATGW"
+	AliasNATGW         = "NATGW-Network"
 	FixedConfigName    = "Fixed"
 	PortsConfigName    = "Ports"
 	ProtocolConfigName = "Protocol"
@@ -45,11 +45,11 @@ type NatGwPlugin struct {
 }
 
 func (n NatGwPlugin) Name() string {
-	return NatGwNetwork
+	return NATGWNetwork
 }
 
 func (n NatGwPlugin) Alias() string {
-	return AliasNawGw
+	return AliasNATGW
 }
 
 func (n NatGwPlugin) Init(c client.Client, options cloudprovider.CloudProviderOptions) error {

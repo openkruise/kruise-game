@@ -66,11 +66,11 @@ func TestParseLbConfig(t *testing.T) {
 		{
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
 				{
-					Name:  SlbIdConfigName,
+					Name:  SlbIdsConfigName,
 					Value: "xxx-A",
 				},
 				{
-					Name:  PortProtocolConfigName,
+					Name:  PortProtocolsConfigName,
 					Value: "80",
 				},
 			},
@@ -82,11 +82,11 @@ func TestParseLbConfig(t *testing.T) {
 		{
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
 				{
-					Name:  SlbIdConfigName,
+					Name:  SlbIdsConfigName,
 					Value: "xxx-A",
 				},
 				{
-					Name:  PortProtocolConfigName,
+					Name:  PortProtocolsConfigName,
 					Value: "81/UDP,82,83/TCP",
 				},
 				{
