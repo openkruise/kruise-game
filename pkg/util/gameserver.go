@@ -166,12 +166,18 @@ func GetNewAstsFromGss(gss *gameKruiseV1alpha1.GameServerSet, asts *kruiseV1beta
 type astsToUpdate struct {
 	UpdateStrategy gameKruiseV1alpha1.UpdateStrategy
 	Template       gameKruiseV1alpha1.GameServerTemplate
+	NetworkConfigs []gameKruiseV1alpha1.NetworkConfParams
 }
 
 func GetAstsHash(gss *gameKruiseV1alpha1.GameServerSet) string {
+	var networkConfigs []gameKruiseV1alpha1.NetworkConfParams
+	if gss.Spec.Network != nil {
+		networkConfigs = gss.Spec.Network.NetworkConf
+	}
 	return GetHash(astsToUpdate{
 		UpdateStrategy: gss.Spec.UpdateStrategy,
 		Template:       gss.Spec.GameServerTemplate,
+		NetworkConfigs: networkConfigs,
 	})
 }
 
