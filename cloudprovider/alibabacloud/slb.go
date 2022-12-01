@@ -44,7 +44,7 @@ const (
 	SlbIdAnnotationKey      = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-id"
 	SlbIdLabelKey           = "service.k8s.alibaba/loadbalancer-id"
 	SvcSelectorKey          = "statefulset.kubernetes.io/pod-name"
-	allocatedPortsKey       = "game.kruise.io/Ali-SLB-svc-ports-allocated"
+	allocatedPortsKey       = "game.kruise.io/AlibabaCloud-SLB-ports-allocated"
 )
 
 type portAllocated map[int32]bool
