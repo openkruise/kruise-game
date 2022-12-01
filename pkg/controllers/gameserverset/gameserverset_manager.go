@@ -18,9 +18,9 @@ package gameserverset
 
 import (
 	"context"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/tools/record"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 
@@ -47,6 +47,7 @@ type Control interface {
 	IsNeedToScale() bool
 	IsNeedToUpdateWorkload() bool
 	SyncPodProbeMarker() error
+	SyncGameServerReplicas() error
 }
 
 const (
@@ -106,9 +107,7 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas.", gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas)
 	manager.eventRecorder.Eventf(gss, corev1.EventTypeNormal, ScaleReason, "scale from %d to %d", currentReplicas, expectedReplicas)
 
-	newNotExistIds, deleteIds := computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, gsList)
-
-	asts.Spec.ReserveOrdinals = append(gssReserveIds, newNotExistIds...)
+	asts.Spec.ReserveOrdinals = append(gssReserveIds, computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, gsList)...)
 	asts.Spec.Replicas = gss.Spec.Replicas
 	asts.Spec.ScaleStrategy = &kruiseV1beta1.StatefulSetScaleStrategy{
 		MaxUnavailable: gss.Spec.ScaleStrategy.MaxUnavailable,
@@ -129,10 +128,10 @@ func (manager *GameServerSetManager) GameServerScale() error {
 		return err
 	}
 
-	return manager.deleteGameServers(deleteIds)
+	return nil
 }
 
-func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedReplicas int, pods []corev1.Pod) ([]int, []int) {
+func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedReplicas int, pods []corev1.Pod) []int {
 	workloadManageIds := util.GetIndexListFromPodList(pods)
 
 	var toAdd []int
@@ -194,42 +193,48 @@ func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedRepl
 		}
 	}
 
-	deleteIds := util.GetSliceInANotInB(workloadManageIds, newManageIds)
-
-	return newNotExistIds, deleteIds
+	return newNotExistIds
 }
 
-func (manager *GameServerSetManager) deleteGameServers(deleteIds []int) error {
+func (manager *GameServerSetManager) SyncGameServerReplicas() error {
 	gss := manager.gameServerSet
+	gsList := &gameKruiseV1alpha1.GameServerList{}
+	err := manager.client.List(context.Background(), gsList, &client.ListOptions{
+		Namespace: gss.GetNamespace(),
+		LabelSelector: labels.SelectorFromSet(map[string]string{
+			gameKruiseV1alpha1.GameServerOwnerGssKey: gss.GetName(),
+		})})
+	if err != nil {
+		return err
+	}
+	podIds := util.GetIndexListFromPodList(manager.podList)
+
+	gsMap := make(map[int]int)
+	deleteIds := make([]int, 0)
+	for id, gs := range gsList.Items {
+		gsId := util.GetIndexFromGsName(gs.Name)
+		if !util.IsNumInList(gsId, podIds) {
+			gsMap[gsId] = id
+			deleteIds = append(deleteIds, gsId)
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
 	errch := make(chan error, len(deleteIds))
 	var wg sync.WaitGroup
-	for _, id := range deleteIds {
+	for _, gsId := range deleteIds {
 		wg.Add(1)
-		id := id
+		id := gsId
 		go func(ctx context.Context) {
 			defer wg.Done()
 			defer ctx.Done()
-			gsName := gss.GetName() + "-" + strconv.Itoa(id)
-			gs := &gameKruiseV1alpha1.GameServer{}
-			err := manager.client.Get(ctx, types.NamespacedName{
-				Name:      gsName,
-				Namespace: gss.GetNamespace(),
-			}, gs)
-			if err != nil {
-				if !errors.IsNotFound(err) {
-					errch <- err
-				}
-				return
-			}
-			newLabels := gs.GetLabels()
-			if newLabels == nil {
-				newLabels = make(map[string]string)
-			}
-			newLabels[gameKruiseV1alpha1.GameServerDeletingKey] = "true"
-			gs.SetLabels(newLabels)
+
+			gs := gsList.Items[gsMap[id]].DeepCopy()
+			gsLabels := gs.GetLabels()
+			gsLabels[gameKruiseV1alpha1.GameServerDeletingKey] = "true"
+			gs.SetLabels(gsLabels)
 			err = manager.client.Update(ctx, gs)
 			if err != nil {
 				errch <- err
@@ -238,9 +243,9 @@ func (manager *GameServerSetManager) deleteGameServers(deleteIds []int) error {
 	}
 	wg.Wait()
 	close(errch)
-	err := <-errch
+	err = <-errch
 	if err != nil {
-		klog.Errorf("failed to delete GameServers %s in %s because of %s.", gss.GetNamespace(), err.Error())
+		klog.Errorf("failed to delete GameServers %s in %s because of %s.", gss.GetName(), gss.GetNamespace(), err.Error())
 		return err
 	}
 

@@ -258,6 +258,11 @@ func (r *GameServerReconciler) initGameServer(pod *corev1.Pod) error {
 	ors = append(ors, or)
 	gs.OwnerReferences = ors
 
+	// set Labels
+	gsLabels := make(map[string]string)
+	gsLabels[gamekruiseiov1alpha1.GameServerOwnerGssKey] = gss.GetName()
+	gs.SetLabels(gsLabels)
+
 	// set NetWork
 	gs.Spec.NetworkDisabled = false
 
