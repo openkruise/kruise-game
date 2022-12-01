@@ -232,11 +232,15 @@ func (manager *GameServerSetManager) SyncGameServerReplicas() error {
 			defer ctx.Done()
 
 			gs := gsList.Items[gsMap[id]].DeepCopy()
-			gsLabels := gs.GetLabels()
+			gsLabels := make(map[string]string)
 			gsLabels[gameKruiseV1alpha1.GameServerDeletingKey] = "true"
-			gs.SetLabels(gsLabels)
-			err = manager.client.Update(ctx, gs)
+			patchGs := map[string]interface{}{"metadata": map[string]map[string]string{"labels": gsLabels}}
+			patchBytes, err := json.Marshal(patchGs)
 			if err != nil {
+				errch <- err
+			}
+			err = manager.client.Patch(context.TODO(), gs, client.RawPatch(types.MergePatchType, patchBytes))
+			if err != nil && !errors.IsNotFound(err) {
 				errch <- err
 			}
 		}(ctx)
