@@ -174,7 +174,7 @@ func createValidatingWebhook(dnsName string, kubeClient clientset.Interface, caB
 				Name:                    dnsName,
 				SideEffects:             &sideEffectClassNone,
 				FailurePolicy:           &fail,
-				AdmissionReviewVersions: []string{"v1"},
+				AdmissionReviewVersions: []string{"v1", "v1beta1"},
 				ClientConfig: admissionregistrationv1.WebhookClientConfig{
 					Service: &admissionregistrationv1.ServiceReference{
 						Namespace: webhookServiceNamespace,
@@ -216,7 +216,7 @@ func createMutatingWebhook(dnsName string, kubeClient clientset.Interface, caBun
 				Name:                    dnsName,
 				SideEffects:             &sideEffectClassNone,
 				FailurePolicy:           &ignore,
-				AdmissionReviewVersions: []string{"v1"},
+				AdmissionReviewVersions: []string{"v1", "v1beta1"},
 				ClientConfig: admissionregistrationv1.WebhookClientConfig{
 					Service: &admissionregistrationv1.ServiceReference{
 						Namespace: webhookServiceNamespace,
