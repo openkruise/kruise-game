@@ -1,4 +1,4 @@
-安装OpenKruiseGame需安装Kruise与Kruise-Game，且要求在 Kubernetes >= 1.16 以上版本的集群中安装和使用
+安装OpenKruiseGame需安装Kruise与Kruise-Game，且要求 Kubernetes版本 >= 1.16
 
 ## 安装Kruise
 
