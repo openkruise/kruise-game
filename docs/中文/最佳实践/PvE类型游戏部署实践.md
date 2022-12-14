@@ -91,6 +91,8 @@ status:
 
 ![minetest-game.png](../../images/minetest-game.png)
 
+通过视频观看部署过程：[使用OpenKruiseGame快速部署minetest(PvE)游戏](https://www.bilibili.com/video/BV1sR4y1k7vq/?spm_id_from=333.999.list.card_archive.click&vd_source=8712d530f28d3cbc03eba5b378b88a7a)
+
 ### 定向下线
 
 尽管使用workload批量管理了游戏服，但OKG支持对游戏服的定向下线。例如，我们下线mintest-1游戏服：

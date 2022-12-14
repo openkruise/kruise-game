@@ -90,6 +90,8 @@ status:
 
 ![xonotic-game.png](../../images/xonotic-game.png)
 
+通过视频观看部署过程：[使用OpenKruiseGame快速部署xonotic(PvP)游戏](https://www.bilibili.com/video/BV1kg411n7Ma/?spm_id_from=333.999.list.card_archive.click)
+
 接下来，或许你还需要：
 
 - [游戏服水平伸缩](../快速开始/游戏服水平伸缩.md)
