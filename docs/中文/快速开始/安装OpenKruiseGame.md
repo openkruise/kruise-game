@@ -27,7 +27,7 @@ $ helm install kruise-game openkruise/kruise-game --version 0.2.0
 
 0) 编辑Makefile，更改其中{IMG}字段，将其改为自身的仓库地址
 
-1) 编译并打包kurise-game-manager镜像
+1) 编译并打包kruise-game-manager镜像
 
 ```bash
 make docker-build
