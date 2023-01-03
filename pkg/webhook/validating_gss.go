@@ -21,6 +21,7 @@ import (
 	"fmt"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
+	admissionv1 "k8s.io/api/admission/v1"
 	"net/http"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -38,24 +39,42 @@ func (gvh *GssValidaatingHandler) Handle(ctx context.Context, req admission.Requ
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
-	var reason string
-	allowed, err := validatingGss(gss, gvh.Client)
-	if err != nil {
-		reason = err.Error()
+	if allowed, reason := validatingGss(gss, gvh.Client); !allowed {
+		admission.ValidationResponse(allowed, reason)
 	}
 
-	return admission.ValidationResponse(allowed, reason)
+	switch req.Operation {
+	case admissionv1.Update:
+		newGss := gss.DeepCopy()
+		oldGss := &gamekruiseiov1alpha1.GameServerSet{}
+		err := gvh.decoder.DecodeRaw(req.OldObject, oldGss)
+		if err != nil {
+			return admission.Errored(http.StatusBadRequest, err)
+		}
+		return validatingUpdate(newGss, oldGss)
+	}
+
+	return admission.ValidationResponse(true, "pass validating")
 }
 
-func validatingGss(gss *gamekruiseiov1alpha1.GameServerSet, client client.Client) (bool, error) {
+func validatingGss(gss *gamekruiseiov1alpha1.GameServerSet, client client.Client) (bool, string) {
 	// validate reserveGameServerIds
 	rgsIds := gss.Spec.ReserveGameServerIds
 	if util.IsRepeat(rgsIds) {
-		return false, fmt.Errorf("reserveGameServerIds should not be repeat. Now it is %v", rgsIds)
+		return false, fmt.Sprintf("reserveGameServerIds should not be repeat. Now it is %v", rgsIds)
 	}
 	if util.IsHasNegativeNum(rgsIds) {
-		return false, fmt.Errorf("reserveGameServerIds should be greater or equal to 0. Now it is %v", rgsIds)
+		return false, fmt.Sprintf("reserveGameServerIds should be greater or equal to 0. Now it is %v", rgsIds)
 	}
 
-	return true, nil
+	return true, "general validating success"
+}
+
+func validatingUpdate(newGss, oldGss *gamekruiseiov1alpha1.GameServerSet) admission.Response {
+	if oldGss.Spec.Network != nil && newGss.Spec.Network != nil {
+		if oldGss.Spec.Network.NetworkType != "" && newGss.Spec.Network.NetworkType != oldGss.Spec.Network.NetworkType {
+			return admission.ValidationResponse(false, "change network type is not allowed")
+		}
+	}
+	return admission.ValidationResponse(true, "validatingUpdate success")
 }

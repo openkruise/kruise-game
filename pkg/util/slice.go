@@ -65,6 +65,10 @@ func IntSliceToString(number []int, delimiter string) string {
 	return strings.Trim(strings.Replace(fmt.Sprint(number), " ", delimiter, -1), "[]")
 }
 
+func Int32SliceToString(number []int32, delimiter string) string {
+	return strings.Trim(strings.Replace(fmt.Sprint(number), " ", delimiter, -1), "[]")
+}
+
 func StringToIntSlice(str string, delimiter string) []int {
 	if str == "" {
 		return nil
@@ -83,6 +87,28 @@ func StringToIntSlice(str string, delimiter string) []int {
 			continue
 		}
 		retSlice = append(retSlice, val)
+	}
+	return retSlice
+}
+
+func StringToInt32Slice(str string, delimiter string) []int32 {
+	if str == "" {
+		return nil
+	}
+	strList := strings.Split(str, delimiter)
+	if len(strList) == 0 {
+		return nil
+	}
+	var retSlice []int32
+	for _, item := range strList {
+		if item == "" {
+			continue
+		}
+		val, err := strconv.ParseInt(item, 10, 32)
+		if err != nil {
+			continue
+		}
+		retSlice = append(retSlice, int32(val))
 	}
 	return retSlice
 }

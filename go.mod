@@ -3,6 +3,7 @@ module github.com/openkruise/kruise-game
 go 1.18
 
 require (
+	github.com/BurntSushi/toml v0.3.1
 	github.com/davecgh/go-spew v1.1.1
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/gomega v1.18.1

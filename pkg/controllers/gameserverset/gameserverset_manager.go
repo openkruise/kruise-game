@@ -18,8 +18,9 @@ package gameserverset
 
 import (
 	"context"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/tools/record"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 
@@ -46,21 +47,32 @@ type Control interface {
 	IsNeedToScale() bool
 	IsNeedToUpdateWorkload() bool
 	SyncPodProbeMarker() error
+	SyncGameServerReplicas() error
 }
+
+const (
+	ScaleReason          = "Scale"
+	CreatePPMReason      = "CreatePpm"
+	UpdatePPMReason      = "UpdatePpm"
+	CreateWorkloadReason = "CreateWorkload"
+	UpdateWorkloadReason = "UpdateWorkload"
+)
 
 type GameServerSetManager struct {
 	gameServerSet *gameKruiseV1alpha1.GameServerSet
 	asts          *kruiseV1beta1.StatefulSet
 	podList       []corev1.Pod
 	client        client.Client
+	eventRecorder record.EventRecorder
 }
 
-func NewGameServerSetManager(gss *gameKruiseV1alpha1.GameServerSet, asts *kruiseV1beta1.StatefulSet, gsList []corev1.Pod, c client.Client) Control {
+func NewGameServerSetManager(gss *gameKruiseV1alpha1.GameServerSet, asts *kruiseV1beta1.StatefulSet, gsList []corev1.Pod, c client.Client, recorder record.EventRecorder) Control {
 	return &GameServerSetManager{
 		gameServerSet: gss,
 		asts:          asts,
 		podList:       gsList,
 		client:        c,
+		eventRecorder: recorder,
 	}
 }
 
@@ -93,10 +105,9 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	gssReserveIds := gss.Spec.ReserveGameServerIds
 
 	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas.", gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas)
+	manager.eventRecorder.Eventf(gss, corev1.EventTypeNormal, ScaleReason, "scale from %d to %d", currentReplicas, expectedReplicas)
 
-	newNotExistIds, deleteIds := computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, gsList)
-
-	asts.Spec.ReserveOrdinals = append(gssReserveIds, newNotExistIds...)
+	asts.Spec.ReserveOrdinals = append(gssReserveIds, computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, gsList)...)
 	asts.Spec.Replicas = gss.Spec.Replicas
 	asts.Spec.ScaleStrategy = &kruiseV1beta1.StatefulSetScaleStrategy{
 		MaxUnavailable: gss.Spec.ScaleStrategy.MaxUnavailable,
@@ -117,10 +128,10 @@ func (manager *GameServerSetManager) GameServerScale() error {
 		return err
 	}
 
-	return manager.deleteGameServers(deleteIds)
+	return nil
 }
 
-func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedReplicas int, pods []corev1.Pod) ([]int, []int) {
+func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedReplicas int, pods []corev1.Pod) []int {
 	workloadManageIds := util.GetIndexListFromPodList(pods)
 
 	var toAdd []int
@@ -182,53 +193,63 @@ func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedRepl
 		}
 	}
 
-	deleteIds := util.GetSliceInANotInB(workloadManageIds, newManageIds)
-
-	return newNotExistIds, deleteIds
+	return newNotExistIds
 }
 
-func (manager *GameServerSetManager) deleteGameServers(deleteIds []int) error {
+func (manager *GameServerSetManager) SyncGameServerReplicas() error {
 	gss := manager.gameServerSet
+	gsList := &gameKruiseV1alpha1.GameServerList{}
+	err := manager.client.List(context.Background(), gsList, &client.ListOptions{
+		Namespace: gss.GetNamespace(),
+		LabelSelector: labels.SelectorFromSet(map[string]string{
+			gameKruiseV1alpha1.GameServerOwnerGssKey: gss.GetName(),
+		})})
+	if err != nil {
+		return err
+	}
+	podIds := util.GetIndexListFromPodList(manager.podList)
+
+	gsMap := make(map[int]int)
+	deleteIds := make([]int, 0)
+	for id, gs := range gsList.Items {
+		gsId := util.GetIndexFromGsName(gs.Name)
+		if !util.IsNumInList(gsId, podIds) {
+			gsMap[gsId] = id
+			deleteIds = append(deleteIds, gsId)
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
 	errch := make(chan error, len(deleteIds))
 	var wg sync.WaitGroup
-	for _, id := range deleteIds {
+	for _, gsId := range deleteIds {
 		wg.Add(1)
-		id := id
+		id := gsId
 		go func(ctx context.Context) {
 			defer wg.Done()
 			defer ctx.Done()
-			gsName := gss.GetName() + "-" + strconv.Itoa(id)
-			gs := &gameKruiseV1alpha1.GameServer{}
-			err := manager.client.Get(ctx, types.NamespacedName{
-				Name:      gsName,
-				Namespace: gss.GetNamespace(),
-			}, gs)
+
+			gs := gsList.Items[gsMap[id]].DeepCopy()
+			gsLabels := make(map[string]string)
+			gsLabels[gameKruiseV1alpha1.GameServerDeletingKey] = "true"
+			patchGs := map[string]interface{}{"metadata": map[string]map[string]string{"labels": gsLabels}}
+			patchBytes, err := json.Marshal(patchGs)
 			if err != nil {
-				if !errors.IsNotFound(err) {
-					errch <- err
-				}
-				return
+				errch <- err
 			}
-			newLabels := gs.GetLabels()
-			if newLabels == nil {
-				newLabels = make(map[string]string)
-			}
-			newLabels[gameKruiseV1alpha1.GameServerDeletingKey] = "true"
-			gs.SetLabels(newLabels)
-			err = manager.client.Update(ctx, gs)
-			if err != nil {
+			err = manager.client.Patch(context.TODO(), gs, client.RawPatch(types.MergePatchType, patchBytes))
+			if err != nil && !errors.IsNotFound(err) {
 				errch <- err
 			}
 		}(ctx)
 	}
 	wg.Wait()
 	close(errch)
-	err := <-errch
+	err = <-errch
 	if err != nil {
-		klog.Errorf("failed to delete GameServers %s in %s because of %s.", gss.GetNamespace(), err.Error())
+		klog.Errorf("failed to delete GameServers %s in %s because of %s.", gss.GetName(), gss.GetNamespace(), err.Error())
 		return err
 	}
 
@@ -269,6 +290,7 @@ func (manager *GameServerSetManager) SyncPodProbeMarker() error {
 				return nil
 			}
 			// create ppm
+			manager.eventRecorder.Event(gss, corev1.EventTypeNormal, CreatePPMReason, "create PodProbeMarker")
 			return c.Create(ctx, createPpm(gss))
 		}
 		return err
@@ -282,6 +304,7 @@ func (manager *GameServerSetManager) SyncPodProbeMarker() error {
 	// update ppm
 	if util.GetHash(gss.Spec.ServiceQualities) != ppm.GetAnnotations()[gameKruiseV1alpha1.PpmHashKey] {
 		ppm.Spec.Probes = constructProbes(gss)
+		manager.eventRecorder.Event(gss, corev1.EventTypeNormal, UpdatePPMReason, "update PodProbeMarker")
 		return c.Update(ctx, ppm)
 	}
 	return nil

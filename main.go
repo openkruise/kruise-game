@@ -20,6 +20,8 @@ import (
 	"flag"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
+	"github.com/openkruise/kruise-game/cloudprovider"
+	cpmanager "github.com/openkruise/kruise-game/cloudprovider/manager"
 	controller "github.com/openkruise/kruise-game/pkg/controllers"
 	"github.com/openkruise/kruise-game/pkg/webhook"
 	"os"
@@ -29,6 +31,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	aliv1 "github.com/openkruise/kruise-game/cloudprovider/alibabacloud/apis/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -52,6 +55,8 @@ func init() {
 	utilruntime.Must(gamekruiseiov1alpha1.AddToScheme(scheme))
 	utilruntime.Must(kruiseV1beta1.AddToScheme(scheme))
 	utilruntime.Must(kruiseV1alpha1.AddToScheme(scheme))
+
+	utilruntime.Must(aliv1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
@@ -69,6 +74,9 @@ func main() {
 	flag.StringVar(&namespace, "namespace", "",
 		"Namespace if specified restricts the manager's cache to watch objects in the desired namespace. Defaults to all namespaces.")
 	flag.StringVar(&syncPeriodStr, "sync-period", "", "Determines the minimum frequency at which watched resources are reconciled.")
+
+	// Add cloud provider flags
+	cloudprovider.InitCloudProviderFlags()
 
 	opts := zap.Options{
 		Development: true,
@@ -117,8 +125,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	cloudProviderManager, err := cpmanager.NewProviderManager()
+	if err != nil {
+		setupLog.Error(err, "unable to set up cloud provider manager")
+		os.Exit(1)
+	}
+
 	// create webhook server
-	wss := webhook.NewWebhookServer(mgr)
+	wss := webhook.NewWebhookServer(mgr, cloudProviderManager)
 	// validate webhook server
 	if err := wss.SetupWithManager(mgr).Initialize(mgr.GetConfig()); err != nil {
 		setupLog.Error(err, "unable to set up webhook server")
@@ -135,17 +149,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	signal := ctrl.SetupSignalHandler()
 	go func() {
 		setupLog.Info("setup controllers")
 		if err = controller.SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to setup controllers")
 			os.Exit(1)
 		}
+
+		setupLog.Info("waiting for cache sync")
+		if mgr.GetCache().WaitForCacheSync(signal) {
+			setupLog.Info("cache synced, cloud provider manager start to init")
+			cloudProviderManager.Init(mgr.GetClient())
+		}
 	}()
 
 	setupLog.Info("starting kruise-game-manager")
 
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(signal); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}

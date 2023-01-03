@@ -132,6 +132,28 @@ func TestIntSliceToString(t *testing.T) {
 	}
 }
 
+func TestInt32SliceToString(t *testing.T) {
+	tests := []struct {
+		number    []int32
+		delimiter string
+		result    string
+	}{
+		{
+			number:    []int32{4, 5, 1},
+			delimiter: ",",
+			result:    "4,5,1",
+		},
+	}
+
+	for _, test := range tests {
+		actual := Int32SliceToString(test.number, test.delimiter)
+		expect := test.result
+		if expect != actual {
+			t.Errorf("expect %v but got %v", expect, actual)
+		}
+	}
+}
+
 func TestStringToIntSlice(t *testing.T) {
 	tests := []struct {
 		str       string
@@ -147,6 +169,30 @@ func TestStringToIntSlice(t *testing.T) {
 
 	for _, test := range tests {
 		actual := StringToIntSlice(test.str, test.delimiter)
+		expect := test.result
+		for i := 0; i < len(actual); i++ {
+			if expect[i] != actual[i] {
+				t.Errorf("expect %v but got %v", expect, actual)
+			}
+		}
+	}
+}
+
+func TestStringToInt32Slice(t *testing.T) {
+	tests := []struct {
+		str       string
+		delimiter string
+		result    []int32
+	}{
+		{
+			str:       "4,5,1",
+			delimiter: ",",
+			result:    []int32{4, 5, 1},
+		},
+	}
+
+	for _, test := range tests {
+		actual := StringToInt32Slice(test.str, test.delimiter)
 		expect := test.result
 		for i := 0; i < len(actual); i++ {
 			if expect[i] != actual[i] {

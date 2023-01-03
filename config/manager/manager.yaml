@@ -38,6 +38,7 @@ spec:
         - /manager
         args:
         - --leader-elect=false
+        - --provider-config=/etc/kruise-game/config.toml
         image: controller:latest
         name: manager
         securityContext:
@@ -66,5 +67,17 @@ spec:
           requests:
             cpu: 10m
             memory: 64Mi
+        volumeMounts:
+          - mountPath: /etc/kruise-game
+            name: provider-config
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10
+      volumes:
+        - configMap:
+            defaultMode: 420
+            items:
+              - key: config.toml
+                path: config.toml
+            name: kruise-game-manager-config
+          name: provider-config
+
