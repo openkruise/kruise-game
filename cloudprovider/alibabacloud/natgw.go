@@ -21,6 +21,7 @@ import (
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	"github.com/openkruise/kruise-game/cloudprovider/alibabacloud/apis/v1"
+	"github.com/openkruise/kruise-game/cloudprovider/errors"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -52,11 +53,11 @@ func (n NatGwPlugin) Alias() string {
 	return AliasNATGW
 }
 
-func (n NatGwPlugin) Init(c client.Client, options cloudprovider.CloudProviderOptions) error {
+func (n NatGwPlugin) Init(c client.Client, options cloudprovider.CloudProviderOptions, ctx context.Context) error {
 	return nil
 }
 
-func (n NatGwPlugin) OnPodAdded(c client.Client, pod *corev1.Pod) (*corev1.Pod, error) {
+func (n NatGwPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, errors.PluginError) {
 	networkManager := utils.NewNetworkManager(pod, c)
 	conf := networkManager.GetNetworkConfig()
 	ports, protocol, fixed := parseConfig(conf)
@@ -71,18 +72,19 @@ func (n NatGwPlugin) OnPodAdded(c client.Client, pod *corev1.Pod) (*corev1.Pod, 
 	return pod, nil
 }
 
-func (n NatGwPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod) (*corev1.Pod, error) {
+func (n NatGwPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, errors.PluginError) {
 	networkManager := utils.NewNetworkManager(pod, c)
 
 	networkStatus, _ := networkManager.GetNetworkStatus()
 	if networkStatus == nil {
-		return networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
+		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
 			CurrentNetworkState: gamekruiseiov1alpha1.NetworkWaiting,
 		}, pod)
+		return pod, errors.ToPluginError(err, errors.InternalError)
 	}
 
 	podDNat := &v1.PodDNAT{}
-	err := c.Get(context.Background(), types.NamespacedName{
+	err := c.Get(ctx, types.NamespacedName{
 		Name:      pod.GetName(),
 		Namespace: pod.GetNamespace(),
 	}, podDNat)
@@ -121,10 +123,11 @@ func (n NatGwPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod) (*corev1.Pod
 	networkStatus.InternalAddresses = internalAddresses
 	networkStatus.ExternalAddresses = externalAddresses
 	networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkReady
-	return networkManager.UpdateNetworkStatus(*networkStatus, pod)
+	pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+	return pod, errors.ToPluginError(err, errors.InternalError)
 }
 
-func (n NatGwPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod) error {
+func (n NatGwPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.Context) errors.PluginError {
 	return nil
 }
 

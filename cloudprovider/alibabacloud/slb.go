@@ -20,6 +20,7 @@ import (
 	"context"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
+	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
 	provideroptions "github.com/openkruise/kruise-game/cloudprovider/options"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
 	"github.com/openkruise/kruise-game/pkg/util"
@@ -64,7 +65,7 @@ func (s *SlbPlugin) Alias() string {
 	return AliasSLB
 }
 
-func (s *SlbPlugin) Init(c client.Client, options cloudprovider.CloudProviderOptions) error {
+func (s *SlbPlugin) Init(c client.Client, options cloudprovider.CloudProviderOptions, ctx context.Context) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	slbOptions := options.(provideroptions.AlibabaCloudOptions).SLBOptions
@@ -72,7 +73,7 @@ func (s *SlbPlugin) Init(c client.Client, options cloudprovider.CloudProviderOpt
 	s.maxPort = slbOptions.MaxPort
 
 	svcList := &corev1.ServiceList{}
-	err := c.List(context.Background(), svcList)
+	err := c.List(ctx, svcList)
 	if err != nil {
 		return err
 	}
@@ -102,52 +103,53 @@ func initLbCache(svcList []corev1.Service, minPort, maxPort int32) map[string]po
 	return newCache
 }
 
-func (s *SlbPlugin) OnPodAdded(c client.Client, pod *corev1.Pod) (*corev1.Pod, error) {
+func (s *SlbPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
 	networkManager := utils.NewNetworkManager(pod, c)
-	err := c.Create(context.Background(), s.createSvc(networkManager.GetNetworkConfig(), pod, c))
-	return pod, err
+	err := c.Create(ctx, s.createSvc(networkManager.GetNetworkConfig(), pod, c, ctx))
+	return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
 }
 
-func (s *SlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod) (*corev1.Pod, error) {
+func (s *SlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
 	networkManager := utils.NewNetworkManager(pod, c)
 
 	networkStatus, _ := networkManager.GetNetworkStatus()
 	if networkStatus == nil {
-		return networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
+		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
 			CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
 		}, pod)
+		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 	}
 
 	// get svc
 	svc := &corev1.Service{}
-	err := c.Get(context.Background(), types.NamespacedName{
+	err := c.Get(ctx, types.NamespacedName{
 		Name:      pod.GetName(),
 		Namespace: pod.GetNamespace(),
 	}, svc)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			err := c.Create(context.Background(), s.createSvc(networkManager.GetNetworkConfig(), pod, c))
-			return pod, err
+			return pod, cperrors.ToPluginError(c.Create(ctx, s.createSvc(networkManager.GetNetworkConfig(), pod, c, ctx)), cperrors.ApiCallError)
 		}
-		return pod, err
+		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
 
 	// disable network
 	if networkManager.GetNetworkDisabled() && svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
 		svc.Spec.Type = corev1.ServiceTypeClusterIP
-		return pod, c.Update(context.Background(), svc)
+		return pod, cperrors.ToPluginError(c.Update(ctx, svc), cperrors.ApiCallError)
 	}
 
 	// enable network
 	if !networkManager.GetNetworkDisabled() && svc.Spec.Type == corev1.ServiceTypeClusterIP {
 		svc.Spec.Type = corev1.ServiceTypeLoadBalancer
-		return pod, c.Update(context.Background(), svc)
+		return pod, cperrors.ToPluginError(c.Update(ctx, svc), cperrors.ApiCallError)
 	}
 
 	// network not ready
 	if svc.Status.LoadBalancer.Ingress == nil {
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
-		return networkManager.UpdateNetworkStatus(*networkStatus, pod)
+		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 	}
 
 	// network ready
@@ -182,17 +184,18 @@ func (s *SlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod) (*corev1.Pod,
 	networkStatus.InternalAddresses = internalAddresses
 	networkStatus.ExternalAddresses = externalAddresses
 	networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkReady
-	return networkManager.UpdateNetworkStatus(*networkStatus, pod)
+	pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+	return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 }
 
-func (s *SlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod) error {
+func (s *SlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.Context) cperrors.PluginError {
 	svc := &corev1.Service{}
-	err := c.Get(context.Background(), types.NamespacedName{
+	err := c.Get(ctx, types.NamespacedName{
 		Name:      pod.GetName(),
 		Namespace: pod.GetNamespace(),
 	}, svc)
 	if err != nil {
-		return err
+		return cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
 
 	for _, port := range getPorts(svc.Spec.Ports) {
@@ -284,7 +287,7 @@ func getPorts(ports []corev1.ServicePort) []int32 {
 	return ret
 }
 
-func (s *SlbPlugin) createSvc(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.Pod, c client.Client) *corev1.Service {
+func (s *SlbPlugin) createSvc(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.Pod, c client.Client, ctx context.Context) *corev1.Service {
 	lbId, targetPorts, protocol, isFixed := parseLbConfig(conf)
 
 	var ports []int32
@@ -314,7 +317,7 @@ func (s *SlbPlugin) createSvc(conf []gamekruiseiov1alpha1.NetworkConfParams, pod
 				SlbListenerOverrideKey: "true",
 				SlbIdAnnotationKey:     lbId,
 			},
-			OwnerReferences: getSvcOwnerReference(pod, c, isFixed),
+			OwnerReferences: getSvcOwnerReference(c, ctx, pod, isFixed),
 		},
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeLoadBalancer,
@@ -327,7 +330,7 @@ func (s *SlbPlugin) createSvc(conf []gamekruiseiov1alpha1.NetworkConfParams, pod
 	return svc
 }
 
-func getSvcOwnerReference(pod *corev1.Pod, c client.Client, isFixed bool) []metav1.OwnerReference {
+func getSvcOwnerReference(c client.Client, ctx context.Context, pod *corev1.Pod, isFixed bool) []metav1.OwnerReference {
 	ownerReferences := []metav1.OwnerReference{
 		{
 			APIVersion:         pod.APIVersion,
@@ -339,7 +342,7 @@ func getSvcOwnerReference(pod *corev1.Pod, c client.Client, isFixed bool) []meta
 		},
 	}
 	if isFixed {
-		gss, err := util.GetGameServerSetOfPod(pod, c)
+		gss, err := util.GetGameServerSetOfPod(pod, c, ctx)
 		if err == nil {
 			ownerReferences = []metav1.OwnerReference{
 				{

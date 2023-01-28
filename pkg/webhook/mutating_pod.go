@@ -19,99 +19,120 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"github.com/openkruise/kruise-game/cloudprovider/errors"
 	"github.com/openkruise/kruise-game/cloudprovider/manager"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	"net/http"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+	"time"
 )
+
+const (
+	podMutatingTimeout    = 8 * time.Second
+	mutatingTimeoutReason = "MutatingTimeout"
+)
+
+type patchResult struct {
+	pod *corev1.Pod
+	err errors.PluginError
+}
 
 type PodMutatingHandler struct {
 	Client               client.Client
 	decoder              *admission.Decoder
 	CloudProviderManager *manager.ProviderManager
+	eventRecorder        record.EventRecorder
 }
 
 func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request) admission.Response {
+	// decode request & get pod
+	pod, err := getPodFromRequest(req, pmh.decoder)
+	if err != nil {
+		return admission.Errored(http.StatusInternalServerError, err)
+	}
+
+	// get the plugin according to pod
+	plugin, ok := pmh.CloudProviderManager.FindAvailablePlugins(pod)
+	if !ok {
+		msg := fmt.Sprintf("Pod %s/%s has no available plugin", pod.Namespace, pod.Name)
+		return admission.Allowed(msg)
+	}
+
+	// define context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), podMutatingTimeout)
+	defer cancel()
+
+	// cloud provider plugin patches pod
+	resultCh := make(chan patchResult, 1)
+	go func() {
+		var newPod *corev1.Pod
+		var pluginError errors.PluginError
+		switch req.Operation {
+		case admissionv1.Create:
+			newPod, pluginError = plugin.OnPodAdded(pmh.Client, pod, ctx)
+		case admissionv1.Update:
+			newPod, pluginError = plugin.OnPodUpdated(pmh.Client, pod, ctx)
+		case admissionv1.Delete:
+			pluginError = plugin.OnPodDeleted(pmh.Client, pod, ctx)
+		}
+		if pluginError != nil {
+			msg := fmt.Sprintf("Failed to %s pod %s/%s ,because of %s", req.Operation, pod.Namespace, pod.Name, pluginError.Error())
+			klog.Warningf(msg)
+			pmh.eventRecorder.Eventf(pod, corev1.EventTypeWarning, string(pluginError.Type()), msg)
+			newPod = pod.DeepCopy()
+		}
+		resultCh <- patchResult{
+			pod: newPod,
+			err: pluginError,
+		}
+	}()
+
+	select {
+	// timeout
+	case <-ctx.Done():
+		msg := fmt.Sprintf("Failed to %s pod %s/%s, because plugin %s exec timed out", req.Operation, pod.Namespace, pod.Name, plugin.Name())
+		pmh.eventRecorder.Eventf(pod, corev1.EventTypeWarning, mutatingTimeoutReason, msg)
+		return admission.Allowed(msg)
+	// completed before timeout
+	case result := <-resultCh:
+		return getAdmissionResponse(req, result)
+	}
+}
+
+func getPodFromRequest(req admission.Request, decoder *admission.Decoder) (*corev1.Pod, error) {
+	pod := &corev1.Pod{}
 	if req.Operation == admissionv1.Delete {
-		return pmh.handleDelete(ctx, req)
+		err := decoder.DecodeRaw(req.OldObject, pod)
+		return pod, err
 	}
-	return pmh.handleNormal(ctx, req)
+	err := decoder.Decode(req, pod)
+	return pod, err
 }
 
-func (pmh *PodMutatingHandler) handleDelete(ctx context.Context, req admission.Request) admission.Response {
-	pod := &corev1.Pod{}
-	err := pmh.decoder.DecodeRaw(req.OldObject, pod)
-	if err != nil {
-		return admission.Allowed("pod has no content to decode")
+func getAdmissionResponse(req admission.Request, result patchResult) admission.Response {
+	if result.err != nil {
+		return admission.Allowed(result.err.Error())
 	}
-	_, err = mutatingPod(pmh.CloudProviderManager, pod, req, pmh.Client)
-	if err != nil {
-		return admission.Errored(http.StatusBadRequest, err)
+	if req.Operation == admissionv1.Delete {
+		return admission.Allowed("delete successfully")
 	}
-	return admission.Allowed("no error found")
-}
-
-func (pmh *PodMutatingHandler) handleNormal(ctx context.Context, req admission.Request) admission.Response {
-	pod := &corev1.Pod{}
-	err := pmh.decoder.Decode(req, pod)
-	if err != nil {
-		return admission.Errored(http.StatusBadRequest, err)
-	}
-
-	pod, err = mutatingPod(pmh.CloudProviderManager, pod, req, pmh.Client)
-	if err != nil {
-		return admission.Errored(http.StatusBadRequest, err)
-	}
-
-	marshaledPod, err := json.Marshal(pod)
+	marshaledPod, err := json.Marshal(result.pod)
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
 	return admission.PatchResponseFromRaw(req.Object.Raw, marshaledPod)
 }
 
-func mutatingPod(cpm *manager.ProviderManager, pod *corev1.Pod, req admission.Request, client client.Client) (*corev1.Pod, error) {
-	action := req.Operation
-
-	plugin, ok := cpm.FindAvailablePlugins(pod)
-	if !ok {
-		klog.Warningf("Pod %s has no available plugin", pod.Name)
-		return pod, nil
-	}
-
-	switch action {
-	case admissionv1.Create:
-		p, err := plugin.OnPodAdded(client, pod)
-		if err != nil {
-			klog.Warningf("Failed to handle pod %s added,because of %s", pod.Name, err.Error())
-		} else {
-			return p, nil
-		}
-	case admissionv1.Update:
-		p, err := plugin.OnPodUpdated(client, pod)
-		if err != nil {
-			klog.Warningf("Failed to handle pod %s updated,because of %s", pod.Name, err.Error())
-		} else {
-			return p, nil
-		}
-	case admissionv1.Delete:
-		err := plugin.OnPodDeleted(client, pod)
-
-		if err != nil {
-			klog.Warningf("Failed to handle pod %s deleted,because of %s", pod.Name, err.Error())
-		}
-	}
-
-	return pod, nil
-}
-
-func NewPodMutatingHandler(client client.Client, decoder *admission.Decoder, cpm *manager.ProviderManager) *PodMutatingHandler {
+func NewPodMutatingHandler(client client.Client, decoder *admission.Decoder, cpm *manager.ProviderManager, recorder record.EventRecorder) *PodMutatingHandler {
 	return &PodMutatingHandler{
 		Client:               client,
 		decoder:              decoder,
 		CloudProviderManager: cpm,
+		eventRecorder:        recorder,
 	}
 }

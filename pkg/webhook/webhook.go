@@ -93,7 +93,8 @@ func (ws *Webhook) SetupWithManager(mgr manager.Manager) *Webhook {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	server.Register(mutatePodPath, &webhook.Admission{Handler: NewPodMutatingHandler(mgr.GetClient(), decoder, ws.cpm)})
+	recorder := mgr.GetEventRecorderFor("kruise-game-webhook")
+	server.Register(mutatePodPath, &webhook.Admission{Handler: NewPodMutatingHandler(mgr.GetClient(), decoder, ws.cpm, recorder)})
 	server.Register(validateGssPath, &webhook.Admission{Handler: &GssValidaatingHandler{Client: mgr.GetClient(), decoder: decoder}})
 	return ws
 }

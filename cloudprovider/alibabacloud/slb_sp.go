@@ -5,6 +5,7 @@ import (
 	"fmt"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
+	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -46,47 +47,49 @@ type lbSpConfig struct {
 	protocols []corev1.Protocol
 }
 
-func (s *SlbSpPlugin) OnPodAdded(c client.Client, pod *corev1.Pod) (*corev1.Pod, error) {
+func (s *SlbSpPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
 	networkManager := utils.NewNetworkManager(pod, c)
 	podNetConfig := parseLbSpConfig(networkManager.GetNetworkConfig())
 
 	lbId, err := s.getOrAllocate(podNetConfig, pod)
 	if err != nil {
-		return pod, err
+		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
 	}
 
 	// Get Svc
 	svc := &corev1.Service{}
-	err = c.Get(context.Background(), types.NamespacedName{
+	err = c.Get(ctx, types.NamespacedName{
 		Namespace: pod.GetNamespace(),
 		Name:      lbId,
 	}, svc)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Create Svc
-			return pod, s.createSvc(c, pod, podNetConfig, lbId)
+			return pod, cperrors.ToPluginError(s.createSvc(c, ctx, pod, podNetConfig, lbId), cperrors.ApiCallError)
 		}
-		return pod, err
+		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
 
-	return networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
+	pod, err = networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
 		CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
 	}, pod)
+	return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 }
 
-func (s *SlbSpPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod) (*corev1.Pod, error) {
+func (s *SlbSpPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
 	networkManager := utils.NewNetworkManager(pod, c)
 	networkStatus, _ := networkManager.GetNetworkStatus()
 	if networkStatus == nil {
-		return networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
+		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
 			CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
 		}, pod)
+		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 	}
 
 	podNetConfig := parseLbSpConfig(networkManager.GetNetworkConfig())
 	podSlbId, err := s.getOrAllocate(podNetConfig, pod)
 	if err != nil {
-		return pod, err
+		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
 	}
 
 	// Get Svc
@@ -98,9 +101,9 @@ func (s *SlbSpPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod) (*corev1.Po
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Create Svc
-			return pod, s.createSvc(c, pod, podNetConfig, podSlbId)
+			return pod, cperrors.ToPluginError(s.createSvc(c, ctx, pod, podNetConfig, podSlbId), cperrors.ApiCallError)
 		}
-		return pod, err
+		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
 
 	_, hasLabel := pod.Labels[SlbIdLabelKey]
@@ -110,14 +113,16 @@ func (s *SlbSpPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod) (*corev1.Po
 		delete(newLabels, SlbIdLabelKey)
 		pod.Labels = newLabels
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
-		return networkManager.UpdateNetworkStatus(*networkStatus, pod)
+		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 	}
 
 	// enable network
 	if !networkManager.GetNetworkDisabled() && !hasLabel {
 		pod.Labels[SlbIdLabelKey] = podSlbId
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkReady
-		return networkManager.UpdateNetworkStatus(*networkStatus, pod)
+		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 	}
 
 	// network not ready
@@ -157,10 +162,11 @@ func (s *SlbSpPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod) (*corev1.Po
 	networkStatus.InternalAddresses = internalAddresses
 	networkStatus.ExternalAddresses = externalAddresses
 	networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkReady
-	return networkManager.UpdateNetworkStatus(*networkStatus, pod)
+	pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+	return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 }
 
-func (s *SlbSpPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod) error {
+func (s *SlbSpPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.Context) cperrors.PluginError {
 	s.deAllocate(pod.GetNamespace() + "/" + pod.GetName())
 	return nil
 }
@@ -173,12 +179,12 @@ func (s *SlbSpPlugin) Alias() string {
 	return ""
 }
 
-func (s *SlbSpPlugin) Init(c client.Client, options cloudprovider.CloudProviderOptions) error {
+func (s *SlbSpPlugin) Init(c client.Client, options cloudprovider.CloudProviderOptions, ctx context.Context) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
 	svcList := &corev1.ServiceList{}
-	err := c.List(context.Background(), svcList, &client.ListOptions{
+	err := c.List(ctx, svcList, &client.ListOptions{
 		LabelSelector: labels.SelectorFromSet(map[string]string{
 			SvcSLBSPLabel: "true",
 		})})
@@ -191,7 +197,7 @@ func (s *SlbSpPlugin) Init(c client.Client, options cloudprovider.CloudProviderO
 	for _, svc := range svcList.Items {
 		slbId := svc.Labels[SlbIdLabelKey]
 		podList := &corev1.PodList{}
-		err := c.List(context.Background(), podList, &client.ListOptions{
+		err := c.List(ctx, podList, &client.ListOptions{
 			Namespace: svc.GetNamespace(),
 			LabelSelector: labels.SelectorFromSet(map[string]string{
 				SlbIdLabelKey: slbId,
@@ -211,7 +217,7 @@ func (s *SlbSpPlugin) Init(c client.Client, options cloudprovider.CloudProviderO
 	return nil
 }
 
-func (s *SlbSpPlugin) createSvc(c client.Client, pod *corev1.Pod, podConfig *lbSpConfig, lbId string) error {
+func (s *SlbSpPlugin) createSvc(c client.Client, ctx context.Context, pod *corev1.Pod, podConfig *lbSpConfig, lbId string) error {
 	svcPorts := make([]corev1.ServicePort, 0)
 	for i := 0; i < len(podConfig.ports); i++ {
 		svcPorts = append(svcPorts, corev1.ServicePort{
@@ -222,7 +228,7 @@ func (s *SlbSpPlugin) createSvc(c client.Client, pod *corev1.Pod, podConfig *lbS
 		})
 	}
 
-	return c.Create(context.Background(), &corev1.Service{
+	return c.Create(ctx, &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      lbId,
 			Namespace: pod.GetNamespace(),
@@ -233,7 +239,7 @@ func (s *SlbSpPlugin) createSvc(c client.Client, pod *corev1.Pod, podConfig *lbS
 			Labels: map[string]string{
 				SvcSLBSPLabel: "true",
 			},
-			OwnerReferences: getSvcOwnerReference(pod, c, true),
+			OwnerReferences: getSvcOwnerReference(c, ctx, pod, true),
 		},
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeLoadBalancer,

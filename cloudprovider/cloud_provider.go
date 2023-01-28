@@ -17,6 +17,8 @@ limitations under the License.
 package cloudprovider
 
 import (
+	"context"
+	"github.com/openkruise/kruise-game/cloudprovider/errors"
 	corev1 "k8s.io/api/core/v1"
 	client "sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -34,11 +36,11 @@ type Plugin interface {
 	Name() string
 	// Alias define the plugin with similar func cross multi cloud provider
 	Alias() string
-	Init(client client.Client, options CloudProviderOptions) error
+	Init(client client.Client, options CloudProviderOptions, ctx context.Context) error
 	// Pod Event handler
-	OnPodAdded(client client.Client, pod *corev1.Pod) (*corev1.Pod, error)
-	OnPodUpdated(client client.Client, pod *corev1.Pod) (*corev1.Pod, error)
-	OnPodDeleted(client client.Client, pod *corev1.Pod) error
+	OnPodAdded(client client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, errors.PluginError)
+	OnPodUpdated(client client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, errors.PluginError)
+	OnPodDeleted(client client.Client, pod *corev1.Pod, ctx context.Context) errors.PluginError
 }
 
 type CloudProvider interface {

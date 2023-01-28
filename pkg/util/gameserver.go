@@ -189,10 +189,10 @@ func RemovePrefixGameKruise(s string) string {
 	return strings.TrimPrefix(s, "game.kruise.io/")
 }
 
-func GetGameServerSetOfPod(pod *corev1.Pod, c client.Client) (*gameKruiseV1alpha1.GameServerSet, error) {
+func GetGameServerSetOfPod(pod *corev1.Pod, c client.Client, ctx context.Context) (*gameKruiseV1alpha1.GameServerSet, error) {
 	gssName := pod.GetLabels()[gameKruiseV1alpha1.GameServerOwnerGssKey]
 	gss := &gameKruiseV1alpha1.GameServerSet{}
-	err := c.Get(context.Background(), types.NamespacedName{
+	err := c.Get(ctx, types.NamespacedName{
 		Namespace: pod.GetNamespace(),
 		Name:      gssName,
 	}, gss)

@@ -20,6 +20,7 @@ import (
 	"context"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
+	"github.com/openkruise/kruise-game/cloudprovider/errors"
 	provideroptions "github.com/openkruise/kruise-game/cloudprovider/options"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
 	corev1 "k8s.io/api/core/v1"
@@ -66,7 +67,7 @@ func (hpp *HostPortPlugin) Alias() string {
 	return ""
 }
 
-func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod) (*corev1.Pod, error) {
+func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, errors.PluginError) {
 	if _, ok := hpp.isAllocated[pod.GetNamespace()+"/"+pod.GetName()]; ok {
 		return pod, nil
 	}
@@ -100,13 +101,13 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod) (*corev1
 	return pod, nil
 }
 
-func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod) (*corev1.Pod, error) {
+func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, errors.PluginError) {
 	node := &corev1.Node{}
-	err := c.Get(context.Background(), types.NamespacedName{
+	err := c.Get(ctx, types.NamespacedName{
 		Name: pod.Spec.NodeName,
 	}, node)
 	if err != nil {
-		return pod, err
+		return pod, errors.NewPluginError(errors.ApiCallError, err.Error())
 	}
 	iip, eip := getAddress(node)
 
@@ -153,10 +154,11 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod) (*core
 		CurrentNetworkState: gamekruiseiov1alpha1.NetworkReady,
 	}
 
-	return networkManager.UpdateNetworkStatus(networkStatus, pod)
+	pod, err = networkManager.UpdateNetworkStatus(networkStatus, pod)
+	return pod, errors.ToPluginError(err, errors.InternalError)
 }
 
-func (hpp *HostPortPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod) error {
+func (hpp *HostPortPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.Context) errors.PluginError {
 	if _, ok := hpp.isAllocated[pod.GetNamespace()+"/"+pod.GetName()]; !ok {
 		return nil
 	}
@@ -174,7 +176,7 @@ func (hpp *HostPortPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod) error 
 	return nil
 }
 
-func (hpp *HostPortPlugin) Init(c client.Client, options cloudprovider.CloudProviderOptions) error {
+func (hpp *HostPortPlugin) Init(c client.Client, options cloudprovider.CloudProviderOptions, ctx context.Context) error {
 	hpp.mutex.Lock()
 	defer hpp.mutex.Unlock()
 
@@ -187,7 +189,7 @@ func (hpp *HostPortPlugin) Init(c client.Client, options cloudprovider.CloudProv
 		newPortAmount[i] = 0
 	}
 	podList := &corev1.PodList{}
-	err := c.List(context.Background(), podList)
+	err := c.List(ctx, podList)
 	if err != nil {
 		return err
 	}

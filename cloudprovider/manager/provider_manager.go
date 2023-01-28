@@ -17,6 +17,7 @@ limitations under the License.
 package manager
 
 import (
+	"context"
 	"github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	"github.com/openkruise/kruise-game/cloudprovider/alibabacloud"
@@ -76,7 +77,7 @@ func (pm *ProviderManager) Init(client client.Client) {
 		}
 		log.Infof("Cloud Provider [%s] has been registered with %d plugins", name, len(plugins))
 		for _, p := range plugins {
-			err := p.Init(client, pm.FindConfigs(cp.Name()))
+			err := p.Init(client, pm.FindConfigs(cp.Name()), context.Background())
 			if err != nil {
 				continue
 			}
