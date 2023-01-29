@@ -35,7 +35,7 @@ import (
 )
 
 const (
-	HostPortNetwork = "HostPort"
+	HostPortNetwork = "Kubernetes-HostPort"
 	//ContainerPortsKey represents the configuration key when using hostPort.
 	//Its corresponding value format is as follows, containerName:port1/protocol1,port2/protocol2,... e.g. game-server:25565/TCP
 	//When no protocol is specified, TCP is used by default
