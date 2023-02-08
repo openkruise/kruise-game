@@ -17,11 +17,15 @@ limitations under the License.
 package util
 
 import (
+	"context"
+	"encoding/json"
 	appspub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strconv"
 	"strings"
 )
@@ -106,6 +110,14 @@ func GetNewAstsFromGss(gss *gameKruiseV1alpha1.GameServerSet, asts *kruiseV1beta
 
 	// set pod annotations
 	podAnnotations := gss.Spec.GameServerTemplate.GetAnnotations()
+	if gss.Spec.Network != nil {
+		if podAnnotations == nil {
+			podAnnotations = make(map[string]string)
+		}
+		networkConfig, _ := json.Marshal(gss.Spec.Network.NetworkConf)
+		podAnnotations[gameKruiseV1alpha1.GameServerNetworkConf] = string(networkConfig)
+		podAnnotations[gameKruiseV1alpha1.GameServerNetworkType] = gss.Spec.Network.NetworkType
+	}
 	asts.Spec.Template.SetAnnotations(podAnnotations)
 
 	// set template spec
@@ -154,12 +166,18 @@ func GetNewAstsFromGss(gss *gameKruiseV1alpha1.GameServerSet, asts *kruiseV1beta
 type astsToUpdate struct {
 	UpdateStrategy gameKruiseV1alpha1.UpdateStrategy
 	Template       gameKruiseV1alpha1.GameServerTemplate
+	NetworkConfigs []gameKruiseV1alpha1.NetworkConfParams
 }
 
 func GetAstsHash(gss *gameKruiseV1alpha1.GameServerSet) string {
+	var networkConfigs []gameKruiseV1alpha1.NetworkConfParams
+	if gss.Spec.Network != nil {
+		networkConfigs = gss.Spec.Network.NetworkConf
+	}
 	return GetHash(astsToUpdate{
 		UpdateStrategy: gss.Spec.UpdateStrategy,
 		Template:       gss.Spec.GameServerTemplate,
+		NetworkConfigs: networkConfigs,
 	})
 }
 
@@ -169,4 +187,14 @@ func AddPrefixGameKruise(s string) string {
 
 func RemovePrefixGameKruise(s string) string {
 	return strings.TrimPrefix(s, "game.kruise.io/")
+}
+
+func GetGameServerSetOfPod(pod *corev1.Pod, c client.Client, ctx context.Context) (*gameKruiseV1alpha1.GameServerSet, error) {
+	gssName := pod.GetLabels()[gameKruiseV1alpha1.GameServerOwnerGssKey]
+	gss := &gameKruiseV1alpha1.GameServerSet{}
+	err := c.Get(ctx, types.NamespacedName{
+		Namespace: pod.GetNamespace(),
+		Name:      gssName,
+	}, gss)
+	return gss, err
 }

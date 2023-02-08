@@ -191,7 +191,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return reconcile.Result{}, nil
 	}
 
-	gsm := NewGameServerManager(gs, pod, r.Client)
+	gsm := NewGameServerManager(gs, pod, r.Client, r.recorder)
 
 	gss, err := r.getGameServerSet(pod)
 	if err != nil {
@@ -204,12 +204,16 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	podUpdated, err := gsm.SyncGsToPod()
 	if err != nil || podUpdated {
-		return reconcile.Result{Requeue: podUpdated, RequeueAfter: 3 * time.Second}, err
+		return reconcile.Result{RequeueAfter: 3 * time.Second}, err
 	}
 
 	err = gsm.SyncPodToGs(gss)
 	if err != nil {
 		return reconcile.Result{}, err
+	}
+
+	if gsm.WaitOrNot() {
+		return ctrl.Result{RequeueAfter: NetworkIntervalTime}, nil
 	}
 
 	return ctrl.Result{}, nil
@@ -253,6 +257,11 @@ func (r *GameServerReconciler) initGameServer(pod *corev1.Pod) error {
 	}
 	ors = append(ors, or)
 	gs.OwnerReferences = ors
+
+	// set Labels
+	gsLabels := make(map[string]string)
+	gsLabels[gamekruiseiov1alpha1.GameServerOwnerGssKey] = gss.GetName()
+	gs.SetLabels(gsLabels)
 
 	// set NetWork
 	gs.Spec.NetworkDisabled = false

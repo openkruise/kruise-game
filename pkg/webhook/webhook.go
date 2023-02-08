@@ -20,6 +20,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	manager2 "github.com/openkruise/kruise-game/cloudprovider/manager"
 	"github.com/openkruise/kruise-game/pkg/webhook/util/generator"
 	"github.com/openkruise/kruise-game/pkg/webhook/util/writer"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
@@ -60,17 +61,26 @@ func init() {
 // +kubebuilder:rbac:groups=apps.kruise.io,resources=podprobemarkers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=services/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=nodes/status,verbs=get
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=mutatingwebhookconfigurations,verbs=create;get;list;watch;update;patch
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingwebhookconfigurations,verbs=create;get;list;watch;update;patch
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=alibabacloud.com,resources=poddnats,verbs=get;list;watch
+// +kubebuilder:rbac:groups=alibabacloud.com,resources=poddnats/status,verbs=get
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 type Webhook struct {
 	mgr manager.Manager
+	cpm *manager2.ProviderManager
 }
 
-func NewWebhookServer(mgr manager.Manager) *Webhook {
+func NewWebhookServer(mgr manager.Manager, cpm *manager2.ProviderManager) *Webhook {
 	return &Webhook{
 		mgr: mgr,
+		cpm: cpm,
 	}
 }
 
@@ -83,7 +93,8 @@ func (ws *Webhook) SetupWithManager(mgr manager.Manager) *Webhook {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	server.Register(mutatePodPath, &webhook.Admission{Handler: &PodMutatingHandler{Client: mgr.GetClient(), decoder: decoder}})
+	recorder := mgr.GetEventRecorderFor("kruise-game-webhook")
+	server.Register(mutatePodPath, &webhook.Admission{Handler: NewPodMutatingHandler(mgr.GetClient(), decoder, ws.cpm, recorder)})
 	server.Register(validateGssPath, &webhook.Admission{Handler: &GssValidaatingHandler{Client: mgr.GetClient(), decoder: decoder}})
 	return ws
 }
@@ -152,39 +163,11 @@ func checkMutatingConfiguration(dnsName string, kubeClient clientset.Interface, 
 }
 
 func createValidatingWebhook(dnsName string, kubeClient clientset.Interface, caBundle []byte) error {
-	sideEffectClassNone := admissionregistrationv1.SideEffectClassNone
-	fail := admissionregistrationv1.Fail
-
 	webhookConfig := &admissionregistrationv1.ValidatingWebhookConfiguration{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: validatingWebhookConfigurationName,
 		},
-		Webhooks: []admissionregistrationv1.ValidatingWebhook{
-			{
-				Name:                    dnsName,
-				SideEffects:             &sideEffectClassNone,
-				FailurePolicy:           &fail,
-				AdmissionReviewVersions: []string{"v1"},
-				ClientConfig: admissionregistrationv1.WebhookClientConfig{
-					Service: &admissionregistrationv1.ServiceReference{
-						Namespace: webhookServiceNamespace,
-						Name:      webhookServiceName,
-						Path:      &validateGssPath,
-					},
-					CABundle: caBundle,
-				},
-				Rules: []admissionregistrationv1.RuleWithOperations{
-					{
-						Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update},
-						Rule: admissionregistrationv1.Rule{
-							APIGroups:   []string{"game.kruise.io"},
-							APIVersions: []string{"v1alpha1"},
-							Resources:   []string{"gameserversets"},
-						},
-					},
-				},
-			},
-		},
+		Webhooks: getValidatingWebhookConf(dnsName, caBundle),
 	}
 
 	if _, err := kubeClient.AdmissionregistrationV1().ValidatingWebhookConfigurations().Create(context.TODO(), webhookConfig, metav1.CreateOptions{}); err != nil {
@@ -194,39 +177,11 @@ func createValidatingWebhook(dnsName string, kubeClient clientset.Interface, caB
 }
 
 func createMutatingWebhook(dnsName string, kubeClient clientset.Interface, caBundle []byte) error {
-	sideEffectClassNone := admissionregistrationv1.SideEffectClassNone
-	ignore := admissionregistrationv1.Ignore
-
 	webhookConfig := &admissionregistrationv1.MutatingWebhookConfiguration{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: mutatingWebhookConfigurationName,
 		},
-		Webhooks: []admissionregistrationv1.MutatingWebhook{
-			{
-				Name:                    dnsName,
-				SideEffects:             &sideEffectClassNone,
-				FailurePolicy:           &ignore,
-				AdmissionReviewVersions: []string{"v1"},
-				ClientConfig: admissionregistrationv1.WebhookClientConfig{
-					Service: &admissionregistrationv1.ServiceReference{
-						Namespace: webhookServiceNamespace,
-						Name:      webhookServiceName,
-						Path:      &mutatePodPath,
-					},
-					CABundle: caBundle,
-				},
-				Rules: []admissionregistrationv1.RuleWithOperations{
-					{
-						Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create},
-						Rule: admissionregistrationv1.Rule{
-							APIGroups:   []string{""},
-							APIVersions: []string{"v1"},
-							Resources:   []string{"pods"},
-						},
-					},
-				},
-			},
-		},
+		Webhooks: getMutatingWebhookConf(dnsName, caBundle),
 	}
 
 	if _, err := kubeClient.AdmissionregistrationV1().MutatingWebhookConfigurations().Create(context.TODO(), webhookConfig, metav1.CreateOptions{}); err != nil {
@@ -236,14 +191,7 @@ func createMutatingWebhook(dnsName string, kubeClient clientset.Interface, caBun
 }
 
 func updateValidatingWebhook(vwc *admissionregistrationv1.ValidatingWebhookConfiguration, dnsName string, kubeClient clientset.Interface, caBundle []byte) error {
-	var mutatingWHs []admissionregistrationv1.ValidatingWebhook
-	for _, wh := range vwc.Webhooks {
-		if wh.Name == dnsName {
-			wh.ClientConfig.CABundle = caBundle
-		}
-		mutatingWHs = append(mutatingWHs, wh)
-	}
-	vwc.Webhooks = mutatingWHs
+	vwc.Webhooks = getValidatingWebhookConf(dnsName, caBundle)
 	if _, err := kubeClient.AdmissionregistrationV1().ValidatingWebhookConfigurations().Update(context.TODO(), vwc, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("failed to update %s: %v", validatingWebhookConfigurationName, err)
 	}
@@ -251,16 +199,71 @@ func updateValidatingWebhook(vwc *admissionregistrationv1.ValidatingWebhookConfi
 }
 
 func updateMutatingWebhook(mwc *admissionregistrationv1.MutatingWebhookConfiguration, dnsName string, kubeClient clientset.Interface, caBundle []byte) error {
-	var mutatingWHs []admissionregistrationv1.MutatingWebhook
-	for _, wh := range mwc.Webhooks {
-		if wh.Name == dnsName {
-			wh.ClientConfig.CABundle = caBundle
-		}
-		mutatingWHs = append(mutatingWHs, wh)
-	}
-	mwc.Webhooks = mutatingWHs
+	mwc.Webhooks = getMutatingWebhookConf(dnsName, caBundle)
 	if _, err := kubeClient.AdmissionregistrationV1().MutatingWebhookConfigurations().Update(context.TODO(), mwc, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("failed to update %s: %v", mutatingWebhookConfigurationName, err)
 	}
 	return nil
+}
+
+func getValidatingWebhookConf(dnsName string, caBundle []byte) []admissionregistrationv1.ValidatingWebhook {
+	sideEffectClassNone := admissionregistrationv1.SideEffectClassNone
+	fail := admissionregistrationv1.Fail
+	return []admissionregistrationv1.ValidatingWebhook{
+		{
+			Name:                    dnsName,
+			SideEffects:             &sideEffectClassNone,
+			FailurePolicy:           &fail,
+			AdmissionReviewVersions: []string{"v1", "v1beta1"},
+			ClientConfig: admissionregistrationv1.WebhookClientConfig{
+				Service: &admissionregistrationv1.ServiceReference{
+					Namespace: webhookServiceNamespace,
+					Name:      webhookServiceName,
+					Path:      &validateGssPath,
+				},
+				CABundle: caBundle,
+			},
+			Rules: []admissionregistrationv1.RuleWithOperations{
+				{
+					Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update},
+					Rule: admissionregistrationv1.Rule{
+						APIGroups:   []string{"game.kruise.io"},
+						APIVersions: []string{"v1alpha1"},
+						Resources:   []string{"gameserversets"},
+					},
+				},
+			},
+		},
+	}
+}
+
+func getMutatingWebhookConf(dnsName string, caBundle []byte) []admissionregistrationv1.MutatingWebhook {
+	sideEffectClassNone := admissionregistrationv1.SideEffectClassNone
+	ignore := admissionregistrationv1.Ignore
+	return []admissionregistrationv1.MutatingWebhook{
+		{
+			Name:                    dnsName,
+			SideEffects:             &sideEffectClassNone,
+			FailurePolicy:           &ignore,
+			AdmissionReviewVersions: []string{"v1", "v1beta1"},
+			ClientConfig: admissionregistrationv1.WebhookClientConfig{
+				Service: &admissionregistrationv1.ServiceReference{
+					Namespace: webhookServiceNamespace,
+					Name:      webhookServiceName,
+					Path:      &mutatePodPath,
+				},
+				CABundle: caBundle,
+			},
+			Rules: []admissionregistrationv1.RuleWithOperations{
+				{
+					Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update, admissionregistrationv1.Delete},
+					Rule: admissionregistrationv1.Rule{
+						APIGroups:   []string{""},
+						APIVersions: []string{"v1"},
+						Resources:   []string{"pods"},
+					},
+				},
+			},
+		},
+	}
 }
