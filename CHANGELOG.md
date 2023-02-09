@@ -11,7 +11,7 @@
 
 - Supporting network types:
 
-  - HostPort
+  - Kubernetes-HostPort
   - AlibabaCloud-NATGW
   - AlibabaCloud-SLB
   - AlibabaCloud-SLB-SharedPort
