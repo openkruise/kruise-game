@@ -7,7 +7,7 @@ OpenKruiseGame integrates different network plugins of different cloud service p
 
 ## Example
 
-### HostPort
+### Kubernetes-HostPort
 
 OpenKruiseGame allows game servers to use the HostPort network in native Kubernetes clusters. The host where game servers are located exposes its external IP address and ports by using which Internet traffic is forwarded to the internal ports of the game servers. The following example shows the details:
 
@@ -26,7 +26,7 @@ spec:
     rollingUpdate:
       podUpdatePolicy: InPlaceIfPossible
   network:
-    networkType: HostPort
+    networkType: Kubernetes-HostPort
     networkConf:
     # The network configuration is specified in the form of a key-value pair. The network configuration is determined by the network plugin. Different network plugins correspond to different network configurations.
     - name: ContainerPorts
@@ -60,7 +60,7 @@ Use the networkStatus field in the generated GameServer to view the network stat
         port: 80
         protocol: TCP
     lastTransitionTime: "2022-11-23T10:57:01Z"
-    networkType: HostPort
+    networkType: Kubernetes-HostPort
 ```
 
 Clients can access the game server by using 48.98.98.8:8211.
@@ -129,7 +129,7 @@ Clients can access the game server by using 47.97.227.137:512.
 ## Network plugins
 
 OpenKruiseGame supports the following network plugins:
-- HostPort
+- Kubernetes-HostPort
 - AlibabaCloud-NATGW
 - AlibabaCloud-SLB
 - AlibabaCloud-SLB-SharedPort
@@ -138,7 +138,7 @@ OpenKruiseGame supports the following network plugins:
 
 ### Plugin name
 
-`HostPort`
+`Kubernetes-HostPort`
 
 ### Cloud Provider
 

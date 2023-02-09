@@ -35,7 +35,7 @@ spec:
     rollingUpdate:
       podUpdatePolicy: InPlaceIfPossible
   network:
-    networkType: HostPort
+    networkType: Kubernetes-HostPort
     networkConf:
       - name: ContainerPorts
         value: gameserver:30000/UDP
@@ -79,7 +79,7 @@ status:
         port: 30000
         protocol: UDP
     lastTransitionTime: "2022-12-08T11:28:29Z"
-    networkType: HostPort
+    networkType: Kubernetes-HostPort
 ...
 ```
 

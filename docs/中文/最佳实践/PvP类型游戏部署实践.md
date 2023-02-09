@@ -32,7 +32,7 @@ metadata:
 spec:
   replicas: 3
   network:
-    networkType: HostPort
+    networkType: Kubernetes-HostPort
     networkConf:
     - name: ContainerPorts
       value: xonotic:26000/UDP
