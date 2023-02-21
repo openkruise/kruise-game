@@ -20,7 +20,7 @@ import (
 	"context"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
-	"github.com/openkruise/kruise-game/cloudprovider/alibabacloud/apis/v1"
+	"github.com/openkruise/kruise-game/cloudprovider/alibabacloud/apis/v1beta1"
 	"github.com/openkruise/kruise-game/cloudprovider/errors"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
 	corev1 "k8s.io/api/core/v1"
@@ -83,7 +83,7 @@ func (n NatGwPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.
 		return pod, errors.ToPluginError(err, errors.InternalError)
 	}
 
-	podDNat := &v1.PodDNAT{}
+	podDNat := &v1beta1.PodDNAT{}
 	err := c.Get(ctx, types.NamespacedName{
 		Name:      pod.GetName(),
 		Namespace: pod.GetNamespace(),
