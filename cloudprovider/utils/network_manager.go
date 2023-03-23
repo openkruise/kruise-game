@@ -47,11 +47,11 @@ func (nm *NetworkManager) SetNetworkState(disabled bool) error {
 	}
 
 	// Initial annotations if necessary
-	if patchPod.Annotations == nil {
-		patchPod.Annotations = make(map[string]string)
+	if patchPod.Labels == nil {
+		patchPod.Labels = make(map[string]string)
 	}
 
-	patchPod.Annotations[v1alpha1.GameServerNetworkDisabled] = strconv.FormatBool(disabled)
+	patchPod.Labels[v1alpha1.GameServerNetworkDisabled] = strconv.FormatBool(disabled)
 	patch := client.MergeFrom(patchPod)
 	return nm.client.Patch(context.Background(), nm.pod, patch, nil)
 }
@@ -126,7 +126,7 @@ func NewNetworkManager(pod *corev1.Pod, client client.Client) *NetworkManager {
 	}
 
 	var networkDisabled bool
-	if networkDisabledStr, ok := pod.Annotations[v1alpha1.GameServerNetworkDisabled]; ok {
+	if networkDisabledStr, ok := pod.Labels[v1alpha1.GameServerNetworkDisabled]; ok {
 		networkDisabled, err = strconv.ParseBool(networkDisabledStr)
 		if err != nil {
 			log.Warningf("Pod %s has invalid network disabled option, err: %s", pod.Name, err.Error())
