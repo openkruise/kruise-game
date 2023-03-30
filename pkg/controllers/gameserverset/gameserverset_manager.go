@@ -265,11 +265,16 @@ func (manager *GameServerSetManager) UpdateWorkload() error {
 	asts := manager.asts
 
 	// sync with Advanced StatefulSet
-	asts = util.GetNewAstsFromGss(gss, asts)
+	asts = util.GetNewAstsFromGss(gss.DeepCopy(), asts)
 	astsAns := asts.GetAnnotations()
 	astsAns[gameKruiseV1alpha1.AstsHashKey] = util.GetAstsHash(manager.gameServerSet)
-	asts.SetAnnotations(astsAns)
-	return manager.client.Update(context.Background(), asts)
+
+	patchAsts := map[string]interface{}{"metadata": map[string]map[string]string{"annotations": astsAns}, "spec": asts.Spec}
+	patchAstsBytes, err := json.Marshal(patchAsts)
+	if err != nil {
+		return err
+	}
+	return manager.client.Patch(context.TODO(), asts, client.RawPatch(types.MergePatchType, patchAstsBytes))
 }
 
 func (manager *GameServerSetManager) SyncPodProbeMarker() error {
