@@ -34,6 +34,10 @@ spec:
       jsonPath: .status.updatePriority
       name: UP
       type: string
+    - description: The age of GameServer
+      jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:

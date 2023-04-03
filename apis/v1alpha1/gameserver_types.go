@@ -146,6 +146,7 @@ type NetworkPortRange struct {
 //+kubebuilder:printcolumn:name="OPSSTATE",type="string",JSONPath=".spec.opsState",description="The operations state of GameServer"
 //+kubebuilder:printcolumn:name="DP",type="string",JSONPath=".status.deletionPriority",description="The current deletionPriority of GameServer"
 //+kubebuilder:printcolumn:name="UP",type="string",JSONPath=".status.updatePriority",description="The current updatePriority of GameServer"
+//+kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp",description="The age of GameServer"
 //+kubebuilder:resource:shortName=gs
 
 // GameServer is the Schema for the gameservers API

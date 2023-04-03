@@ -17,7 +17,36 @@ spec:
     singular: gameserverset
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - description: The desired number of GameServers.
+      jsonPath: .spec.replicas
+      name: DESIRED
+      type: integer
+    - description: The number of currently all GameServers.
+      jsonPath: .status.replicas
+      name: CURRENT
+      type: integer
+    - description: The number of GameServers updated.
+      jsonPath: .status.updatedReplicas
+      name: UPDATED
+      type: integer
+    - description: The number of GameServers ready.
+      jsonPath: .status.readyReplicas
+      name: READY
+      type: integer
+    - description: The number of GameServers Maintaining.
+      jsonPath: .status.maintainingReplicas
+      name: Maintaining
+      type: integer
+    - description: The number of GameServers WaitToBeDeleted.
+      jsonPath: .status.waitToBeDeletedReplicas
+      name: WaitToBeDeleted
+      type: integer
+    - description: The age of GameServerSet.
+      jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: GameServerSet is the Schema for the gameserversets API
