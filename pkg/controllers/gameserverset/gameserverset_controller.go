@@ -287,7 +287,7 @@ func (r *GameServerSetReconciler) initAsts(gss *gamekruiseiov1alpha1.GameServerS
 	// set replicas
 	asts.Spec.Replicas = gss.Spec.Replicas
 
-	asts = util.GetNewAstsFromGss(gss, asts)
+	asts = util.GetNewAstsFromGss(gss.DeepCopy(), asts)
 
 	return r.Client.Create(context.Background(), asts)
 }
