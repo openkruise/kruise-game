@@ -146,6 +146,13 @@ type GameServerSetStatus struct {
 
 //+genclient
 //+kubebuilder:object:root=true
+//+kubebuilder:printcolumn:name="DESIRED",type="integer",JSONPath=".spec.replicas",description="The desired number of GameServers."
+//+kubebuilder:printcolumn:name="CURRENT",type="integer",JSONPath=".status.replicas",description="The number of currently all GameServers."
+//+kubebuilder:printcolumn:name="UPDATED",type="integer",JSONPath=".status.updatedReplicas",description="The number of GameServers updated."
+//+kubebuilder:printcolumn:name="READY",type="integer",JSONPath=".status.readyReplicas",description="The number of GameServers ready."
+//+kubebuilder:printcolumn:name="Maintaining",type="integer",JSONPath=".status.maintainingReplicas",description="The number of GameServers Maintaining."
+//+kubebuilder:printcolumn:name="WaitToBeDeleted",type="integer",JSONPath=".status.waitToBeDeletedReplicas",description="The number of GameServers WaitToBeDeleted."
+//+kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp",description="The age of GameServerSet."
 //+kubebuilder:subresource:status
 //+kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.labelSelector
 //+kubebuilder:resource:shortName=gss
