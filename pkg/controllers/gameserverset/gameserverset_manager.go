@@ -153,6 +153,14 @@ func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedRepl
 			toAdd = append(toAdd, id)
 		}
 	}
+	// those remove-reserved GameServers will only be added when expansion is required
+	if len(toDelete)-len(pods)+expectedReplicas > 0 {
+		index := util.Min(len(toAdd), len(toDelete)-len(pods)+expectedReplicas)
+		sort.Ints(toAdd)
+		toAdd = toAdd[:index]
+	} else {
+		toAdd = nil
+	}
 
 	// 2. compute remain GameServerIds, secondly
 
