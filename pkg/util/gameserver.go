@@ -99,6 +99,8 @@ func GetIndexListFromGsList(gsList []gameKruiseV1alpha1.GameServer) []int {
 func GetNewAstsFromGss(gss *gameKruiseV1alpha1.GameServerSet, asts *kruiseV1beta1.StatefulSet) *kruiseV1beta1.StatefulSet {
 	// default: set ParallelPodManagement
 	asts.Spec.PodManagementPolicy = apps.ParallelPodManagement
+	// default: set ServiceName as GameServerSet name
+	asts.Spec.ServiceName = gss.Name
 
 	// set pod labels
 	podLabels := gss.Spec.GameServerTemplate.GetLabels()
