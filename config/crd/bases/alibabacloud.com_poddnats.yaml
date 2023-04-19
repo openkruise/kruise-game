@@ -15,10 +15,10 @@ spec:
     singular: poddnat
   scope: Namespaced
   versions:
-  - name: v1
+  - name: v1beta1
     schema:
       openAPIV3Schema:
-        description: PodDNAT let you specficy DNAT rule for pod on nat gateway
+        description: PodDNAT is the Schema for the poddnats API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -33,7 +33,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: 'Spec is the desired state of the PodDNAT. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status'
+            description: PodDNATSpec defines the desired state of PodDNAT
             properties:
               eni:
                 type: string
@@ -66,7 +66,7 @@ spec:
                 type: string
             type: object
           status:
-            description: '''Status is the current state of the dnat. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status'
+            description: PodDNATStatus defines the observed state of PodDNAT
             properties:
               created:
                 description: created create status
@@ -94,3 +94,5 @@ spec:
         type: object
     served: true
     storage: true
+    subresources:
+      status: {}

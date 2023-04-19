@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kruise Authors.
+Copyright 2023 The Kruise Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,52 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1
+package v1beta1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func init() {
-	SchemeBuilder.Register(&PodDNAT{}, &PodDNATList{})
-}
-
-// +genclient
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-
-// PodDNAT let you specficy DNAT rule for pod on nat gateway
-type PodDNAT struct {
-	metav1.TypeMeta `json:",inline"`
-	// Standard object's metadata.
-	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-	// +optional
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-
-	// Spec is the desired state of the PodDNAT.
-	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
-	Spec PodDNATSpec `json:"spec,omitempty"`
-
-	// 'Status is the current state of the dnat.
-	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
-	// +optional
-	Status PodDNATStatus `json:"status,omitempty"`
-}
-
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-
-// PodDNATList is a collection of PodDNAT.
-type PodDNATList struct {
-	metav1.TypeMeta `json:",inline"`
-	// Standard object's metadata.
-	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-	// +optional
-	metav1.ListMeta `json:"metadata,omitempty"`
-
-	// Items is the list of PodDNAT.
-	Items []PodDNAT `json:"items"`
-}
-
-// PodDNATSpec describes the PodDNAT the user wishes to exist.
+// PodDNATSpec defines the desired state of PodDNAT
 type PodDNATSpec struct {
 	VSwitch      *string       `json:"vswitch,omitempty"` // deprecated
 	ENI          *string       `json:"eni,omitempty"`     // deprecated
@@ -79,7 +40,7 @@ type PortMapping struct {
 	InternalPort string `json:"internalPort,omitempty"`
 }
 
-// PodDNATStatus is the current state of the dnat.
+// PodDNATStatus defines the observed state of PodDNAT
 type PodDNATStatus struct {
 	// created create status
 	// +optional
@@ -99,4 +60,29 @@ type Entry struct {
 
 	ForwardEntryID string `json:"forwardEntryId,omitempty"`
 	IPProtocol     string `json:"ipProtocol,omitempty"`
+}
+
+//+kubebuilder:object:root=true
+//+kubebuilder:subresource:status
+
+// PodDNAT is the Schema for the poddnats API
+type PodDNAT struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   PodDNATSpec   `json:"spec,omitempty"`
+	Status PodDNATStatus `json:"status,omitempty"`
+}
+
+//+kubebuilder:object:root=true
+
+// PodDNATList contains a list of PodDNAT
+type PodDNATList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []PodDNAT `json:"items"`
+}
+
+func init() {
+	SchemeBuilder.Register(&PodDNAT{}, &PodDNATList{})
 }
