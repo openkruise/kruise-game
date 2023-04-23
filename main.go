@@ -22,7 +22,10 @@ import (
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	cpmanager "github.com/openkruise/kruise-game/cloudprovider/manager"
+	kruisegameclientset "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
+	kruisegamevisions "github.com/openkruise/kruise-game/pkg/client/informers/externalversions"
 	controller "github.com/openkruise/kruise-game/pkg/controllers"
+	"github.com/openkruise/kruise-game/pkg/metrics"
 	"github.com/openkruise/kruise-game/pkg/webhook"
 	"os"
 	"time"
@@ -97,7 +100,8 @@ func main() {
 		}
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	restConfig := ctrl.GetConfigOrDie()
+	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
 		Scheme:                 scheme,
 		MetricsBindAddress:     metricsAddr,
 		Port:                   9443,
@@ -161,6 +165,20 @@ func main() {
 		if mgr.GetCache().WaitForCacheSync(signal) {
 			setupLog.Info("cache synced, cloud provider manager start to init")
 			cloudProviderManager.Init(mgr.GetClient())
+		}
+	}()
+
+	kruisegameInformerFactory := kruisegamevisions.NewSharedInformerFactory(kruisegameclientset.NewForConfigOrDie(restConfig), 30*time.Second)
+	metricsController, err := metrics.NewController(kruisegameInformerFactory)
+	if err != nil {
+		setupLog.Error(err, "unable to create metrics controller")
+		os.Exit(1)
+	}
+	kruisegameInformerFactory.Start(signal.Done())
+	go func() {
+		if metricsController.Run(signal) != nil {
+			setupLog.Error(err, "unable to setup metrics controller")
+			os.Exit(1)
 		}
 	}()
 

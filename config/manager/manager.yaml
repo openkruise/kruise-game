@@ -41,6 +41,9 @@ spec:
         - --provider-config=/etc/kruise-game/config.toml
         image: controller:latest
         name: manager
+        ports:
+          - name: https
+            containerPort: 8080
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
