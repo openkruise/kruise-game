@@ -124,7 +124,28 @@ type RollingUpdateStatefulSetStrategy struct {
 
 type ScaleStrategy struct {
 	kruiseV1beta1.StatefulSetScaleStrategy `json:",inline"`
+	// ScaleDownStrategyType indicates the scaling down strategy.
+	// Default is GeneralScaleDownStrategyType
+	// +optional
+	ScaleDownStrategyType ScaleDownStrategyType `json:"scaleDownStrategyType,omitempty"`
 }
+
+// ScaleDownStrategyType is a string enumeration type that enumerates
+// all possible scale down strategies for the GameServerSet controller.
+// +enum
+type ScaleDownStrategyType string
+
+const (
+	// GeneralScaleDownStrategyType will first consider the ReserveGameServerIds
+	// field when game server scaling down. When the number of reserved game servers
+	// does not meet the scale down number, continue to select and delete the game
+	// servers from the current game server list.
+	GeneralScaleDownStrategyType ScaleDownStrategyType = "General"
+	// ReserveIdsScaleDownStrategyType will backfill the sequence numbers into
+	// ReserveGameServerIds field when GameServers scale down, whether set by
+	// ReserveGameServerIds field or the GameServerSet controller chooses to remove it.
+	ReserveIdsScaleDownStrategyType ScaleDownStrategyType = "ReserveIds"
+)
 
 // GameServerSetStatus defines the observed state of GameServerSet
 type GameServerSetStatus struct {
