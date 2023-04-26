@@ -1,18 +1,21 @@
 package gameserver
 
 import (
+	"context"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"strconv"
 	"testing"
 )
 
@@ -302,9 +305,8 @@ func TestSyncGsToPod(t *testing.T) {
 	up := intstr.FromInt(20)
 	dp := intstr.FromInt(10)
 	tests := []struct {
-		gs       *gameKruiseV1alpha1.GameServer
-		pod      *corev1.Pod
-		isUpdate bool
+		gs  *gameKruiseV1alpha1.GameServer
+		pod *corev1.Pod
 	}{
 		{
 			gs: &gameKruiseV1alpha1.GameServer{
@@ -330,7 +332,6 @@ func TestSyncGsToPod(t *testing.T) {
 					Phase: corev1.PodPending,
 				},
 			},
-			isUpdate: true,
 		},
 
 		{
@@ -366,7 +367,6 @@ func TestSyncGsToPod(t *testing.T) {
 					Phase: corev1.PodPending,
 				},
 			},
-			isUpdate: false,
 		},
 	}
 
@@ -379,13 +379,32 @@ func TestSyncGsToPod(t *testing.T) {
 			pod:        test.pod,
 		}
 
-		isUpdate, err := manager.SyncGsToPod()
-		if err != nil {
+		if err := manager.SyncGsToPod(); err != nil {
 			t.Error(err)
 		}
 
-		if isUpdate != test.isUpdate {
-			t.Errorf("expect isUpdate is %v ,but actually is %v", test.isUpdate, isUpdate)
+		pod := &corev1.Pod{}
+		if err := manager.client.Get(context.TODO(), types.NamespacedName{
+			Namespace: test.gs.Namespace,
+			Name:      test.gs.Name,
+		}, pod); err != nil {
+			t.Error(err)
+		}
+
+		if pod.Labels[gameKruiseV1alpha1.GameServerOpsStateKey] != string(test.gs.Spec.OpsState) {
+			t.Errorf("expect opsState is %s ,but actually is %s", string(test.gs.Spec.OpsState), pod.Labels[gameKruiseV1alpha1.GameServerOpsStateKey])
+		}
+
+		if pod.Labels[gameKruiseV1alpha1.GameServerUpdatePriorityKey] != test.gs.Spec.UpdatePriority.String() {
+			t.Errorf("expect UpdatePriority is %s ,but actually is %s", test.gs.Spec.UpdatePriority.String(), pod.Labels[gameKruiseV1alpha1.GameServerUpdatePriorityKey])
+		}
+
+		if pod.Labels[gameKruiseV1alpha1.GameServerDeletePriorityKey] != test.gs.Spec.DeletionPriority.String() {
+			t.Errorf("expect DeletionPriority is %s ,but actually is %s", test.gs.Spec.DeletionPriority.String(), pod.Labels[gameKruiseV1alpha1.GameServerDeletePriorityKey])
+		}
+
+		if pod.Labels[gameKruiseV1alpha1.GameServerNetworkDisabled] != strconv.FormatBool(test.gs.Spec.NetworkDisabled) {
+			t.Errorf("expect NetworkDisabled is %s ,but actually is %s", strconv.FormatBool(test.gs.Spec.NetworkDisabled), pod.Labels[gameKruiseV1alpha1.GameServerNetworkDisabled])
 		}
 	}
 }
