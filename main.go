@@ -25,8 +25,11 @@ import (
 	kruisegameclientset "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
 	kruisegamevisions "github.com/openkruise/kruise-game/pkg/client/informers/externalversions"
 	controller "github.com/openkruise/kruise-game/pkg/controllers"
+  "github.com/openkruise/kruise-game/pkg/externalscaler"
 	"github.com/openkruise/kruise-game/pkg/metrics"
 	"github.com/openkruise/kruise-game/pkg/webhook"
+	"google.golang.org/grpc"
+	"net"
 	"os"
 	"time"
 
@@ -34,7 +37,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
-	aliv1 "github.com/openkruise/kruise-game/cloudprovider/alibabacloud/apis/v1"
+	aliv1beta1 "github.com/openkruise/kruise-game/cloudprovider/alibabacloud/apis/v1beta1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -59,7 +62,7 @@ func init() {
 	utilruntime.Must(kruiseV1beta1.AddToScheme(scheme))
 	utilruntime.Must(kruiseV1alpha1.AddToScheme(scheme))
 
-	utilruntime.Must(aliv1.AddToScheme(scheme))
+	utilruntime.Must(aliv1beta1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
@@ -69,6 +72,7 @@ func main() {
 	var probeAddr string
 	var namespace string
 	var syncPeriodStr string
+	var scaleServerAddr string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8082", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
@@ -77,6 +81,7 @@ func main() {
 	flag.StringVar(&namespace, "namespace", "",
 		"Namespace if specified restricts the manager's cache to watch objects in the desired namespace. Defaults to all namespaces.")
 	flag.StringVar(&syncPeriodStr, "sync-period", "", "Determines the minimum frequency at which watched resources are reconciled.")
+	flag.StringVar(&scaleServerAddr, "scale-server-bind-address", ":6000", "The address the scale server endpoint binds to.")
 
 	// Add cloud provider flags
 	cloudprovider.InitCloudProviderFlags()
@@ -178,6 +183,17 @@ func main() {
 	go func() {
 		if metricsController.Run(signal) != nil {
 			setupLog.Error(err, "unable to setup metrics controller")
+      os.Exit(1)
+		}
+	}()
+
+  externalScaler := externalscaler.NewExternalScaler(mgr.GetClient())
+	go func() {
+		grpcServer := grpc.NewServer()
+		lis, _ := net.Listen("tcp", scaleServerAddr)
+		externalscaler.RegisterExternalScalerServer(grpcServer, externalScaler)
+		if err := grpcServer.Serve(lis); err != nil {
+			setupLog.Error(err, "unable to setup ExternalScalerServer")
 			os.Exit(1)
 		}
 	}()
