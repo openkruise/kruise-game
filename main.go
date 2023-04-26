@@ -25,7 +25,7 @@ import (
 	kruisegameclientset "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
 	kruisegamevisions "github.com/openkruise/kruise-game/pkg/client/informers/externalversions"
 	controller "github.com/openkruise/kruise-game/pkg/controllers"
-  "github.com/openkruise/kruise-game/pkg/externalscaler"
+	"github.com/openkruise/kruise-game/pkg/externalscaler"
 	"github.com/openkruise/kruise-game/pkg/metrics"
 	"github.com/openkruise/kruise-game/pkg/webhook"
 	"google.golang.org/grpc"
@@ -183,11 +183,11 @@ func main() {
 	go func() {
 		if metricsController.Run(signal) != nil {
 			setupLog.Error(err, "unable to setup metrics controller")
-      os.Exit(1)
+			os.Exit(1)
 		}
 	}()
 
-  externalScaler := externalscaler.NewExternalScaler(mgr.GetClient())
+	externalScaler := externalscaler.NewExternalScaler(mgr.GetClient())
 	go func() {
 		grpcServer := grpc.NewServer()
 		lis, _ := net.Listen("tcp", scaleServerAddr)
