@@ -23,7 +23,10 @@ import (
 	"github.com/openkruise/kruise-game/cloudprovider"
 	cpmanager "github.com/openkruise/kruise-game/cloudprovider/manager"
 	controller "github.com/openkruise/kruise-game/pkg/controllers"
+	"github.com/openkruise/kruise-game/pkg/externalscaler"
 	"github.com/openkruise/kruise-game/pkg/webhook"
+	"google.golang.org/grpc"
+	"net"
 	"os"
 	"time"
 
@@ -66,6 +69,7 @@ func main() {
 	var probeAddr string
 	var namespace string
 	var syncPeriodStr string
+	var scaleServerAddr string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8082", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
@@ -74,6 +78,7 @@ func main() {
 	flag.StringVar(&namespace, "namespace", "",
 		"Namespace if specified restricts the manager's cache to watch objects in the desired namespace. Defaults to all namespaces.")
 	flag.StringVar(&syncPeriodStr, "sync-period", "", "Determines the minimum frequency at which watched resources are reconciled.")
+	flag.StringVar(&scaleServerAddr, "scale-server-bind-address", ":6000", "The address the scale server endpoint binds to.")
 
 	// Add cloud provider flags
 	cloudprovider.InitCloudProviderFlags()
@@ -161,6 +166,17 @@ func main() {
 		if mgr.GetCache().WaitForCacheSync(signal) {
 			setupLog.Info("cache synced, cloud provider manager start to init")
 			cloudProviderManager.Init(mgr.GetClient())
+		}
+	}()
+
+	externalScaler := externalscaler.NewExternalScaler(mgr.GetClient())
+	go func() {
+		grpcServer := grpc.NewServer()
+		lis, _ := net.Listen("tcp", scaleServerAddr)
+		externalscaler.RegisterExternalScalerServer(grpcServer, externalScaler)
+		if err := grpcServer.Serve(lis); err != nil {
+			setupLog.Error(err, "unable to setup ExternalScalerServer")
+			os.Exit(1)
 		}
 	}()
 
