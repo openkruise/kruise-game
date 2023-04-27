@@ -54,6 +54,17 @@ OpenKruiseGame has the following core features:
 * Independent of cloud service providers
 * Complex game server orchestration
 
+### Users of OpenKruiseGame(OKG)
+
+<table style="border-collapse: collapse;">
+    <tr style="border: none;">
+        <td style="border: none;"><center><img src="../images/bilibili-logo.png" width="120"> </center></td>
+        <td style="border: none;"><center><img src="../images/hypergryph-logo.png" width="120" ></center> </td>
+        <td style="border: none;"><center><img src="../images/shangyou-logo.jpeg" width="120" ></center></td>
+        <td style="border: none;"><center><img src="../images/guanying-logo.png" width="120" ></center> </td>
+    </tr>
+</table>
+
 ### What to do next
 
 * Install and use OpenKruiseGame. For more information, see [Getting Started](./getting_started).
