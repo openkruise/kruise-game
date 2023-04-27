@@ -31,18 +31,20 @@ func init() {
 
 func TestComputeToScaleGs(t *testing.T) {
 	tests := []struct {
-		newGssReserveIds []int
-		oldGssreserveIds []int
-		notExistIds      []int
-		expectedReplicas int
-		pods             []corev1.Pod
-		newNotExistIds   []int
+		newGssReserveIds      []int
+		oldGssreserveIds      []int
+		notExistIds           []int
+		expectedReplicas      int
+		scaleDownStrategyType gameKruiseV1alpha1.ScaleDownStrategyType
+		pods                  []corev1.Pod
+		newReserveIds         []int
 	}{
 		{
-			newGssReserveIds: []int{2, 3, 4},
-			oldGssreserveIds: []int{2, 3},
-			notExistIds:      []int{5},
-			expectedReplicas: 3,
+			newGssReserveIds:      []int{2, 3, 4},
+			oldGssreserveIds:      []int{2, 3},
+			notExistIds:           []int{5},
+			expectedReplicas:      3,
+			scaleDownStrategyType: gameKruiseV1alpha1.GeneralScaleDownStrategyType,
 			pods: []corev1.Pod{
 				{
 					ObjectMeta: metav1.ObjectMeta{
@@ -81,13 +83,14 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newNotExistIds: []int{5},
+			newReserveIds: []int{2, 3, 4, 5},
 		},
 		{
-			newGssReserveIds: []int{0, 2, 3},
-			oldGssreserveIds: []int{0, 4, 5},
-			notExistIds:      []int{},
-			expectedReplicas: 3,
+			newGssReserveIds:      []int{0, 2, 3},
+			oldGssreserveIds:      []int{0, 4, 5},
+			notExistIds:           []int{},
+			expectedReplicas:      3,
+			scaleDownStrategyType: gameKruiseV1alpha1.GeneralScaleDownStrategyType,
 			pods: []corev1.Pod{
 				{
 					ObjectMeta: metav1.ObjectMeta{
@@ -135,13 +138,14 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newNotExistIds: []int{4, 5},
+			newReserveIds: []int{0, 2, 3, 4, 5},
 		},
 		{
-			newGssReserveIds: []int{0},
-			oldGssreserveIds: []int{0, 4, 5},
-			notExistIds:      []int{},
-			expectedReplicas: 1,
+			newGssReserveIds:      []int{0},
+			oldGssreserveIds:      []int{0, 4, 5},
+			notExistIds:           []int{},
+			expectedReplicas:      1,
+			scaleDownStrategyType: gameKruiseV1alpha1.GeneralScaleDownStrategyType,
 			pods: []corev1.Pod{
 				{
 					ObjectMeta: metav1.ObjectMeta{
@@ -189,13 +193,14 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newNotExistIds: nil,
+			newReserveIds: []int{0},
 		},
 		{
-			newGssReserveIds: []int{0, 2, 3},
-			oldGssreserveIds: []int{0, 4, 5},
-			notExistIds:      []int{},
-			expectedReplicas: 4,
+			newGssReserveIds:      []int{0, 2, 3},
+			oldGssreserveIds:      []int{0, 4, 5},
+			notExistIds:           []int{},
+			expectedReplicas:      4,
+			scaleDownStrategyType: gameKruiseV1alpha1.GeneralScaleDownStrategyType,
 			pods: []corev1.Pod{
 				{
 					ObjectMeta: metav1.ObjectMeta{
@@ -243,14 +248,60 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newNotExistIds: []int{5},
+			newReserveIds: []int{0, 2, 3, 5},
+		},
+		{
+			newGssReserveIds:      []int{0, 3, 5},
+			oldGssreserveIds:      []int{0, 3, 5},
+			notExistIds:           []int{},
+			expectedReplicas:      1,
+			scaleDownStrategyType: gameKruiseV1alpha1.ReserveIdsScaleDownStrategyType,
+			pods: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-1",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-2",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-4",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-6",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+			},
+			newReserveIds: []int{0, 3, 5, 2, 4, 6},
 		},
 	}
 
 	for i, test := range tests {
-		newNotExistIds := computeToScaleGs(test.newGssReserveIds, test.oldGssreserveIds, test.notExistIds, test.expectedReplicas, test.pods)
-		if !util.IsSliceEqual(newNotExistIds, test.newNotExistIds) {
-			t.Errorf("case %d: expect newNotExistIds %v but got %v", i, test.newNotExistIds, newNotExistIds)
+		newReserveIds := computeToScaleGs(test.newGssReserveIds, test.oldGssreserveIds, test.notExistIds, test.expectedReplicas, test.pods, test.scaleDownStrategyType)
+		if !util.IsSliceEqual(newReserveIds, test.newReserveIds) {
+			t.Errorf("case %d: expect newNotExistIds %v but got %v", i, test.newReserveIds, newReserveIds)
 		}
 	}
 }

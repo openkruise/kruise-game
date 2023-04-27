@@ -107,7 +107,8 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas.", gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas)
 	manager.eventRecorder.Eventf(gss, corev1.EventTypeNormal, ScaleReason, "scale from %d to %d", currentReplicas, expectedReplicas)
 
-	asts.Spec.ReserveOrdinals = append(gssReserveIds, computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, gsList)...)
+	newReserveIds := computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, gsList, gss.Spec.ScaleStrategy.ScaleDownStrategyType)
+	asts.Spec.ReserveOrdinals = newReserveIds
 	asts.Spec.Replicas = gss.Spec.Replicas
 	asts.Spec.ScaleStrategy = &kruiseV1beta1.StatefulSetScaleStrategy{
 		MaxUnavailable: gss.Spec.ScaleStrategy.MaxUnavailable,
@@ -118,9 +119,12 @@ func (manager *GameServerSetManager) GameServerScale() error {
 		return err
 	}
 
+	if gss.Spec.ScaleStrategy.ScaleDownStrategyType == gameKruiseV1alpha1.ReserveIdsScaleDownStrategyType {
+		gssReserveIds = newReserveIds
+	}
 	gssAnnotations := make(map[string]string)
 	gssAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] = util.IntSliceToString(gssReserveIds, ",")
-	patchGss := map[string]interface{}{"metadata": map[string]map[string]string{"annotations": gssAnnotations}}
+	patchGss := map[string]interface{}{"spec": map[string]interface{}{"reserveGameServerIds": gssReserveIds}, "metadata": map[string]map[string]string{"annotations": gssAnnotations}}
 	patchGssBytes, _ := json.Marshal(patchGss)
 	err = c.Patch(ctx, gss, client.RawPatch(types.MergePatchType, patchGssBytes))
 	if err != nil {
@@ -131,7 +135,7 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	return nil
 }
 
-func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedReplicas int, pods []corev1.Pod) []int {
+func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedReplicas int, pods []corev1.Pod, scaleDownType gameKruiseV1alpha1.ScaleDownStrategyType) []int {
 	workloadManageIds := util.GetIndexListFromPodList(pods)
 
 	var toAdd []int
@@ -189,19 +193,23 @@ func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedRepl
 		}
 	}
 
+	if scaleDownType == gameKruiseV1alpha1.ReserveIdsScaleDownStrategyType {
+		return append(gssReserveIds, util.GetSliceInANotInB(toDelete, gssReserveIds)...)
+	}
+
 	newManageIds := append(workloadManageIds, util.GetSliceInANotInB(toAdd, workloadManageIds)...)
 	newManageIds = util.GetSliceInANotInB(newManageIds, toDelete)
-	var newNotExistIds []int
+	var newReserveIds []int
 	if len(newManageIds) != 0 {
 		sort.Ints(newManageIds)
 		for i := 0; i < newManageIds[len(newManageIds)-1]; i++ {
-			if !util.IsNumInList(i, newManageIds) && !util.IsNumInList(i, gssReserveIds) {
-				newNotExistIds = append(newNotExistIds, i)
+			if !util.IsNumInList(i, newManageIds) {
+				newReserveIds = append(newReserveIds, i)
 			}
 		}
 	}
 
-	return newNotExistIds
+	return newReserveIds
 }
 
 func (manager *GameServerSetManager) SyncGameServerReplicas() error {

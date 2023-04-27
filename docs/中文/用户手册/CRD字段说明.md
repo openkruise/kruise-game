@@ -7,13 +7,13 @@ type GameServerSetSpec struct {
     // 游戏服数目，必须指定，最小值为0
     Replicas *int32 `json:"replicas"`
 
-    // 游戏服模版
+    // 游戏服模版，新生成的游戏服将以模版定义的参数创建
     GameServerTemplate   GameServerTemplate `json:"gameServerTemplate,omitempty"`
 
     // 保留的游戏服序号，可选项。若指定了该序号，已经存在的游戏服将被删除；而未存在的游戏服，新建时将跳过、不创建该序号
     ReserveGameServerIds []int              `json:"reserveGameServerIds,omitempty"`
 
-    // 游戏服自定义服务质量
+    // 游戏服自定义服务质量。用户通过该字段实现游戏服自动化状态感知。
     ServiceQualities     []ServiceQuality   `json:"serviceQualities,omitempty"`
 
     // 游戏服批量更新策略
@@ -121,6 +121,13 @@ type InPlaceUpdateStrategy struct {
 type ScaleStrategy struct {
     // 扩缩期间游戏服最大不可用的数量，可为绝对值或百分比
     MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
+    
+    // 缩容策略类型，目前支持两种：General 与 ReserveIds。
+    // 默认为General，缩容时优先考虑reserveGameServerIds字段，
+    // 当预留的GameServer数量不满足缩减数量时，继续从当前游戏服务器列表中选择并删除GameServer。
+    // 当该字段设置为ReserveIds时，无论是保留的游戏服还是控制器按照优先级删除的游戏服，
+    // 被删除的游戏服的序号都会回填至ReserveGameServerIds字段。
+    ScaleDownStrategyType ScaleDownStrategyType `json:"scaleDownStrategyType,omitempty"`
 }
 
 ```
