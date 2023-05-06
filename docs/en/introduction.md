@@ -62,6 +62,7 @@ OpenKruiseGame has the following core features:
         <td style="border: none;"><center><img src="../images/hypergryph-logo.png" width="120" ></center> </td>
         <td style="border: none;"><center><img src="../images/shangyou-logo.jpeg" width="120" ></center></td>
         <td style="border: none;"><center><img src="../images/guanying-logo.png" width="120" ></center> </td>
+        <td style="border: none;"><center><img src="../images/booming-logo.png" width="120" ></center> </td>
     </tr>
 </table>
 
