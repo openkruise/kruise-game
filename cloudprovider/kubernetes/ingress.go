@@ -2,6 +2,8 @@ package kubernetes
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
@@ -47,7 +49,10 @@ const (
 const (
 	SvcSelectorKey = "statefulset.kubernetes.io/pod-name"
 	IngressHashKey = "game.kruise.io/ingress-hash"
+	ServiceHashKey = "game.kruise.io/svc-hash"
 )
+
+const paramsError = "Network Config Params Error"
 
 func init() {
 	kubernetesProvider.registerPlugin(&IngressPlugin{})
@@ -71,9 +76,12 @@ func (i IngressPlugin) Init(client client.Client, options cloudprovider.CloudPro
 func (i IngressPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
 	networkManager := utils.NewNetworkManager(pod, c)
 	conf := networkManager.GetNetworkConfig()
-	ic := parseIngConfig(conf, pod)
+	ic, err := parseIngConfig(conf, pod)
+	if err != nil {
+		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+	}
 
-	err := c.Create(ctx, consSvc(ic, pod))
+	err = c.Create(ctx, consSvc(ic, pod))
 	if err != nil {
 		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
@@ -97,11 +105,14 @@ func (i IngressPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 	}
 
 	conf := networkManager.GetNetworkConfig()
-	ic := parseIngConfig(conf, pod)
+	ic, err := parseIngConfig(conf, pod)
+	if err != nil {
+		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+	}
 
 	// get svc
 	svc := &corev1.Service{}
-	err := c.Get(ctx, types.NamespacedName{
+	err = c.Get(ctx, types.NamespacedName{
 		Name:      pod.GetName(),
 		Namespace: pod.GetNamespace(),
 	}, svc)
@@ -110,6 +121,23 @@ func (i IngressPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 			return pod, cperrors.ToPluginError(c.Create(ctx, consSvc(ic, pod)), cperrors.ApiCallError)
 		}
 		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+	}
+	// update svc
+	if util.GetHash(ic.ports) != svc.GetAnnotations()[ServiceHashKey] {
+		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
+		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+		if err != nil {
+			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
+		}
+
+		newSvc := consSvc(ic, pod)
+		patchSvc := map[string]interface{}{"metadata": map[string]map[string]string{"annotations": newSvc.Annotations}, "spec": newSvc.Spec}
+		patchSvcBytes, err := json.Marshal(patchSvc)
+		if err != nil {
+			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
+		}
+
+		return pod, cperrors.ToPluginError(c.Patch(ctx, svc, client.RawPatch(types.MergePatchType, patchSvcBytes)), cperrors.ApiCallError)
 	}
 
 	// get ingress
@@ -125,21 +153,13 @@ func (i IngressPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
 
-	networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
-	pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
-
-	// update
+	// update ingress
 	if util.GetHash(ic) != ing.GetAnnotations()[IngressHashKey] {
-		// update svc port
-		if ic.port != svc.Spec.Ports[0].Port {
-			svc.Spec.Ports[0].Port = ic.port
-			svc.Spec.Ports[0].TargetPort = intstr.FromInt(int(ic.port))
-			err := c.Update(ctx, svc)
-			if err != nil {
-				return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
-			}
+		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
+		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+		if err != nil {
+			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
 		}
-		// update ingress
 		return pod, cperrors.ToPluginError(c.Update(ctx, consIngress(ic, pod)), cperrors.ApiCallError)
 	}
 
@@ -151,28 +171,25 @@ func (i IngressPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 	// network ready
 	internalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
 	externalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
+	networkPorts := make([]gamekruiseiov1alpha1.NetworkPort, 0)
 
-	instrIPort := intstr.FromInt(int(ic.port))
+	for _, p := range ing.Spec.Rules[0].HTTP.Paths {
+		instrIPort := intstr.FromInt(int(p.Backend.Service.Port.Number))
+		networkPort := gamekruiseiov1alpha1.NetworkPort{
+			Name: p.Path,
+			Port: &instrIPort,
+		}
+		networkPorts = append(networkPorts, networkPort)
+	}
+
 	internalAddress := gamekruiseiov1alpha1.NetworkAddress{
-		IP: pod.Status.PodIP,
-		Ports: []gamekruiseiov1alpha1.NetworkPort{
-			{
-				Name:     strconv.Itoa(int(ic.port)),
-				Port:     &instrIPort,
-				Protocol: corev1.ProtocolTCP,
-			},
-		},
+		IP:    pod.Status.PodIP,
+		Ports: networkPorts,
 	}
 	externalAddress := gamekruiseiov1alpha1.NetworkAddress{
 		IP:       ing.Status.LoadBalancer.Ingress[0].IP,
 		EndPoint: ing.Status.LoadBalancer.Ingress[0].Hostname,
-		Ports: []gamekruiseiov1alpha1.NetworkPort{
-			{
-				Name:     instrIPort.String(),
-				Port:     &instrIPort,
-				Protocol: corev1.ProtocolTCP,
-			},
-		},
+		Ports:    networkPorts,
 	}
 
 	networkStatus.InternalAddresses = append(internalAddresses, internalAddress)
@@ -187,9 +204,9 @@ func (i IngressPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx contex
 }
 
 type ingConfig struct {
-	path             string
-	pathType         *v1.PathType
-	port             int32
+	paths            []string
+	pathTypes        []*v1.PathType
+	ports            []int32
 	host             string
 	ingressClassName *string
 	tlsHosts         []string
@@ -197,18 +214,21 @@ type ingConfig struct {
 	annotations      map[string]string
 }
 
-func parseIngConfig(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.Pod) ingConfig {
+func parseIngConfig(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.Pod) (ingConfig, error) {
 	var ic ingConfig
 	ic.annotations = make(map[string]string)
+	ic.paths = make([]string, 0)
+	ic.pathTypes = make([]*v1.PathType, 0)
+	ic.ports = make([]int32, 0)
 	id := util.GetIndexFromGsName(pod.GetName())
 	for _, c := range conf {
 		switch c.Name {
 		case PathTypeKey:
 			pathType := v1.PathType(c.Value)
-			ic.pathType = &pathType
+			ic.pathTypes = append(ic.pathTypes, &pathType)
 		case PortKey:
 			port, _ := strconv.ParseInt(c.Value, 10, 32)
-			ic.port = int32(port)
+			ic.ports = append(ic.ports, int32(port))
 		case HostKey:
 			ic.host = c.Value
 		case IngressClassNameKey:
@@ -219,18 +239,54 @@ func parseIngConfig(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.P
 			ic.tlsHosts = strings.Split(c.Value, ",")
 		case PathKey:
 			strs := strings.Split(c.Value, "<id>")
-			ic.path = strs[0] + strconv.Itoa(id) + strs[1]
+			ic.paths = append(ic.paths, strs[0]+strconv.Itoa(id)+strs[1])
 		case AnnotationKey:
 			kv := strings.Split(c.Value, ": ")
 			ic.annotations[kv[0]] = kv[1]
 		}
 	}
-	return ic
+
+	if len(ic.paths) == 0 || len(ic.pathTypes) == 0 || len(ic.ports) == 0 {
+		return ingConfig{}, fmt.Errorf("%s", paramsError)
+	}
+
+	return ic, nil
 }
 
 func consIngress(ic ingConfig, pod *corev1.Pod) *v1.Ingress {
+	pathSlice := ic.paths
+	pathTypeSlice := ic.pathTypes
+	pathPortSlice := ic.ports
+	lenPathTypeSlice := len(pathTypeSlice)
+	lenPathPortSlice := len(pathPortSlice)
+	for i := 0; i < len(pathSlice)-lenPathTypeSlice; i++ {
+		pathTypeSlice = append(pathTypeSlice, pathTypeSlice[0])
+	}
+	for i := 0; i < len(pathSlice)-lenPathPortSlice; i++ {
+		pathPortSlice = append(pathPortSlice, pathPortSlice[0])
+	}
+
 	ingAnnotations := ic.annotations
+	if ingAnnotations == nil {
+		ingAnnotations = make(map[string]string)
+	}
 	ingAnnotations[IngressHashKey] = util.GetHash(ic)
+	ingPaths := make([]v1.HTTPIngressPath, 0)
+	for i := 0; i < len(pathSlice); i++ {
+		ingPath := v1.HTTPIngressPath{
+			Path:     pathSlice[i],
+			PathType: pathTypeSlice[i],
+			Backend: v1.IngressBackend{
+				Service: &v1.IngressServiceBackend{
+					Name: pod.GetName(),
+					Port: v1.ServiceBackendPort{
+						Number: pathPortSlice[i],
+					},
+				},
+			},
+		}
+		ingPaths = append(ingPaths, ingPath)
+	}
 	ing := &v1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        pod.GetName(),
@@ -254,20 +310,7 @@ func consIngress(ic ingConfig, pod *corev1.Pod) *v1.Ingress {
 					Host: ic.host,
 					IngressRuleValue: v1.IngressRuleValue{
 						HTTP: &v1.HTTPIngressRuleValue{
-							Paths: []v1.HTTPIngressPath{
-								{
-									Path:     ic.path,
-									PathType: ic.pathType,
-									Backend: v1.IngressBackend{
-										Service: &v1.IngressServiceBackend{
-											Name: pod.GetName(),
-											Port: v1.ServiceBackendPort{
-												Number: ic.port,
-											},
-										},
-									},
-								},
-							},
+							Paths: ingPaths,
 						},
 					},
 				},
@@ -286,6 +329,17 @@ func consIngress(ic ingConfig, pod *corev1.Pod) *v1.Ingress {
 }
 
 func consSvc(ic ingConfig, pod *corev1.Pod) *corev1.Service {
+	annoatations := make(map[string]string)
+	annoatations[ServiceHashKey] = util.GetHash(ic.ports)
+	ports := make([]corev1.ServicePort, 0)
+	for _, p := range ic.ports {
+		port := corev1.ServicePort{
+			Port: p,
+			Name: strconv.Itoa(int(p)),
+		}
+		ports = append(ports, port)
+	}
+
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pod.GetName(),
@@ -300,17 +354,14 @@ func consSvc(ic ingConfig, pod *corev1.Pod) *corev1.Service {
 					BlockOwnerDeletion: pointer.BoolPtr(true),
 				},
 			},
+			Annotations: annoatations,
 		},
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeClusterIP,
 			Selector: map[string]string{
 				SvcSelectorKey: pod.GetName(),
 			},
-			Ports: []corev1.ServicePort{
-				{
-					Port: ic.port,
-				},
-			},
+			Ports: ports,
 		},
 	}
 }

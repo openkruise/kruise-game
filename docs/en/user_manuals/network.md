@@ -239,7 +239,11 @@ Annotation
 - Meaning: as an annotation of the Ingress object
 - Value format: key: value (note the space after the colon), for example: nginx.ingress.kubernetes.io/rewrite-target: /$2
 - Configuration change supported or not: yes.
+
+_additional explanation_
+
 - If you want to fill in multiple annotations, you can define multiple slices named Annotation in the networkConf.
+- Supports filling in multiple paths. The path, path type, and port correspond one-to-one in the order of filling. When the number of paths is greater than the number of path types(or port), non-corresponding paths will match the path type(or port) that was filled in first.
 
 
 #### Plugin configuration
@@ -248,7 +252,7 @@ None
 
 #### Example
 
-GameServerSet.Spec.Network:
+Set GameServerSet.Spec.Network:
 
 ```yaml
   network:
@@ -259,6 +263,8 @@ GameServerSet.Spec.Network:
       value: "80"
     - name: Path
       value: /game<id>(/|$)(.*)
+    - name: Path
+      value: /test-<id>
     - name: Host
       value: test.xxx.cn-hangzhou.ali.com
     - name: PathType
@@ -288,6 +294,13 @@ spec:
               number: 80
         path: /game0(/|$)(.*)
         pathType: ImplementationSpecific
+      - backend:
+          service:
+            name: ing-nginx-0
+            port:
+              number: 80
+        path: /test-0
+        pathType: ImplementationSpecific
   tls:
   - hosts:
     - xxx.xx1.com
@@ -295,10 +308,39 @@ spec:
 status:
   loadBalancer:
     ingress:
-    - ip: xx.xx.xxx.xxx
+    - ip: 47.xx.xxx.xxx
 ```
 
-The other game servers only have different path fields, while the other generated parameters are the same.
+The other GameServers only have different path fields and service names, while the other generated parameters are the same.
+
+The network status of GameServer is as follows:
+
+```yaml
+  networkStatus:
+    createTime: "2023-04-28T14:00:30Z"
+    currentNetworkState: Ready
+    desiredNetworkState: Ready
+    externalAddresses:
+    - ip: 47.xx.xxx.xxx
+      ports:
+      - name: /game0(/|$)(.*)
+        port: 80
+        protocol: TCP
+      - name: /test-0
+        port: 80
+        protocol: TCP
+    internalAddresses:
+    - ip: 10.xxx.x.xxx
+      ports:
+      - name: /game0(/|$)(.*)
+        port: 80
+        protocol: TCP
+      - name: /test-0
+        port: 80
+        protocol: TCP
+    lastTransitionTime: "2023-04-28T14:00:30Z"
+    networkType: Kubernetes-Ingress
+```
 
 ---
 
