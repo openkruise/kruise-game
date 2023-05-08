@@ -1,11 +1,54 @@
 {
+  "__inputs": [
+    {
+      "name": "DS_TEMP",
+      "label": "temp",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__elements": {},
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "9.2.4"
+    },
+    {
+      "type": "panel",
+      "id": "piechart",
+      "name": "Pie chart",
+      "version": ""
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "stat",
+      "name": "Stat",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "timeseries",
+      "name": "Time series",
+      "version": ""
+    }
+  ],
   "annotations": {
     "list": [
       {
         "builtIn": 1,
         "datasource": {
-          "type": "grafana",
-          "uid": "-- Grafana --"
+          "type": "prometheus",
+          "uid": "${DS_TEMP}"
         },
         "enable": true,
         "hide": true,
@@ -24,14 +67,14 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 7157434,
+  "id": null,
   "links": [],
   "liveNow": false,
   "panels": [
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -76,13 +119,13 @@
         },
         "textMode": "auto"
       },
-      "pluginVersion": "9.0.8",
+      "pluginVersion": "9.2.4",
       "targets": [
         {
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "expr": "sum(okg_gameservers_state_count)",
           "fields": [
@@ -102,7 +145,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -147,13 +190,13 @@
         },
         "textMode": "auto"
       },
-      "pluginVersion": "9.0.8",
+      "pluginVersion": "9.2.4",
       "targets": [
         {
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "expr": "max(okg_gameservers_state_count{state=\"Ready\"})",
           "fields": [
@@ -173,7 +216,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -218,13 +261,13 @@
         },
         "textMode": "auto"
       },
-      "pluginVersion": "9.0.8",
+      "pluginVersion": "9.2.4",
       "targets": [
         {
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "expr": "max(okg_gameservers_opsState_count{opsState=\"Maintaining\"})",
           "fields": [
@@ -244,7 +287,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -289,13 +332,13 @@
         },
         "textMode": "auto"
       },
-      "pluginVersion": "9.0.8",
+      "pluginVersion": "9.2.4",
       "targets": [
         {
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "expr": "max(okg_gameservers_opsState_count{opsState=\"WaitToBeDeleted\"})",
           "fields": [
@@ -315,7 +358,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -343,7 +386,8 @@
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         },
         "pieType": "pie",
         "reduceOptions": {
@@ -364,7 +408,7 @@
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "editorMode": "code",
           "expr": "max(okg_gameservers_state_count{state!=\"\"}) by (state)",
@@ -387,7 +431,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -415,7 +459,8 @@
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         },
         "pieType": "pie",
         "reduceOptions": {
@@ -436,7 +481,7 @@
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "editorMode": "code",
           "expr": "max(okg_gameservers_opsState_count) by (opsState)",
@@ -459,7 +504,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -504,13 +549,13 @@
         },
         "textMode": "auto"
       },
-      "pluginVersion": "9.0.8",
+      "pluginVersion": "9.2.4",
       "targets": [
         {
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "expr": "max(okg_gameservers_state_count{state=\"Deleting\"})",
           "fields": [
@@ -530,7 +575,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -575,13 +620,13 @@
         },
         "textMode": "auto"
       },
-      "pluginVersion": "9.0.8",
+      "pluginVersion": "9.2.4",
       "targets": [
         {
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "expr": "max(okg_gameservers_state_count{state=\"Updating\"})",
           "fields": [
@@ -601,7 +646,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -646,13 +691,13 @@
         },
         "textMode": "auto"
       },
-      "pluginVersion": "9.0.8",
+      "pluginVersion": "9.2.4",
       "targets": [
         {
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "expr": "max(okg_gameservers_state_count{state=\"NotReady\"})",
           "fields": [
@@ -672,7 +717,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -718,13 +763,13 @@
         "text": {},
         "textMode": "auto"
       },
-      "pluginVersion": "9.0.8",
+      "pluginVersion": "9.2.4",
       "targets": [
         {
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "expr": "max(okg_gameservers_total)",
           "fields": [
@@ -744,7 +789,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "description": "",
       "fieldConfig": {
@@ -753,6 +798,8 @@
             "mode": "palette-classic"
           },
           "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
             "axisLabel": "",
             "axisPlacement": "auto",
             "barAlignment": 0,
@@ -808,7 +855,8 @@
         "legend": {
           "calcs": [],
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         },
         "tooltip": {
           "mode": "single",
@@ -821,7 +869,7 @@
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "editorMode": "code",
           "exemplar": false,
@@ -847,7 +895,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -855,6 +903,8 @@
             "mode": "palette-classic"
           },
           "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
             "axisLabel": "",
             "axisPlacement": "auto",
             "barAlignment": 0,
@@ -910,7 +960,8 @@
         "legend": {
           "calcs": [],
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         },
         "tooltip": {
           "mode": "single",
@@ -922,7 +973,7 @@
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "editorMode": "code",
           "expr": "max(okg_gameservers_opsState_count) by (opsState)",
@@ -945,7 +996,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -953,6 +1004,8 @@
             "mode": "palette-classic"
           },
           "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
             "axisLabel": "",
             "axisPlacement": "auto",
             "barAlignment": 0,
@@ -1008,7 +1061,8 @@
         "legend": {
           "calcs": [],
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         },
         "tooltip": {
           "mode": "single",
@@ -1020,7 +1074,7 @@
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "editorMode": "code",
           "expr": "max(okg_gameserver_deletion_priority{gsNs=~\"$namespace\",gsName=~\"$gsName\"}) by (gsNs,gsName)",
@@ -1043,7 +1097,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -1051,6 +1105,8 @@
             "mode": "palette-classic"
           },
           "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
             "axisLabel": "",
             "axisPlacement": "auto",
             "barAlignment": 0,
@@ -1106,7 +1162,8 @@
         "legend": {
           "calcs": [],
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         },
         "tooltip": {
           "mode": "single",
@@ -1118,7 +1175,7 @@
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "editorMode": "code",
           "expr": "max(okg_gameserver_update_priority{gsNs=~\"$namespace\",gsName=~\"$gsName\"}) by (gsNs,gsName)",
@@ -1141,7 +1198,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -1149,6 +1206,8 @@
             "mode": "palette-classic"
           },
           "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
             "axisLabel": "",
             "axisPlacement": "auto",
             "barAlignment": 0,
@@ -1204,7 +1263,8 @@
         "legend": {
           "calcs": [],
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         },
         "tooltip": {
           "mode": "single",
@@ -1216,7 +1276,7 @@
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "editorMode": "code",
           "exemplar": false,
@@ -1242,7 +1302,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -1250,6 +1310,8 @@
             "mode": "palette-classic"
           },
           "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
             "axisLabel": "",
             "axisPlacement": "auto",
             "barAlignment": 0,
@@ -1305,7 +1367,8 @@
         "legend": {
           "calcs": [],
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         },
         "tooltip": {
           "mode": "single",
@@ -1317,7 +1380,7 @@
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "editorMode": "code",
           "expr": "max(okg_gameserversets_replicas_count{gsStatus=\"available\",gssNs=~\"$namespace\",gssName=~\"$gssName\"}) by (gssNs,gssName)",
@@ -1340,7 +1403,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -1380,8 +1443,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "color": "green"
               },
               {
                 "color": "red",
@@ -1403,7 +1465,8 @@
         "legend": {
           "calcs": [],
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         },
         "tooltip": {
           "mode": "single",
@@ -1415,7 +1478,7 @@
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "editorMode": "code",
           "expr": "max(okg_gameserversets_replicas_count{gsStatus=\"maintaining\",gssNs=~\"$namespace\",gssName=~\"$gssName\"}) by (gssNs,gssName)",
@@ -1438,7 +1501,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "ok9xcsIVk"
+        "uid": "${DS_TEMP}"
       },
       "fieldConfig": {
         "defaults": {
@@ -1478,8 +1541,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "color": "green"
               },
               {
                 "color": "red",
@@ -1501,7 +1563,8 @@
         "legend": {
           "calcs": [],
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         },
         "tooltip": {
           "mode": "single",
@@ -1513,7 +1576,7 @@
           "cacheDurationSeconds": 300,
           "datasource": {
             "type": "prometheus",
-            "uid": "ok9xcsIVk"
+            "uid": "${DS_TEMP}"
           },
           "editorMode": "code",
           "expr": "max(okg_gameserversets_replicas_count{gsStatus=\"waitToBeDeleted\",gssNs=~\"$namespace\",gssName=~\"$gssName\"}) by (gssNs,gssName)",
@@ -1534,22 +1597,17 @@
       "type": "timeseries"
     }
   ],
-  "schemaVersion": 36,
-  "showAgsLink": "cn",
+  "schemaVersion": 37,
   "style": "dark",
   "tags": [],
   "templating": {
     "list": [
       {
         "allValue": "",
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": "$__all"
-        },
+        "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "ok9xcsIVk"
+          "uid": "${DS_TEMP}"
         },
         "definition": "label_values(okg_gameserversets_replicas_count, gssNs)",
         "hide": 0,
@@ -1559,7 +1617,7 @@
         "options": [],
         "query": {
           "query": "label_values(okg_gameserversets_replicas_count, gssNs)",
-          "refId": "StandardVariableQuery"
+          "refId": "temp-namespace-Variable-Query"
         },
         "refresh": 1,
         "regex": "",
@@ -1569,14 +1627,10 @@
       },
       {
         "allValue": "",
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": "$__all"
-        },
+        "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "ok9xcsIVk"
+          "uid": "${DS_TEMP}"
         },
         "definition": "label_values(okg_gameserversets_replicas_count, gssName) ",
         "hide": 0,
@@ -1586,7 +1640,7 @@
         "options": [],
         "query": {
           "query": "label_values(okg_gameserversets_replicas_count, gssName) ",
-          "refId": "StandardVariableQuery"
+          "refId": "temp-gssName-Variable-Query"
         },
         "refresh": 1,
         "regex": "",
@@ -1595,14 +1649,10 @@
         "type": "query"
       },
       {
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": "$__all"
-        },
+        "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "ok9xcsIVk"
+          "uid": "${DS_TEMP}"
         },
         "definition": "label_values(okg_gameserver_deletion_priority, gsName) ",
         "hide": 0,
@@ -1612,7 +1662,7 @@
         "options": [],
         "query": {
           "query": "label_values(okg_gameserver_deletion_priority, gsName) ",
-          "refId": "StandardVariableQuery"
+          "refId": "temp-gsName-Variable-Query"
         },
         "refresh": 1,
         "regex": "",
@@ -1629,7 +1679,6 @@
   "timepicker": {},
   "timezone": "",
   "title": "OKG Metrics Statics",
-  "uid": "pOPwQUPVz",
-  "version": 20,
+  "version": 1,
   "weekStart": ""
 }
