@@ -188,7 +188,7 @@ func (i IngressPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 	}
 	externalAddress := gamekruiseiov1alpha1.NetworkAddress{
 		IP:       ing.Status.LoadBalancer.Ingress[0].IP,
-		EndPoint: ing.Status.LoadBalancer.Ingress[0].Hostname,
+		EndPoint: ing.Spec.Rules[0].Host,
 		Ports:    networkPorts,
 	}
 
@@ -230,7 +230,15 @@ func parseIngConfig(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.P
 			port, _ := strconv.ParseInt(c.Value, 10, 32)
 			ic.ports = append(ic.ports, int32(port))
 		case HostKey:
-			ic.host = c.Value
+			strs := strings.Split(c.Value, "<id>")
+			switch len(strs) {
+			case 2:
+				ic.host = strs[0] + strconv.Itoa(id) + strs[1]
+			case 1:
+				ic.host = strs[0]
+			default:
+				return ingConfig{}, fmt.Errorf("%s", paramsError)
+			}
 		case IngressClassNameKey:
 			ic.ingressClassName = pointer.String(c.Value)
 		case TlsSecretNameKey:
@@ -239,9 +247,19 @@ func parseIngConfig(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.P
 			ic.tlsHosts = strings.Split(c.Value, ",")
 		case PathKey:
 			strs := strings.Split(c.Value, "<id>")
-			ic.paths = append(ic.paths, strs[0]+strconv.Itoa(id)+strs[1])
+			switch len(strs) {
+			case 2:
+				ic.paths = append(ic.paths, strs[0]+strconv.Itoa(id)+strs[1])
+			case 1:
+				ic.paths = append(ic.paths, strs[0])
+			default:
+				return ingConfig{}, fmt.Errorf("%s", paramsError)
+			}
 		case AnnotationKey:
 			kv := strings.Split(c.Value, ": ")
+			if len(kv) != 2 {
+				return ingConfig{}, fmt.Errorf("%s", paramsError)
+			}
 			ic.annotations[kv[0]] = kv[1]
 		}
 	}

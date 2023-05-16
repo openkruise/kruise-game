@@ -92,15 +92,71 @@ func TestParseIngConfig(t *testing.T) {
 			},
 			err: fmt.Errorf("%s", paramsError),
 		},
+		{
+			conf: []gamekruiseiov1alpha1.NetworkConfParams{
+				{
+					Name:  PathKey,
+					Value: "/game",
+				},
+				{
+					Name:  PortKey,
+					Value: "8080",
+				},
+				{
+					Name:  PathTypeKey,
+					Value: string(v1.PathTypePrefix),
+				},
+				{
+					Name:  HostKey,
+					Value: "instance<id>.xxx.xxx.com",
+				},
+			},
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "pod-2",
+				},
+			},
+			ic: ingConfig{
+				paths:       []string{"/game"},
+				ports:       []int32{8080},
+				pathTypes:   []*v1.PathType{&pathTypePrefix},
+				host:        "instance2.xxx.xxx.com",
+				annotations: map[string]string{},
+			},
+		},
 	}
 
 	for i, test := range tests {
+		expect := test.ic
 		actual, err := parseIngConfig(test.conf, test.pod)
 		if !reflect.DeepEqual(err, test.err) {
 			t.Errorf("case %d: expect err: %v , but actual: %v", i, test.err, err)
 		}
-		if !reflect.DeepEqual(actual, test.ic) {
-			t.Errorf("case %d: expect ingConfig: %v , but actual: %v", i, test.ic, actual)
+		if !reflect.DeepEqual(actual, expect) {
+			if !reflect.DeepEqual(expect.paths, actual.paths) {
+				t.Errorf("case %d: expect paths: %v , but actual: %v", i, expect.paths, actual.paths)
+			}
+			if !reflect.DeepEqual(expect.ports, actual.ports) {
+				t.Errorf("case %d: expect ports: %v , but actual: %v", i, expect.ports, actual.ports)
+			}
+			if !reflect.DeepEqual(expect.pathTypes, actual.pathTypes) {
+				t.Errorf("case %d: expect annotations: %v , but actual: %v", i, expect.pathTypes, actual.pathTypes)
+			}
+			if !reflect.DeepEqual(expect.host, actual.host) {
+				t.Errorf("case %d: expect host: %v , but actual: %v", i, expect.host, actual.host)
+			}
+			if !reflect.DeepEqual(expect.tlsHosts, actual.tlsHosts) {
+				t.Errorf("case %d: expect tlsHosts: %v , but actual: %v", i, expect.tlsHosts, actual.tlsHosts)
+			}
+			if !reflect.DeepEqual(expect.tlsSecretName, actual.tlsSecretName) {
+				t.Errorf("case %d: expect tlsSecretName: %v , but actual: %v", i, expect.tlsSecretName, actual.tlsSecretName)
+			}
+			if !reflect.DeepEqual(expect.ingressClassName, actual.ingressClassName) {
+				t.Errorf("case %d: expect ingressClassName: %v , but actual: %v", i, expect.ingressClassName, actual.ingressClassName)
+			}
+			if !reflect.DeepEqual(expect.annotations, actual.annotations) {
+				t.Errorf("case %d: expect annotations: %v , but actual: %v", i, expect.annotations, actual.annotations)
+			}
 		}
 	}
 }
