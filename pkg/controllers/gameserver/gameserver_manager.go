@@ -36,10 +36,13 @@ import (
 	"time"
 )
 
+var (
+	NetworkTotalWaitTime = util.GetNetworkTotalWaitTime()
+	NetworkIntervalTime  = util.GetNetworkIntervalTime()
+)
+
 const (
-	NetworkTotalWaitTime = 60 * time.Second
-	NetworkIntervalTime  = 5 * time.Second
-	TimeFormat           = "2006-01-02 15:04:05"
+	TimeFormat = "2006-01-02 15:04:05"
 )
 
 const (

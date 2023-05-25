@@ -41,6 +41,11 @@ spec:
         - --provider-config=/etc/kruise-game/config.toml
         image: controller:latest
         name: manager
+        env:
+          - name: "NETWORK_TOTAL_WAIT_TIME"
+            value: "60"
+          - name: "NETWORK_PROBE_INTERVAL_TIME"
+            value: "5"
         ports:
           - name: https
             containerPort: 8080
