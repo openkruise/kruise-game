@@ -13,6 +13,7 @@
 - Add more print columns for GameServer & GameServerSet. https://github.com/openkruise/kruise-game/pull/48
 - Add default serviceName for GameServerSet. https://github.com/openkruise/kruise-game/pull/51
 - Add new networkType Kubernetes-Ingress. https://github.com/openkruise/kruise-game/pull/54
+- Add network-related environment variables to allow users to adjust the network waiting time and detection interval. https://github.com/openkruise/kruise-game/pull/57
 
 ### Others
 
