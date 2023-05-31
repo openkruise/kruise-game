@@ -16,9 +16,23 @@ type ExternalScaler struct {
 func (e *ExternalScaler) mustEmbedUnimplementedExternalScalerServer() {
 }
 
-func (e *ExternalScaler) IsActive(ctx context.Context, scaledObject *ScaledObjectRef) (*IsActiveResponse, error) {
+func (e *ExternalScaler) IsActive(ctx context.Context, scaledObjectRef *ScaledObjectRef) (*IsActiveResponse, error) {
+	name := scaledObjectRef.GetName()
+	ns := scaledObjectRef.GetNamespace()
+	gss := &gamekruiseiov1alpha1.GameServerSet{}
+	err := e.client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, gss)
+	if err != nil {
+		klog.Error(err)
+		return nil, err
+	}
+	currentReplicas := gss.Status.CurrentReplicas
+	numWaitToBeDeleted := gss.Status.WaitToBeDeletedReplicas
+	if numWaitToBeDeleted == nil {
+		return nil, fmt.Errorf("GameServerSet %s/%s has not inited", ns, name)
+	}
+	desireReplicas := currentReplicas - *numWaitToBeDeleted
 	return &IsActiveResponse{
-		Result: true,
+		Result: desireReplicas > 0,
 	}, nil
 }
 
