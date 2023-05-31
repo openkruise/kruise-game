@@ -15,8 +15,8 @@ limitations under the License.
 */
 
 // Package v1alpha1 contains API Schema definitions for the game.kruise.io v1alpha1 API group
-//+kubebuilder:object:generate=true
-//+groupName=game.kruise.io
+// +kubebuilder:object:generate=true
+// +groupName=game.kruise.io
 package v1alpha1
 
 import (
