@@ -349,7 +349,7 @@ func TestConsIngress(t *testing.T) {
 	}
 
 	for i, test := range tests {
-		actual := consIngress(test.ic, pod)
+		actual := consIngress(test.ic, pod, nil, nil)
 		if !reflect.DeepEqual(actual, test.ing) {
 			t.Errorf("case %d: expect ingress: %v , but actual: %v", i, test.ing, actual)
 		}
@@ -426,7 +426,7 @@ func TestConsSvc(t *testing.T) {
 	}
 
 	for i, test := range tests {
-		actual := consSvc(test.ic, pod)
+		actual := consSvc(test.ic, pod, nil, nil)
 		if !reflect.DeepEqual(actual, test.svc) {
 			t.Errorf("case %d: expect service: %v , but actual: %v", i, test.svc, actual)
 		}
