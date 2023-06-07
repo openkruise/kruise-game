@@ -27,12 +27,12 @@ func (e *ExternalScaler) IsActive(ctx context.Context, scaledObjectRef *ScaledOb
 	}
 	currentReplicas := gss.Status.CurrentReplicas
 	numWaitToBeDeleted := gss.Status.WaitToBeDeletedReplicas
-	if numWaitToBeDeleted == nil {
+	if numWaitToBeDeleted == nil || currentReplicas == 0 {
 		return nil, fmt.Errorf("GameServerSet %s/%s has not inited", ns, name)
 	}
 	desireReplicas := currentReplicas - *numWaitToBeDeleted
 	return &IsActiveResponse{
-		Result: desireReplicas > 0,
+		Result: desireReplicas > 0 && *gss.Spec.Replicas != 0,
 	}, nil
 }
 
