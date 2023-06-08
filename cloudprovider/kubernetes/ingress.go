@@ -167,11 +167,6 @@ func (i IngressPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 		return pod, cperrors.ToPluginError(c.Update(ctx, consIngress(ic, pod, c, ctx)), cperrors.ApiCallError)
 	}
 
-	// network not ready
-	if ing.Status.LoadBalancer.Ingress == nil {
-		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
-	}
-
 	// network ready
 	internalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
 	externalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
@@ -191,7 +186,6 @@ func (i IngressPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 		Ports: networkPorts,
 	}
 	externalAddress := gamekruiseiov1alpha1.NetworkAddress{
-		IP:       ing.Status.LoadBalancer.Ingress[0].IP,
 		EndPoint: ing.Spec.Rules[0].Host,
 		Ports:    networkPorts,
 	}
