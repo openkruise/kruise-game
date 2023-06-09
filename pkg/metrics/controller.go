@@ -157,8 +157,12 @@ func (c *Controller) recordGssWhenChange(obj interface{}) {
 	GameServerSetsReplicasCount.WithLabelValues(gss.Name, gss.Namespace, "current").Set(float64(gss.Status.CurrentReplicas))
 	GameServerSetsReplicasCount.WithLabelValues(gss.Name, gss.Namespace, "ready").Set(float64(gss.Status.ReadyReplicas))
 	GameServerSetsReplicasCount.WithLabelValues(gss.Name, gss.Namespace, "available").Set(float64(gss.Status.AvailableReplicas))
-	GameServerSetsReplicasCount.WithLabelValues(gss.Name, gss.Namespace, "maintaining").Set(float64(*gss.Status.MaintainingReplicas))
-	GameServerSetsReplicasCount.WithLabelValues(gss.Name, gss.Namespace, "waitToBeDeleted").Set(float64(*gss.Status.WaitToBeDeletedReplicas))
+	if gss.Status.MaintainingReplicas != nil {
+		GameServerSetsReplicasCount.WithLabelValues(gss.Name, gss.Namespace, "maintaining").Set(float64(*gss.Status.MaintainingReplicas))
+	}
+	if gss.Status.WaitToBeDeletedReplicas != nil {
+		GameServerSetsReplicasCount.WithLabelValues(gss.Name, gss.Namespace, "waitToBeDeleted").Set(float64(*gss.Status.WaitToBeDeletedReplicas))
+	}
 }
 
 func (c *Controller) recordGssWhenDelete(obj interface{}) {

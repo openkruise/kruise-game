@@ -240,6 +240,12 @@ Annotation
 - Value format: key: value (note the space after the colon), for example: nginx.ingress.kubernetes.io/rewrite-target: /$2
 - Configuration change supported or not: yes.
 
+Fixed
+
+- Meaning: whether the ingress object is still retained when the pod is deleted
+- Value format: true / false
+- Configuration change supported or not: yes.
+
 _additional explanation_
 
 - If you want to fill in multiple annotations, you can define multiple slices named Annotation in the networkConf.
