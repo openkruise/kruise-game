@@ -44,6 +44,10 @@ const (
 	// Its corresponding value format is as follows, key: value(note that there is a space after: ) e.g. nginx.ingress.kubernetes.io/rewrite-target: /$2
 	// If the user wants to fill in multiple annotations, just fill in multiple AnnotationKeys in the network config.
 	AnnotationKey = "Annotation"
+	// FixedKey indicates whether the ingress object is still retained when the pod is deleted.
+	// If True, ingress will not be deleted even though the pod is deleted.
+	// If False, ingress will be deleted along with pod deletion.
+	FixedKey = "Fixed"
 )
 
 const (
@@ -81,12 +85,12 @@ func (i IngressPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.
 		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
 	}
 
-	err = c.Create(ctx, consSvc(ic, pod))
+	err = c.Create(ctx, consSvc(ic, pod, c, ctx))
 	if err != nil {
 		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
 
-	err = c.Create(ctx, consIngress(ic, pod))
+	err = c.Create(ctx, consIngress(ic, pod, c, ctx))
 	if err != nil {
 		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
@@ -118,7 +122,7 @@ func (i IngressPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 	}, svc)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return pod, cperrors.ToPluginError(c.Create(ctx, consSvc(ic, pod)), cperrors.ApiCallError)
+			return pod, cperrors.ToPluginError(c.Create(ctx, consSvc(ic, pod, c, ctx)), cperrors.ApiCallError)
 		}
 		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
@@ -130,7 +134,7 @@ func (i IngressPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
 		}
 
-		newSvc := consSvc(ic, pod)
+		newSvc := consSvc(ic, pod, c, ctx)
 		patchSvc := map[string]interface{}{"metadata": map[string]map[string]string{"annotations": newSvc.Annotations}, "spec": newSvc.Spec}
 		patchSvcBytes, err := json.Marshal(patchSvc)
 		if err != nil {
@@ -148,7 +152,7 @@ func (i IngressPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 	}, ing)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return pod, cperrors.ToPluginError(c.Create(ctx, consIngress(ic, pod)), cperrors.ApiCallError)
+			return pod, cperrors.ToPluginError(c.Create(ctx, consIngress(ic, pod, c, ctx)), cperrors.ApiCallError)
 		}
 		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
@@ -160,12 +164,7 @@ func (i IngressPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 		if err != nil {
 			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
 		}
-		return pod, cperrors.ToPluginError(c.Update(ctx, consIngress(ic, pod)), cperrors.ApiCallError)
-	}
-
-	// network not ready
-	if ing.Status.LoadBalancer.Ingress == nil {
-		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+		return pod, cperrors.ToPluginError(c.Update(ctx, consIngress(ic, pod, c, ctx)), cperrors.ApiCallError)
 	}
 
 	// network ready
@@ -187,7 +186,6 @@ func (i IngressPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 		Ports: networkPorts,
 	}
 	externalAddress := gamekruiseiov1alpha1.NetworkAddress{
-		IP:       ing.Status.LoadBalancer.Ingress[0].IP,
 		EndPoint: ing.Spec.Rules[0].Host,
 		Ports:    networkPorts,
 	}
@@ -212,6 +210,7 @@ type ingConfig struct {
 	tlsHosts         []string
 	tlsSecretName    string
 	annotations      map[string]string
+	fixed            bool
 }
 
 func parseIngConfig(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.Pod) (ingConfig, error) {
@@ -261,6 +260,9 @@ func parseIngConfig(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.P
 				return ingConfig{}, fmt.Errorf("%s", paramsError)
 			}
 			ic.annotations[kv[0]] = kv[1]
+		case FixedKey:
+			fixed, _ := strconv.ParseBool(c.Value)
+			ic.fixed = fixed
 		}
 	}
 
@@ -271,7 +273,7 @@ func parseIngConfig(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.P
 	return ic, nil
 }
 
-func consIngress(ic ingConfig, pod *corev1.Pod) *v1.Ingress {
+func consIngress(ic ingConfig, pod *corev1.Pod, c client.Client, ctx context.Context) *v1.Ingress {
 	pathSlice := ic.paths
 	pathTypeSlice := ic.pathTypes
 	pathPortSlice := ic.ports
@@ -307,19 +309,10 @@ func consIngress(ic ingConfig, pod *corev1.Pod) *v1.Ingress {
 	}
 	ing := &v1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        pod.GetName(),
-			Namespace:   pod.GetNamespace(),
-			Annotations: ingAnnotations,
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion:         pod.APIVersion,
-					Kind:               pod.Kind,
-					Name:               pod.GetName(),
-					UID:                pod.GetUID(),
-					Controller:         pointer.BoolPtr(true),
-					BlockOwnerDeletion: pointer.BoolPtr(true),
-				},
-			},
+			Name:            pod.GetName(),
+			Namespace:       pod.GetNamespace(),
+			Annotations:     ingAnnotations,
+			OwnerReferences: consOwnerReference(c, ctx, pod, ic.fixed),
 		},
 		Spec: v1.IngressSpec{
 			IngressClassName: ic.ingressClassName,
@@ -346,7 +339,7 @@ func consIngress(ic ingConfig, pod *corev1.Pod) *v1.Ingress {
 	return ing
 }
 
-func consSvc(ic ingConfig, pod *corev1.Pod) *corev1.Service {
+func consSvc(ic ingConfig, pod *corev1.Pod, c client.Client, ctx context.Context) *corev1.Service {
 	annoatations := make(map[string]string)
 	annoatations[ServiceHashKey] = util.GetHash(ic.ports)
 	ports := make([]corev1.ServicePort, 0)
@@ -360,19 +353,10 @@ func consSvc(ic ingConfig, pod *corev1.Pod) *corev1.Service {
 
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      pod.GetName(),
-			Namespace: pod.GetNamespace(),
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion:         pod.APIVersion,
-					Kind:               pod.Kind,
-					Name:               pod.GetName(),
-					UID:                pod.GetUID(),
-					Controller:         pointer.BoolPtr(true),
-					BlockOwnerDeletion: pointer.BoolPtr(true),
-				},
-			},
-			Annotations: annoatations,
+			Name:            pod.GetName(),
+			Namespace:       pod.GetNamespace(),
+			OwnerReferences: consOwnerReference(c, ctx, pod, ic.fixed),
+			Annotations:     annoatations,
 		},
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeClusterIP,
@@ -382,4 +366,33 @@ func consSvc(ic ingConfig, pod *corev1.Pod) *corev1.Service {
 			Ports: ports,
 		},
 	}
+}
+
+func consOwnerReference(c client.Client, ctx context.Context, pod *corev1.Pod, isFixed bool) []metav1.OwnerReference {
+	ownerReferences := []metav1.OwnerReference{
+		{
+			APIVersion:         pod.APIVersion,
+			Kind:               pod.Kind,
+			Name:               pod.GetName(),
+			UID:                pod.GetUID(),
+			Controller:         pointer.BoolPtr(true),
+			BlockOwnerDeletion: pointer.BoolPtr(true),
+		},
+	}
+	if isFixed {
+		gss, err := util.GetGameServerSetOfPod(pod, c, ctx)
+		if err == nil {
+			ownerReferences = []metav1.OwnerReference{
+				{
+					APIVersion:         gss.APIVersion,
+					Kind:               gss.Kind,
+					Name:               gss.GetName(),
+					UID:                gss.GetUID(),
+					Controller:         pointer.BoolPtr(true),
+					BlockOwnerDeletion: pointer.BoolPtr(true),
+				},
+			}
+		}
+	}
+	return ownerReferences
 }
