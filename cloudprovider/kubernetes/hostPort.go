@@ -24,6 +24,7 @@ import (
 	provideroptions "github.com/openkruise/kruise-game/cloudprovider/options"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	log "k8s.io/klog/v2"
@@ -68,6 +69,19 @@ func (hpp *HostPortPlugin) Alias() string {
 }
 
 func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, errors.PluginError) {
+	podNow := &corev1.Pod{}
+	err := c.Get(ctx, types.NamespacedName{
+		Namespace: pod.GetNamespace(),
+		Name:      pod.GetName(),
+	}, podNow)
+	// There is a pod with same ns/name exists in cluster, do not allocate
+	if err == nil {
+		return pod, nil
+	}
+	if !k8serrors.IsNotFound(err) {
+		return pod, errors.NewPluginError(errors.ApiCallError, err.Error())
+	}
+
 	if _, ok := hpp.isAllocated[pod.GetNamespace()+"/"+pod.GetName()]; ok {
 		return pod, nil
 	}
@@ -78,7 +92,7 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 	containerPortsMap, containerProtocolsMap, numToAlloc := parseConfig(conf, pod)
 	hostPorts := hpp.allocate(numToAlloc, pod.GetNamespace()+"/"+pod.GetName())
 
-	log.V(5).Infof("pod %s/%s allocated hostPorts %v", pod.GetNamespace(), pod.GetName(), hostPorts)
+	log.Infof("pod %s/%s allocated hostPorts %v", pod.GetNamespace(), pod.GetName(), hostPorts)
 
 	// patch pod container ports
 	containers := pod.Spec.Containers
@@ -173,6 +187,7 @@ func (hpp *HostPortPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx co
 	}
 
 	hpp.deAllocate(hostPorts, pod.GetNamespace()+"/"+pod.GetName())
+	log.Infof("pod %s/%s deallocated hostPorts %v", pod.GetNamespace(), pod.GetName(), hostPorts)
 	return nil
 }
 
