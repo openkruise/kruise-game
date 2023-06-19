@@ -22,17 +22,18 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"reflect"
 	"sync"
 	"testing"
 )
 
 func TestAllocate(t *testing.T) {
 	test := struct {
-		lbId string
-		slb  *SlbPlugin
-		num  int
+		lbIds []string
+		slb   *SlbPlugin
+		num   int
 	}{
-		lbId: "xxx-A",
+		lbIds: []string{"xxx-A"},
 		slb: &SlbPlugin{
 			maxPort: int32(712),
 			minPort: int32(512),
@@ -42,14 +43,14 @@ func TestAllocate(t *testing.T) {
 		num: 3,
 	}
 
-	ports := test.slb.allocate(test.lbId, test.num)
+	lbId, ports := test.slb.allocate(test.lbIds, test.num)
 	for _, port := range ports {
 		if port > test.slb.maxPort || port < test.slb.minPort {
 			t.Errorf("allocate port %d, unexpected", port)
 		}
 
-		test.slb.deAllocate(test.lbId, port)
-		if test.slb.cache[test.lbId][port] == true {
+		test.slb.deAllocate(lbId, port)
+		if test.slb.cache[lbId][port] == true {
 			t.Errorf("deAllocate port %d failed", port)
 		}
 	}
@@ -57,11 +58,11 @@ func TestAllocate(t *testing.T) {
 
 func TestParseLbConfig(t *testing.T) {
 	tests := []struct {
-		conf     []gamekruiseiov1alpha1.NetworkConfParams
-		lbId     string
-		ports    []int
-		protocol []corev1.Protocol
-		isFixed  bool
+		conf      []gamekruiseiov1alpha1.NetworkConfParams
+		lbIds     []string
+		ports     []int
+		protocols []corev1.Protocol
+		isFixed   bool
 	}{
 		{
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
@@ -74,16 +75,16 @@ func TestParseLbConfig(t *testing.T) {
 					Value: "80",
 				},
 			},
-			lbId:     "xxx-A",
-			ports:    []int{80},
-			protocol: []corev1.Protocol{corev1.ProtocolTCP},
-			isFixed:  false,
+			lbIds:     []string{"xxx-A"},
+			ports:     []int{80},
+			protocols: []corev1.Protocol{corev1.ProtocolTCP},
+			isFixed:   false,
 		},
 		{
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
 				{
 					Name:  SlbIdsConfigName,
-					Value: "xxx-A",
+					Value: "xxx-A,xxx-B,",
 				},
 				{
 					Name:  PortProtocolsConfigName,
@@ -94,31 +95,26 @@ func TestParseLbConfig(t *testing.T) {
 					Value: "true",
 				},
 			},
-			lbId:     "xxx-A",
-			ports:    []int{81, 82, 83},
-			protocol: []corev1.Protocol{corev1.ProtocolUDP, corev1.ProtocolTCP, corev1.ProtocolTCP},
-			isFixed:  true,
+			lbIds:     []string{"xxx-A", "xxx-B"},
+			ports:     []int{81, 82, 83},
+			protocols: []corev1.Protocol{corev1.ProtocolUDP, corev1.ProtocolTCP, corev1.ProtocolTCP},
+			isFixed:   true,
 		},
 	}
 
 	for _, test := range tests {
-		lbId, ports, protocol, isFixed := parseLbConfig(test.conf)
-		if lbId != test.lbId {
-			t.Errorf("lbId expect: %s, actual: %s", test.lbId, lbId)
+		sc := parseLbConfig(test.conf)
+		if !reflect.DeepEqual(test.lbIds, sc.lbIds) {
+			t.Errorf("lbId expect: %v, actual: %v", test.lbIds, sc.lbIds)
 		}
-		if !util.IsSliceEqual(ports, test.ports) {
-			t.Errorf("ports expect: %v, actual: %v", test.ports, ports)
+		if !util.IsSliceEqual(test.ports, sc.targetPorts) {
+			t.Errorf("ports expect: %v, actual: %v", test.ports, sc.targetPorts)
 		}
-		if len(test.protocol) != len(protocol) {
-			t.Errorf("protocol expect: %v, actual: %v", test.protocol, protocol)
+		if !reflect.DeepEqual(test.protocols, sc.protocols) {
+			t.Errorf("protocols expect: %v, actual: %v", test.protocols, sc.protocols)
 		}
-		for i := 0; i < len(test.protocol); i++ {
-			if protocol[i] != test.protocol[i] {
-				t.Errorf("protocol expect: %v, actual: %v", test.protocol, protocol)
-			}
-		}
-		if isFixed != test.isFixed {
-			t.Errorf("protocol expect: %v, actual: %v", test.isFixed, isFixed)
+		if test.isFixed != sc.isFixed {
+			t.Errorf("isFixed expect: %v, actual: %v", test.isFixed, sc.isFixed)
 		}
 	}
 }

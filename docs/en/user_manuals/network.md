@@ -414,21 +414,21 @@ Related design: https://github.com/openkruise/kruise-game/issues/20
 
 SlbIds
 
-- Meaning: the CLB instance ID. You can specify only one CLB instance ID. Multiple CLB instance IDs will be supported in the future.
-- Value: an example value can be lb-9zeo7prq1m25ctpfrw1m7.
-- Configuration change supported or not: no. The configuration change can be supported in future.
+- Meaning: the CLB instance ID. You can fill in multiple ids.
+- Value: in the format of slbId-0,slbId-1,... An example value can be "lb-9zeo7prq1m25ctpfrw1m7,lb-bp1qz7h50yd3w58h2f8je"
+- Configuration change supported or not: yes. You can add new slbIds at the end. However, it is recommended not to change existing slbId that is in use.
 
 PortProtocols
 
 - Meaning: the ports in the pod to be exposed and the protocols. You can specify multiple ports and protocols.
 - Value: in the format of port1/protocol1,port2/protocol2,... The protocol names must be in uppercase letters.
-- Configuration change supported or not: no. The configuration change can be supported in future.
+- Configuration change supported or not: yes.
 
 Fixed
 
 - Meaning: whether the mapping relationship is fixed. If the mapping relationship is fixed, the mapping relationship remains unchanged even if the pod is deleted and recreated.
 - Value: false or true.
-- Configuration change supported or not: no.
+- Configuration change supported or not: yes.
 
 #### Plugin configuration
 ```
