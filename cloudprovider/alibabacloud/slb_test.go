@@ -27,32 +27,45 @@ import (
 	"testing"
 )
 
-func TestAllocate(t *testing.T) {
+func TestAllocateDeAllocate(t *testing.T) {
 	test := struct {
-		lbIds []string
-		slb   *SlbPlugin
-		num   int
+		lbIds  []string
+		slb    *SlbPlugin
+		num    int
+		podKey string
 	}{
 		lbIds: []string{"xxx-A"},
 		slb: &SlbPlugin{
-			maxPort: int32(712),
-			minPort: int32(512),
-			cache:   make(map[string]portAllocated),
-			mutex:   sync.RWMutex{},
+			maxPort:     int32(712),
+			minPort:     int32(512),
+			cache:       make(map[string]portAllocated),
+			podAllocate: make(map[string]string),
+			mutex:       sync.RWMutex{},
 		},
-		num: 3,
+		podKey: "xxx/xxx",
+		num:    3,
 	}
 
-	lbId, ports := test.slb.allocate(test.lbIds, test.num)
+	lbId, ports := test.slb.allocate(test.lbIds, test.num, test.podKey)
+	if _, exist := test.slb.podAllocate[test.podKey]; !exist {
+		t.Errorf("podAllocate[%s] is empty after allocated", test.podKey)
+	}
 	for _, port := range ports {
 		if port > test.slb.maxPort || port < test.slb.minPort {
 			t.Errorf("allocate port %d, unexpected", port)
 		}
-
-		test.slb.deAllocate(lbId, port)
+		if test.slb.cache[lbId][port] == false {
+			t.Errorf("Allocate port %d failed", port)
+		}
+	}
+	test.slb.deAllocate(test.podKey)
+	for _, port := range ports {
 		if test.slb.cache[lbId][port] == true {
 			t.Errorf("deAllocate port %d failed", port)
 		}
+	}
+	if _, exist := test.slb.podAllocate[test.podKey]; exist {
+		t.Errorf("podAllocate[%s] is not empty after deallocated", test.podKey)
 	}
 }
 
@@ -121,14 +134,15 @@ func TestParseLbConfig(t *testing.T) {
 
 func TestInitLbCache(t *testing.T) {
 	test := struct {
-		svcList []corev1.Service
-		minPort int32
-		maxPort int32
-		result  map[string]portAllocated
+		svcList     []corev1.Service
+		minPort     int32
+		maxPort     int32
+		cache       map[string]portAllocated
+		podAllocate map[string]string
 	}{
 		minPort: 512,
 		maxPort: 712,
-		result: map[string]portAllocated{
+		cache: map[string]portAllocated{
 			"xxx-A": map[int32]bool{
 				666: true,
 			},
@@ -136,12 +150,18 @@ func TestInitLbCache(t *testing.T) {
 				555: true,
 			},
 		},
+		podAllocate: map[string]string{
+			"ns-0/name-0": "xxx-A:666",
+			"ns-1/name-1": "xxx-B:555",
+		},
 		svcList: []corev1.Service{
 			{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
 						SlbIdLabelKey: "xxx-A",
 					},
+					Namespace: "ns-0",
+					Name:      "name-0",
 				},
 				Spec: corev1.ServiceSpec{
 					Type: corev1.ServiceTypeLoadBalancer,
@@ -162,6 +182,8 @@ func TestInitLbCache(t *testing.T) {
 					Labels: map[string]string{
 						SlbIdLabelKey: "xxx-B",
 					},
+					Namespace: "ns-1",
+					Name:      "name-1",
 				},
 				Spec: corev1.ServiceSpec{
 					Type: corev1.ServiceTypeLoadBalancer,
@@ -169,11 +191,6 @@ func TestInitLbCache(t *testing.T) {
 						SvcSelectorKey: "pod-B",
 					},
 					Ports: []corev1.ServicePort{
-						{
-							TargetPort: intstr.FromInt(80),
-							Port:       9999,
-							Protocol:   corev1.ProtocolTCP,
-						},
 						{
 							TargetPort: intstr.FromInt(8080),
 							Port:       555,
@@ -185,12 +202,15 @@ func TestInitLbCache(t *testing.T) {
 		},
 	}
 
-	actual := initLbCache(test.svcList, test.minPort, test.maxPort)
-	for lb, pa := range test.result {
+	actualCache, actualPodAllocate := initLbCache(test.svcList, test.minPort, test.maxPort)
+	for lb, pa := range test.cache {
 		for port, isAllocated := range pa {
-			if actual[lb][port] != isAllocated {
-				t.Errorf("lb %s port %d isAllocated, expect: %t, actual: %t", lb, port, isAllocated, actual[lb][port])
+			if actualCache[lb][port] != isAllocated {
+				t.Errorf("lb %s port %d isAllocated, expect: %t, actual: %t", lb, port, isAllocated, actualCache[lb][port])
 			}
 		}
+	}
+	if !reflect.DeepEqual(actualPodAllocate, test.podAllocate) {
+		t.Errorf("podAllocate expect %v, but actully got %v", test.podAllocate, actualPodAllocate)
 	}
 }

@@ -46,17 +46,17 @@ const (
 	SlbIdAnnotationKey      = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-id"
 	SlbIdLabelKey           = "service.k8s.alibaba/loadbalancer-id"
 	SvcSelectorKey          = "statefulset.kubernetes.io/pod-name"
-	allocatedPortsKey       = "game.kruise.io/AlibabaCloud-SLB-ports-allocated"
 	SlbConfigHashKey        = "game.kruise.io/network-config-hash"
 )
 
 type portAllocated map[int32]bool
 
 type SlbPlugin struct {
-	maxPort int32
-	minPort int32
-	cache   map[string]portAllocated
-	mutex   sync.RWMutex
+	maxPort     int32
+	minPort     int32
+	cache       map[string]portAllocated
+	podAllocate map[string]string
+	mutex       sync.RWMutex
 }
 
 type slbConfig struct {
@@ -87,12 +87,13 @@ func (s *SlbPlugin) Init(c client.Client, options cloudprovider.CloudProviderOpt
 		return err
 	}
 
-	s.cache = initLbCache(svcList.Items, s.minPort, s.maxPort)
+	s.cache, s.podAllocate = initLbCache(svcList.Items, s.minPort, s.maxPort)
 	return nil
 }
 
-func initLbCache(svcList []corev1.Service, minPort, maxPort int32) map[string]portAllocated {
+func initLbCache(svcList []corev1.Service, minPort, maxPort int32) (map[string]portAllocated, map[string]string) {
 	newCache := make(map[string]portAllocated)
+	newPodAllocate := make(map[string]string)
 	for _, svc := range svcList {
 		lbId := svc.Labels[SlbIdLabelKey]
 		if lbId != "" && svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
@@ -102,14 +103,20 @@ func initLbCache(svcList []corev1.Service, minPort, maxPort int32) map[string]po
 					newCache[lbId][i] = false
 				}
 			}
+			var ports []int32
 			for _, port := range getPorts(svc.Spec.Ports) {
 				if port <= maxPort && port >= minPort {
 					newCache[lbId][port] = true
+					ports = append(ports, port)
 				}
+			}
+			if len(ports) != 0 {
+				newPodAllocate[svc.GetNamespace()+"/"+svc.GetName()] = lbId + ":" + util.Int32SliceToString(ports, ",")
 			}
 		}
 	}
-	return newCache
+	log.Infof("[%s] podAllocate cache complete initialization: %v", SlbNetwork, newPodAllocate)
+	return newCache, newPodAllocate
 }
 
 func (s *SlbPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
@@ -212,25 +219,39 @@ func (s *SlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 }
 
 func (s *SlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.Context) cperrors.PluginError {
-	svc := &corev1.Service{}
-	err := c.Get(ctx, types.NamespacedName{
-		Name:      pod.GetName(),
-		Namespace: pod.GetNamespace(),
-	}, svc)
-	if err != nil {
-		return cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+	networkManager := utils.NewNetworkManager(pod, c)
+	networkConfig := networkManager.GetNetworkConfig()
+	sc := parseLbConfig(networkConfig)
+
+	var podKeys []string
+	if sc.isFixed {
+		gss, err := util.GetGameServerSetOfPod(pod, c, ctx)
+		if err != nil && !errors.IsNotFound(err) {
+			return cperrors.ToPluginError(err, cperrors.ApiCallError)
+		}
+		// gss exists in cluster, do not deAllocate.
+		if err == nil && gss.GetDeletionTimestamp() == nil {
+			return nil
+		}
+		// gss not exists in cluster, deAllocate all the ports related to it.
+		for key := range s.podAllocate {
+			gssName := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]
+			if strings.Contains(key, pod.GetNamespace()+"/"+gssName) {
+				podKeys = append(podKeys, key)
+			}
+		}
+	} else {
+		podKeys = append(podKeys, pod.GetNamespace()+"/"+pod.GetName())
 	}
 
-	ports := getPorts(svc.Spec.Ports)
-	for _, port := range ports {
-		s.deAllocate(svc.Annotations[SlbIdAnnotationKey], port)
+	for _, podKey := range podKeys {
+		s.deAllocate(podKey)
 	}
 
-	log.Infof("pod %s/%s deallocate slb %s ports %v", pod.GetNamespace(), pod.GetName(), svc.Annotations[SlbIdAnnotationKey], ports)
 	return nil
 }
 
-func (s *SlbPlugin) allocate(lbIds []string, num int) (string, []int32) {
+func (s *SlbPlugin) allocate(lbIds []string, num int, nsName string) (string, []int32) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -270,14 +291,30 @@ func (s *SlbPlugin) allocate(lbIds []string, num int) (string, []int32) {
 		s.cache[lbId][port] = true
 		ports = append(ports, port)
 	}
+
+	s.podAllocate[nsName] = lbId + ":" + util.Int32SliceToString(ports, ",")
+	log.Infof("pod %s allocate slb %s ports %v", nsName, lbId, ports)
 	return lbId, ports
 }
 
-func (s *SlbPlugin) deAllocate(lbId string, port int32) {
+func (s *SlbPlugin) deAllocate(nsName string) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	s.cache[lbId][port] = false
+	allocatedPorts, exist := s.podAllocate[nsName]
+	if !exist {
+		return
+	}
+
+	slbPorts := strings.Split(allocatedPorts, ":")
+	lbId := slbPorts[0]
+	ports := util.StringToInt32Slice(slbPorts[1], ",")
+	for _, port := range ports {
+		s.cache[lbId][port] = false
+	}
+
+	delete(s.podAllocate, nsName)
+	log.Infof("pod %s deallocate slb %s ports %v", nsName, lbId, ports)
 }
 
 func init() {
@@ -341,15 +378,14 @@ func getPorts(ports []corev1.ServicePort) []int32 {
 func (s *SlbPlugin) consSvc(sc *slbConfig, pod *corev1.Pod, c client.Client, ctx context.Context) *corev1.Service {
 	var ports []int32
 	var lbId string
-	allocatedPorts := pod.Annotations[allocatedPortsKey]
-	if allocatedPorts != "" {
+	podKey := pod.GetNamespace() + "/" + pod.GetName()
+	allocatedPorts, exist := s.podAllocate[podKey]
+	if exist {
 		slbPorts := strings.Split(allocatedPorts, ":")
 		lbId = slbPorts[0]
 		ports = util.StringToInt32Slice(slbPorts[1], ",")
 	} else {
-		lbId, ports = s.allocate(sc.lbIds, len(sc.targetPorts))
-		log.Infof("pod %s/%s allocate slb %s ports %v", pod.GetNamespace(), pod.GetName(), lbId, ports)
-		pod.Annotations[allocatedPortsKey] = lbId + ":" + util.Int32SliceToString(ports, ",")
+		lbId, ports = s.allocate(sc.lbIds, len(sc.targetPorts), podKey)
 	}
 
 	svcPorts := make([]corev1.ServicePort, 0)
