@@ -149,7 +149,7 @@ func (manager GameServerManager) SyncGsToPod() error {
 		}
 	}
 
-	if gsState == gameKruiseV1alpha1.Ready && pod.Annotations[gameKruiseV1alpha1.GameServerNetworkType] != "" {
+	if pod.Annotations[gameKruiseV1alpha1.GameServerNetworkType] != "" {
 		oldTime, err := time.Parse(TimeFormat, pod.Annotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime])
 		if (err == nil && time.Since(oldTime) > NetworkIntervalTime && time.Since(gs.Status.NetworkStatus.LastTransitionTime.Time) < NetworkTotalWaitTime) || (pod.Annotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime] == "") {
 			newAnnotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime] = time.Now().Format(TimeFormat)
