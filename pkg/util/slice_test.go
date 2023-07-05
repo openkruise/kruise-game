@@ -73,6 +73,11 @@ func TestGetSliceInANotInB(t *testing.T) {
 			b:      []int{1, 2, 3},
 			result: []int{4, 5},
 		},
+		{
+			a:      []int{1, 2},
+			b:      []int{},
+			result: []int{1, 2},
+		},
 	}
 
 	for _, test := range tests {
