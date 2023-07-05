@@ -296,6 +296,34 @@ func TestComputeToScaleGs(t *testing.T) {
 			},
 			newReserveIds: []int{0, 3, 5, 2, 4, 6},
 		},
+		{
+			newGssReserveIds:      []int{1, 2},
+			oldGssreserveIds:      []int{},
+			notExistIds:           []int{1, 2},
+			expectedReplicas:      2,
+			scaleDownStrategyType: gameKruiseV1alpha1.GeneralScaleDownStrategyType,
+			pods: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-0",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-3",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+			},
+			newReserveIds: []int{1, 2},
+		},
 	}
 
 	for i, test := range tests {

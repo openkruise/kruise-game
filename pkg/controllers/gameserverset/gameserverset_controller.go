@@ -286,6 +286,7 @@ func (r *GameServerSetReconciler) initAsts(gss *gamekruiseiov1alpha1.GameServerS
 
 	// set replicas
 	asts.Spec.Replicas = gss.Spec.Replicas
+	asts.Spec.ReserveOrdinals = gss.Spec.ReserveGameServerIds
 
 	asts = util.GetNewAstsFromGss(gss.DeepCopy(), asts)
 
