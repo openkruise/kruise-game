@@ -218,13 +218,38 @@ func TestIsSliceEqual(t *testing.T) {
 			b:      []int{5, 1, 3},
 			result: true,
 		},
+		{
+			a:      []int{1, 3, 5},
+			b:      []int{5, 1, 2},
+			result: false,
+		},
+		{
+			a:      nil,
+			b:      []int{},
+			result: true,
+		},
+		{
+			a:      []int{},
+			b:      nil,
+			result: true,
+		},
+		{
+			a:      nil,
+			b:      nil,
+			result: true,
+		},
+		{
+			a:      []int{},
+			b:      []int{},
+			result: true,
+		},
 	}
 
-	for _, test := range tests {
+	for i, test := range tests {
 		actual := IsSliceEqual(test.a, test.b)
 		expect := test.result
 		if expect != actual {
-			t.Errorf("expect %v but got %v", expect, actual)
+			t.Errorf("case %d: expect %v but got %v", i, expect, actual)
 		}
 	}
 }

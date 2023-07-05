@@ -114,9 +114,6 @@ func StringToInt32Slice(str string, delimiter string) []int32 {
 }
 
 func IsSliceEqual(a, b []int) bool {
-	if (a == nil) != (b == nil) {
-		return false
-	}
 	if len(a) != len(b) {
 		return false
 	}
