@@ -254,6 +254,8 @@ func (manager GameServerManager) syncNetworkStatus() gameKruiseV1alpha1.NetworkS
 	// when pod NetworkStatus is nil
 	podNetworkStatus, _ := nm.GetNetworkStatus()
 	if podNetworkStatus == nil {
+		gsNetworkStatus.CurrentNetworkState = gameKruiseV1alpha1.NetworkNotReady
+		gsNetworkStatus.LastTransitionTime = metav1.Now()
 		return gsNetworkStatus
 	}
 
