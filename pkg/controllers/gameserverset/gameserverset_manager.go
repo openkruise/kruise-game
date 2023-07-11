@@ -80,11 +80,6 @@ func (manager *GameServerSetManager) IsNeedToScale() bool {
 	gss := manager.gameServerSet
 	asts := manager.asts
 
-	// workload is reconciling its replicas, don't interrupt
-	if asts.Status.Replicas != *asts.Spec.Replicas {
-		return false
-	}
-
 	// no need to scale
 	return !(*gss.Spec.Replicas == *asts.Spec.Replicas &&
 		util.IsSliceEqual(util.StringToIntSlice(gss.GetAnnotations()[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ","), gss.Spec.ReserveGameServerIds))
@@ -93,11 +88,16 @@ func (manager *GameServerSetManager) IsNeedToScale() bool {
 func (manager *GameServerSetManager) GameServerScale() error {
 	gss := manager.gameServerSet
 	asts := manager.asts
-	gsList := manager.podList
 	c := manager.client
 	ctx := context.Background()
+	var podList []corev1.Pod
+	for _, pod := range manager.podList {
+		if pod.GetDeletionTimestamp() == nil {
+			podList = append(podList, pod)
+		}
+	}
 
-	currentReplicas := len(gsList)
+	currentReplicas := len(podList)
 	expectedReplicas := int(*gss.Spec.Replicas)
 	as := gss.GetAnnotations()
 	reserveIds := util.StringToIntSlice(as[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ",")
@@ -107,7 +107,7 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas.", gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas)
 	manager.eventRecorder.Eventf(gss, corev1.EventTypeNormal, ScaleReason, "scale from %d to %d", currentReplicas, expectedReplicas)
 
-	newReserveIds := computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, gsList, gss.Spec.ScaleStrategy.ScaleDownStrategyType)
+	newReserveIds := computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, podList, gss.Spec.ScaleStrategy.ScaleDownStrategyType)
 	asts.Spec.ReserveOrdinals = newReserveIds
 	asts.Spec.Replicas = gss.Spec.Replicas
 	asts.Spec.ScaleStrategy = &kruiseV1beta1.StatefulSetScaleStrategy{
