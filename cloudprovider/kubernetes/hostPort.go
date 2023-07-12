@@ -23,6 +23,7 @@ import (
 	"github.com/openkruise/kruise-game/cloudprovider/errors"
 	provideroptions "github.com/openkruise/kruise-game/cloudprovider/options"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
+	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -44,18 +45,18 @@ const (
 )
 
 type HostPortPlugin struct {
-	maxPort     int32
-	minPort     int32
-	isAllocated map[string]bool
-	portAmount  map[int32]int
-	amountStat  []int
-	mutex       sync.RWMutex
+	maxPort      int32
+	minPort      int32
+	podAllocated map[string]string
+	portAmount   map[int32]int
+	amountStat   []int
+	mutex        sync.RWMutex
 }
 
 func init() {
 	hostPortPlugin := HostPortPlugin{
-		mutex:       sync.RWMutex{},
-		isAllocated: make(map[string]bool),
+		mutex:        sync.RWMutex{},
+		podAllocated: make(map[string]string),
 	}
 	kubernetesProvider.registerPlugin(&hostPortPlugin)
 }
@@ -82,17 +83,18 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 		return pod, errors.NewPluginError(errors.ApiCallError, err.Error())
 	}
 
-	if _, ok := hpp.isAllocated[pod.GetNamespace()+"/"+pod.GetName()]; ok {
-		return pod, nil
-	}
-
 	networkManager := utils.NewNetworkManager(pod, c)
 	conf := networkManager.GetNetworkConfig()
-
 	containerPortsMap, containerProtocolsMap, numToAlloc := parseConfig(conf, pod)
-	hostPorts := hpp.allocate(numToAlloc, pod.GetNamespace()+"/"+pod.GetName())
 
-	log.Infof("pod %s/%s allocated hostPorts %v", pod.GetNamespace(), pod.GetName(), hostPorts)
+	var hostPorts []int32
+	if str, ok := hpp.podAllocated[pod.GetNamespace()+"/"+pod.GetName()]; ok {
+		hostPorts = util.StringToInt32Slice(str, ",")
+		log.Infof("pod %s/%s use hostPorts %v , which are allocated before", pod.GetNamespace(), pod.GetName(), hostPorts)
+	} else {
+		hostPorts = hpp.allocate(numToAlloc, pod.GetNamespace()+"/"+pod.GetName())
+		log.Infof("pod %s/%s allocated hostPorts %v", pod.GetNamespace(), pod.GetName(), hostPorts)
+	}
 
 	// patch pod container ports
 	containers := pod.Spec.Containers
@@ -173,7 +175,7 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 }
 
 func (hpp *HostPortPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.Context) errors.PluginError {
-	if _, ok := hpp.isAllocated[pod.GetNamespace()+"/"+pod.GetName()]; !ok {
+	if _, ok := hpp.podAllocated[pod.GetNamespace()+"/"+pod.GetName()]; !ok {
 		return nil
 	}
 
@@ -209,15 +211,19 @@ func (hpp *HostPortPlugin) Init(c client.Client, options cloudprovider.CloudProv
 		return err
 	}
 	for _, pod := range podList.Items {
+		var hostPorts []int32
 		if pod.GetAnnotations()[gamekruiseiov1alpha1.GameServerNetworkType] == HostPortNetwork {
 			for _, container := range pod.Spec.Containers {
 				for _, port := range container.Ports {
 					if port.HostPort >= hpp.minPort && port.HostPort <= hpp.maxPort {
 						newPortAmount[port.HostPort]++
-						hpp.isAllocated[pod.GetNamespace()+"/"+pod.GetName()] = true
+						hostPorts = append(hostPorts, port.HostPort)
 					}
 				}
 			}
+		}
+		if len(hostPorts) != 0 {
+			hpp.podAllocated[pod.GetNamespace()+"/"+pod.GetName()] = util.Int32SliceToString(hostPorts, ",")
 		}
 	}
 
@@ -234,6 +240,7 @@ func (hpp *HostPortPlugin) Init(c client.Client, options cloudprovider.CloudProv
 
 	hpp.portAmount = newPortAmount
 	hpp.amountStat = newAmountStat
+	log.Infof("[Kubernetes-HostPort] podAllocated init: %v", hpp.podAllocated)
 	return nil
 }
 
@@ -251,7 +258,7 @@ func (hpp *HostPortPlugin) allocate(num int, nsname string) []int32 {
 		hpp.amountStat[index+1]++
 	}
 
-	hpp.isAllocated[nsname] = true
+	hpp.podAllocated[nsname] = util.Int32SliceToString(hostPorts, ",")
 	return hostPorts
 }
 
@@ -266,7 +273,7 @@ func (hpp *HostPortPlugin) deAllocate(hostPorts []int32, nsname string) {
 		hpp.amountStat[amount-1]++
 	}
 
-	delete(hpp.isAllocated, nsname)
+	delete(hpp.podAllocated, nsname)
 }
 
 func verifyContainerName(containerName string, pod *corev1.Pod) bool {
