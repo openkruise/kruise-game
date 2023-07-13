@@ -152,3 +152,82 @@ func TestRemovePrefixGameKruise(t *testing.T) {
 		}
 	}
 }
+
+func TestGetGsTemplateMetadataHash(t *testing.T) {
+	tests := []struct {
+		gssA   *gameKruiseV1alpha1.GameServerSet
+		gssB   *gameKruiseV1alpha1.GameServerSet
+		result bool
+	}{
+		{
+			gssA: &gameKruiseV1alpha1.GameServerSet{
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					GameServerTemplate: gameKruiseV1alpha1.GameServerTemplate{
+						PodTemplateSpec: corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								GenerateName: "xxx",
+								Labels: map[string]string{
+									"a": "x",
+								},
+							},
+						},
+					},
+				},
+			},
+			gssB: &gameKruiseV1alpha1.GameServerSet{
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					GameServerTemplate: gameKruiseV1alpha1.GameServerTemplate{
+						PodTemplateSpec: corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Labels: map[string]string{
+									"a": "x",
+								},
+							},
+						},
+					},
+				},
+			},
+			result: true,
+		},
+		{
+			gssA: &gameKruiseV1alpha1.GameServerSet{
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					GameServerTemplate: gameKruiseV1alpha1.GameServerTemplate{
+						PodTemplateSpec: corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Labels: map[string]string{
+									"a": "x",
+								},
+								Annotations: map[string]string{
+									"a": "x",
+								},
+							},
+						},
+					},
+				},
+			},
+			gssB: &gameKruiseV1alpha1.GameServerSet{
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					GameServerTemplate: gameKruiseV1alpha1.GameServerTemplate{
+						PodTemplateSpec: corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Labels: map[string]string{
+									"a": "x",
+								},
+							},
+						},
+					},
+				},
+			},
+			result: false,
+		},
+	}
+
+	for _, test := range tests {
+		actual := GetGsTemplateMetadataHash(test.gssA) == GetGsTemplateMetadataHash(test.gssB)
+		expect := test.result
+		if expect != actual {
+			t.Errorf("expect %v but got %v", expect, actual)
+		}
+	}
+}

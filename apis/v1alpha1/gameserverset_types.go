@@ -33,6 +33,7 @@ const (
 	GameServerSetReserveIdsKey = "game.kruise.io/reserve-ids"
 	AstsHashKey                = "game.kruise.io/asts-hash"
 	PpmHashKey                 = "game.kruise.io/ppm-hash"
+	GsTemplateMetadataHashKey  = "game.kruise.io/gsTemplate-metadata-hash"
 )
 
 // GameServerSetSpec defines the desired state of GameServerSet

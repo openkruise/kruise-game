@@ -50,6 +50,11 @@ func TestGetHash(t *testing.T) {
 			},
 			result: false,
 		},
+		{
+			objectA: nil,
+			objectB: nil,
+			result:  true,
+		},
 	}
 
 	for _, test := range tests {
