@@ -66,6 +66,23 @@ type GameServerManager struct {
 	eventRecorder record.EventRecorder
 }
 
+func isNeedToSyncMetadata(gss *gameKruiseV1alpha1.GameServerSet, gs *gameKruiseV1alpha1.GameServer) bool {
+	return gs.Annotations[gameKruiseV1alpha1.GsTemplateMetadataHashKey] != util.GetGsTemplateMetadataHash(gss)
+}
+
+func syncMetadataFromGss(gss *gameKruiseV1alpha1.GameServerSet) metav1.ObjectMeta {
+	templateLabels := gss.Spec.GameServerTemplate.GetLabels()
+	templateAnnotations := gss.Spec.GameServerTemplate.GetAnnotations()
+	if templateAnnotations == nil {
+		templateAnnotations = make(map[string]string)
+	}
+	templateAnnotations[gameKruiseV1alpha1.GsTemplateMetadataHashKey] = util.GetGsTemplateMetadataHash(gss)
+	return metav1.ObjectMeta{
+		Labels:      templateLabels,
+		Annotations: templateAnnotations,
+	}
+}
+
 func (manager GameServerManager) SyncGsToPod() error {
 	pod := manager.pod
 	gs := manager.gameServer
@@ -185,8 +202,14 @@ func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerS
 	// sync Service Qualities
 	spec, newGsConditions := syncServiceQualities(gss.Spec.ServiceQualities, pod.Status.Conditions, gs.Status.ServiceQualitiesCondition)
 
+	// sync metadata
+	var gsMetadata metav1.ObjectMeta
+	if isNeedToSyncMetadata(gss, gs) {
+		gsMetadata = syncMetadataFromGss(gss)
+	}
+
 	// patch gs spec
-	patchSpec := map[string]interface{}{"spec": spec}
+	patchSpec := map[string]interface{}{"spec": spec, "metadata": gsMetadata}
 	jsonPatchSpec, err := json.Marshal(patchSpec)
 	if err != nil {
 		return err

@@ -24,6 +24,7 @@ import (
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strconv"
@@ -180,6 +181,13 @@ func GetAstsHash(gss *gameKruiseV1alpha1.GameServerSet) string {
 		UpdateStrategy: gss.Spec.UpdateStrategy,
 		Template:       gss.Spec.GameServerTemplate,
 		NetworkConfigs: networkConfigs,
+	})
+}
+
+func GetGsTemplateMetadataHash(gss *gameKruiseV1alpha1.GameServerSet) string {
+	return GetHash(metav1.ObjectMeta{
+		Labels:      gss.Spec.GameServerTemplate.GetLabels(),
+		Annotations: gss.Spec.GameServerTemplate.GetAnnotations(),
 	})
 }
 

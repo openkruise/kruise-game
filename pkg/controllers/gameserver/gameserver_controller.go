@@ -19,6 +19,7 @@ package gameserver
 import (
 	"context"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/util"
 	utildiscovery "github.com/openkruise/kruise-game/pkg/util/discovery"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -259,9 +260,20 @@ func (r *GameServerReconciler) initGameServer(pod *corev1.Pod) error {
 	gs.OwnerReferences = ors
 
 	// set Labels
-	gsLabels := make(map[string]string)
+	gsLabels := gss.Spec.GameServerTemplate.GetLabels()
+	if gsLabels == nil {
+		gsLabels = make(map[string]string)
+	}
 	gsLabels[gamekruiseiov1alpha1.GameServerOwnerGssKey] = gss.GetName()
 	gs.SetLabels(gsLabels)
+
+	// set Annotations
+	gsAnnotations := gss.Spec.GameServerTemplate.GetAnnotations()
+	if gsAnnotations == nil {
+		gsAnnotations = make(map[string]string)
+	}
+	gsAnnotations[gamekruiseiov1alpha1.GsTemplateMetadataHashKey] = util.GetGsTemplateMetadataHash(gss)
+	gs.SetAnnotations(gsAnnotations)
 
 	// set NetWork
 	gs.Spec.NetworkDisabled = false
