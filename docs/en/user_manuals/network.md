@@ -476,3 +476,137 @@ PortProtocols
 #### Plugin configuration
 
 None
+
+### AlibabaCloud-EIP
+
+#### Plugin name
+
+`AlibabaCloud-EIP`
+
+#### Cloud Provider
+
+AlibabaCloud
+
+#### Plugin description
+
+- Allocate a separate EIP for each GameServer
+- The exposed public access port is consistent with the port monitored in the container, which is managed by security group.
+- It is necessary to install the latest version of the ack-extend-network-controller component in the ACK cluster. For details, please refer to the [component description page](https://cs.console.aliyun.com/#/next/app-catalog/ack/incubator/ack-extend-network-controller).
+#### Network parameters
+
+ReleaseStrategy
+
+- Meaning: Specifies the EIP release policy.
+- Value:
+  - Follow: follows the lifecycle of the pod that is associated with the EIP. This is the default value.
+  - Never: does not release the EIP. You need to manually release the EIP when you no longer need the EIP. ( By 'kubectl delete podeip {gameserver name} -n {gameserver namespace}')
+  - You can also specify the timeout period of the EIP. For example, if you set the time period to 5m30s, the EIP is released 5.5 minutes after the pod is deleted. Time expressions written in Go are supported.
+- Configuration change supported or not: no.
+
+PoolId
+
+- Meaning: Specifies the EIP address pool. For more information. It could be nil.
+- Configuration change supported or not: no.
+
+ResourceGroupId
+
+- Meaning: Specifies the resource group to which the EIP belongs. It could be nil.
+- Configuration change supported or not: no.
+
+Bandwidth
+
+- Meaning: Specifies the maximum bandwidth of the EIP. Unit: Mbit/s. It could be nil. Default is 5.
+- Configuration change supported or not: no.
+
+BandwidthPackageId
+
+- Meaning: Specifies the EIP bandwidth plan that you want to use.
+- Configuration change supported or not: no.
+
+ChargeType
+
+- Meaning: Specifies the metering method of the EIP.
+- Value：
+  - PayByTraffic: Fees are charged based on data transfer.
+  - PayByBandwidth: Fees are charged based on bandwidth usage.
+- Configuration change supported or not: no.
+
+#### Plugin configuration
+
+None
+
+#### Example
+
+```yaml
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: eip-nginx
+  namespace: default
+spec:
+  replicas: 1
+  updateStrategy:
+    rollingUpdate:
+      podUpdatePolicy: InPlaceIfPossible
+  network:
+    networkType: AlibabaCloud-EIP
+    networkConf:
+      - name: ReleaseStrategy
+        value: Never
+      - name: Bandwidth
+        value: "3"
+      - name: ChargeType
+        value: PayByTraffic
+  gameServerTemplate:
+    spec:
+      containers:
+        - image: nginx
+          name: nginx
+```
+
+The network status of GameServer would be as follows:
+
+```yaml
+  networkStatus:
+    createTime: "2023-07-17T10:10:18Z"
+    currentNetworkState: Ready
+    desiredNetworkState: Ready
+    externalAddresses:
+    - ip: 47.98.xxx.xxx
+    internalAddresses:
+    - ip: 192.168.1.51
+    lastTransitionTime: "2023-07-17T10:10:18Z"
+    networkType: AlibabaCloud-EIP
+```
+
+The generated podeip eip-nginx-0 would be as follows：
+
+```yaml
+apiVersion: alibabacloud.com/v1beta1
+kind: PodEIP
+metadata:
+  annotations:
+    k8s.aliyun.com/eip-controller: ack-extend-network-controller
+  creationTimestamp: "2023-07-17T09:58:12Z"
+  finalizers:
+  - podeip-controller.alibabacloud.com/finalizer
+  generation: 1
+  name: eip-nginx-1
+  namespace: default
+  resourceVersion: "41443319"
+  uid: 105a9575-998e-4e17-ab91-8f2597eeb55f
+spec:
+  allocationID: eip-xxx
+  allocationType:
+    releaseStrategy: Never
+    type: Auto
+status:
+  eipAddress: 47.98.xxx.xxx
+  internetChargeType: PayByTraffic
+  isp: BGP
+  networkInterfaceID: eni-xxx
+  podLastSeen: "2023-07-17T10:36:02Z"
+  privateIPAddress: 192.168.1.51
+  resourceGroupID: rg-xxx
+  status: InUse
+```

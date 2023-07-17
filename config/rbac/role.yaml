@@ -49,6 +49,20 @@ rules:
   verbs:
   - get
 - apiGroups:
+  - alibabacloud.com
+  resources:
+  - podeips
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - alibabacloud.com
+  resources:
+  - podeips/status
+  verbs:
+  - get
+- apiGroups:
   - apiextensions.k8s.io
   resources:
   - customresourcedefinitions
