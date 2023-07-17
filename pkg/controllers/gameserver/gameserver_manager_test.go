@@ -430,7 +430,7 @@ func TestSyncNetworkStatus(t *testing.T) {
 						gameKruiseV1alpha1.GameServerNetworkType:     "xxx-type",
 						gameKruiseV1alpha1.GameServerNetworkConf:     "[{\"name\":\"SlbIds\",\"value\":\"lb-2zev1w12n684h7ymjtpuo\"},{\"name\":\"PortProtocols\",\"value\":\"80\"},{\"name\":\"Fixed\",\"value\":\"true\"}]",
 						gameKruiseV1alpha1.GameServerNetworkDisabled: "false",
-						gameKruiseV1alpha1.GameServerNetworkStatus:   "{\"internalAddresses\":[{\"ip\":\"172.16.1.132\",\"ports\":[{\"name\":\"80\",\"protocol\":\"TCP\",\"port\":80}],\"portRange\":{}}],\"externalAddresses\":[{\"ip\":\"47.99.47.99\",\"ports\":[{\"name\":\"80\",\"protocol\":\"TCP\",\"port\":601}],\"portRange\":{}}],\"currentNetworkState\":\"Ready\",\"createTime\":null,\"lastTransitionTime\":null}",
+						gameKruiseV1alpha1.GameServerNetworkStatus:   "{\"internalAddresses\":[{\"ip\":\"172.16.1.132\",\"ports\":[{\"name\":\"80\",\"protocol\":\"TCP\",\"port\":80}]}],\"externalAddresses\":[{\"ip\":\"47.99.47.99\",\"ports\":[{\"name\":\"80\",\"protocol\":\"TCP\",\"port\":601}]}],\"currentNetworkState\":\"Ready\",\"createTime\":null,\"lastTransitionTime\":null}",
 					},
 				},
 			},
@@ -459,7 +459,7 @@ func TestSyncNetworkStatus(t *testing.T) {
 						gameKruiseV1alpha1.GameServerNetworkType:     "xxx-type",
 						gameKruiseV1alpha1.GameServerNetworkConf:     "[{\"name\":\"SlbIds\",\"value\":\"lb-2zev1w12n684h7ymjtpuo\"},{\"name\":\"PortProtocols\",\"value\":\"80\"},{\"name\":\"Fixed\",\"value\":\"true\"}]",
 						gameKruiseV1alpha1.GameServerNetworkDisabled: "false",
-						gameKruiseV1alpha1.GameServerNetworkStatus:   "{\"internalAddresses\":[{\"ip\":\"172.16.1.132\",\"ports\":[{\"name\":\"80\",\"protocol\":\"TCP\",\"port\":80}],\"portRange\":{}}],\"externalAddresses\":[{\"ip\":\"47.99.47.99\",\"ports\":[{\"name\":\"80\",\"protocol\":\"TCP\",\"port\":601}],\"portRange\":{}}],\"currentNetworkState\":\"Ready\",\"createTime\":null,\"lastTransitionTime\":null}",
+						gameKruiseV1alpha1.GameServerNetworkStatus:   "{\"internalAddresses\":[{\"ip\":\"172.16.1.132\",\"ports\":[{\"name\":\"80\",\"protocol\":\"TCP\",\"port\":80}]}],\"externalAddresses\":[{\"ip\":\"47.99.47.99\",\"ports\":[{\"name\":\"80\",\"protocol\":\"TCP\",\"port\":601}]}],\"currentNetworkState\":\"Ready\",\"createTime\":null,\"lastTransitionTime\":null}",
 					},
 				},
 			},
@@ -489,6 +489,61 @@ func TestSyncNetworkStatus(t *testing.T) {
 								Port:     &portExternal,
 							},
 						},
+					},
+				},
+				CreateTime:         fakeTime,
+				LastTransitionTime: fakeTime,
+			},
+		},
+
+		{
+			gs: &gameKruiseV1alpha1.GameServer{
+				Status: gameKruiseV1alpha1.GameServerStatus{
+					NetworkStatus: gameKruiseV1alpha1.NetworkStatus{
+						NetworkType:         "xxx-type",
+						DesiredNetworkState: gameKruiseV1alpha1.NetworkReady,
+						CreateTime:          fakeTime,
+						LastTransitionTime:  fakeTime,
+					},
+				},
+			},
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						gameKruiseV1alpha1.GameServerNetworkType:     "xxx-type",
+						gameKruiseV1alpha1.GameServerNetworkConf:     "[{\"name\":\"SlbIds\",\"value\":\"lb-2zev1w12n684h7ymjtpuo\"},{\"name\":\"PortProtocols\",\"value\":\"80\"},{\"name\":\"Fixed\",\"value\":\"true\"}]",
+						gameKruiseV1alpha1.GameServerNetworkDisabled: "false",
+						gameKruiseV1alpha1.GameServerNetworkStatus:   "{\"internalAddresses\":[{\"ip\":\"172.16.1.132\",\"ports\":[{\"name\":\"80\",\"protocol\":\"TCP\",\"port\":80}],\"portRange\":{}}],\"externalAddresses\":[{\"ip\":\"47.99.47.99\",\"ports\":[{\"name\":\"80\",\"protocol\":\"TCP\",\"port\":601}],\"portRange\":{}}],\"currentNetworkState\":\"Ready\",\"createTime\":null,\"lastTransitionTime\":null}"},
+				},
+			},
+			gsNetworkStatus: gameKruiseV1alpha1.NetworkStatus{
+				NetworkType:         "xxx-type",
+				CurrentNetworkState: gameKruiseV1alpha1.NetworkReady,
+				DesiredNetworkState: gameKruiseV1alpha1.NetworkReady,
+				InternalAddresses: []gameKruiseV1alpha1.NetworkAddress{
+					{
+						IP: "172.16.1.132",
+						Ports: []gameKruiseV1alpha1.NetworkPort{
+							{
+								Name:     "80",
+								Protocol: "TCP",
+								Port:     &portInternal,
+							},
+						},
+						PortRange: &gameKruiseV1alpha1.NetworkPortRange{},
+					},
+				},
+				ExternalAddresses: []gameKruiseV1alpha1.NetworkAddress{
+					{
+						IP: "47.99.47.99",
+						Ports: []gameKruiseV1alpha1.NetworkPort{
+							{
+								Name:     "80",
+								Protocol: "TCP",
+								Port:     &portExternal,
+							},
+						},
+						PortRange: &gameKruiseV1alpha1.NetworkPortRange{},
 					},
 				},
 				CreateTime:         fakeTime,
