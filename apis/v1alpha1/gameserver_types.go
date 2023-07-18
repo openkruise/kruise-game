@@ -123,9 +123,9 @@ const (
 type NetworkAddress struct {
 	IP string `json:"ip"`
 	// TODO add IPv6
-	Ports     []NetworkPort    `json:"ports,omitempty"`
-	PortRange NetworkPortRange `json:"portRange,omitempty"`
-	EndPoint  string           `json:"endPoint,omitempty"`
+	Ports     []NetworkPort     `json:"ports,omitempty"`
+	PortRange *NetworkPortRange `json:"portRange,omitempty"`
+	EndPoint  string            `json:"endPoint,omitempty"`
 }
 
 type NetworkPort struct {
