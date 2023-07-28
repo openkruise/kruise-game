@@ -2,7 +2,7 @@
 
 OpenKruiseGame allows you to set the states of game servers. You can manually set the value of opsState or DeletionPriority for a game server. You can also use the service quality feature to automatically set the value of opsState or DeletionPriority for a game server. During scale-in, a proper GameServerSet workload is selected for scale-in based on the states of game servers. The scale-in rules are as follows:
 
-1. Scale in game servers based on the opsState values. Scale in the game servers for which the opsState values are `WaitToBeDeleted`, `None`, and `Maintaining` in sequence.
+1. Scale in game servers based on the opsState values. Scale in the game servers for which the opsState values are `WaitToBeDeleted`, `None`, `Allocated`, and `Maintaining` in sequence.
 
 2. If two or more game servers have the same opsState value, game servers are performed based on the values of DeletionPriority. The game server with the largest DeletionPriority value is deleted first.
 

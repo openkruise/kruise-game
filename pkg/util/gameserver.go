@@ -69,8 +69,10 @@ func opsStateDeletePrority(opsState string) int {
 		return 1
 	case string(gameKruiseV1alpha1.None):
 		return 0
-	case string(gameKruiseV1alpha1.Maintaining):
+	case string(gameKruiseV1alpha1.Allocated):
 		return -1
+	case string(gameKruiseV1alpha1.Maintaining):
+		return -2
 	}
 	return 0
 }

@@ -94,6 +94,47 @@ func TestDeleteSequenceGs(t *testing.T) {
 			},
 			after: []int{2, 0, 3, 1},
 		},
+		{
+			before: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-0",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.Allocated),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-1",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.Maintaining),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-2",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.WaitToDelete),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-3",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+			},
+			after: []int{2, 3, 0, 1},
+		},
 	}
 
 	for _, test := range tests {
