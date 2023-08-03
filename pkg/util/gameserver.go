@@ -44,14 +44,14 @@ func (dg DeleteSequenceGs) Swap(i, j int) {
 func (dg DeleteSequenceGs) Less(i, j int) bool {
 	iLabels := dg[i].GetLabels()
 	jLabels := dg[j].GetLabels()
-	iOpsState := iLabels[gameKruiseV1alpha1.GameServerOpsStateKey]
-	jOpsState := jLabels[gameKruiseV1alpha1.GameServerOpsStateKey]
+	iOpsStatePriority := opsStateDeletePrority(iLabels[gameKruiseV1alpha1.GameServerOpsStateKey])
+	jOpsStatePriority := opsStateDeletePrority(jLabels[gameKruiseV1alpha1.GameServerOpsStateKey])
 	iDeletionPriority := iLabels[gameKruiseV1alpha1.GameServerDeletePriorityKey]
 	jDeletionPriority := jLabels[gameKruiseV1alpha1.GameServerDeletePriorityKey]
 
 	// OpsState
-	if iOpsState != jOpsState {
-		return opsStateDeletePrority(iOpsState) > opsStateDeletePrority(jOpsState)
+	if iOpsStatePriority != jOpsStatePriority {
+		return iOpsStatePriority > jOpsStatePriority
 	}
 	// Deletion Priority
 	if iDeletionPriority != jDeletionPriority {
@@ -65,6 +65,8 @@ func (dg DeleteSequenceGs) Less(i, j int) bool {
 
 func opsStateDeletePrority(opsState string) int {
 	switch opsState {
+	case string(gameKruiseV1alpha1.Kill):
+		return 100
 	case string(gameKruiseV1alpha1.WaitToDelete):
 		return 1
 	case string(gameKruiseV1alpha1.None):

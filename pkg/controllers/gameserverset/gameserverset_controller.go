@@ -206,6 +206,18 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	gsm := NewGameServerSetManager(gss, asts, podList.Items, r.Client, r.recorder)
 
+	// kill game servers
+	newReplicas := gsm.GetReplicasAfterKilling()
+	if *gss.Spec.Replicas != *newReplicas {
+		gss.Spec.Replicas = newReplicas
+		err = r.Client.Update(ctx, gss)
+		if err != nil {
+			klog.Errorf("failed to kill GameServers of GameServerSet %s in %s.", gss.GetName(), gss.GetNamespace())
+			return reconcile.Result{}, err
+		}
+		return reconcile.Result{}, nil
+	}
+
 	// scale game servers
 	if gsm.IsNeedToScale() {
 		err = gsm.GameServerScale()
