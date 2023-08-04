@@ -135,16 +135,69 @@ func TestDeleteSequenceGs(t *testing.T) {
 			},
 			after: []int{2, 3, 0, 1},
 		},
+		{
+			before: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-0",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey: string(gameKruiseV1alpha1.Allocated),
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-1",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey: string(gameKruiseV1alpha1.Maintaining),
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-2",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey: string(gameKruiseV1alpha1.WaitToDelete),
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-3",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey: string(gameKruiseV1alpha1.None),
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-4",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey: string(gameKruiseV1alpha1.Kill),
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-5",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey: "user-define",
+						},
+					},
+				},
+			},
+			after: []int{4, 2, 5, 3, 0, 1},
+		},
 	}
 
-	for _, test := range tests {
+	for caseNum, test := range tests {
 		after := DeleteSequenceGs(test.before)
 		sort.Sort(after)
 		expect := test.after
 		actual := GetIndexListFromPodList(after)
 		for i := 0; i < len(actual); i++ {
 			if expect[i] != actual[i] {
-				t.Errorf("expect %v but got %v", expect, actual)
+				t.Errorf("case %d: expect %v but got %v", caseNum, expect, actual)
 			}
 		}
 	}

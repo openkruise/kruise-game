@@ -27,6 +27,7 @@ func init() {
 	utilruntime.Must(gameKruiseV1alpha1.AddToScheme(scheme))
 	utilruntime.Must(kruiseV1beta1.AddToScheme(scheme))
 	utilruntime.Must(kruiseV1alpha1.AddToScheme(scheme))
+	utilruntime.Must(corev1.AddToScheme(scheme))
 }
 
 func TestComputeToScaleGs(t *testing.T) {
@@ -803,6 +804,196 @@ func TestSyncGameServerReplicas(t *testing.T) {
 		expect := test.toDelete
 		if !util.IsSliceEqual(actual, expect) {
 			t.Errorf("expect to delete gameservers %v but actually %v", expect, actual)
+		}
+	}
+}
+
+func TestNumberToKill(t *testing.T) {
+	now := metav1.Now()
+	tests := []struct {
+		gss     *gameKruiseV1alpha1.GameServerSet
+		asts    *kruiseV1beta1.StatefulSet
+		podList []corev1.Pod
+		number  int32
+	}{
+		// case 0
+		{
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					Replicas: pointer.Int32(3),
+				},
+			},
+			asts: &kruiseV1beta1.StatefulSet{
+				Spec: kruiseV1beta1.StatefulSetSpec{
+					Replicas: pointer.Int32(3),
+				},
+			},
+			podList: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "xxx-0",
+						Namespace: "xxx",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey: string(gameKruiseV1alpha1.Kill),
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "xxx-2",
+						Namespace: "xxx",
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "xxx-4",
+						Namespace: "xxx",
+					},
+				},
+			},
+			number: 2,
+		},
+		// case 1
+		{
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					Replicas: pointer.Int32(3),
+				},
+				Status: gameKruiseV1alpha1.GameServerSetStatus{
+					Replicas: int32(3),
+				},
+			},
+			asts: &kruiseV1beta1.StatefulSet{
+				Spec: kruiseV1beta1.StatefulSetSpec{
+					Replicas: pointer.Int32(3),
+				},
+			},
+			podList: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "xxx-0",
+						Namespace: "xxx",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey: string(gameKruiseV1alpha1.Kill),
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:              "xxx-2",
+						Namespace:         "xxx",
+						DeletionTimestamp: &now,
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "xxx-4",
+						Namespace: "xxx",
+					},
+				},
+			},
+			number: 3,
+		},
+		// case 2
+		{
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					Replicas: pointer.Int32(2),
+				},
+				Status: gameKruiseV1alpha1.GameServerSetStatus{
+					Replicas: int32(2),
+				},
+			},
+			asts: &kruiseV1beta1.StatefulSet{
+				Spec: kruiseV1beta1.StatefulSetSpec{
+					Replicas: pointer.Int32(2),
+				},
+			},
+			podList: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "xxx-0",
+						Namespace: "xxx",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey: string(gameKruiseV1alpha1.Kill),
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:              "xxx-2",
+						Namespace:         "xxx",
+						DeletionTimestamp: &now,
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "xxx-4",
+						Namespace: "xxx",
+					},
+				},
+			},
+			number: 2,
+		},
+		// case 3
+		{
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					Replicas: pointer.Int32(4),
+				},
+				Status: gameKruiseV1alpha1.GameServerSetStatus{
+					Replicas: int32(3),
+				},
+			},
+			asts: &kruiseV1beta1.StatefulSet{
+				Spec: kruiseV1beta1.StatefulSetSpec{
+					Replicas: pointer.Int32(3),
+				},
+			},
+			podList: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "xxx-0",
+						Namespace: "xxx",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey: string(gameKruiseV1alpha1.Kill),
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:              "xxx-2",
+						Namespace:         "xxx",
+						DeletionTimestamp: &now,
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "xxx-4",
+						Namespace: "xxx",
+					},
+				},
+			},
+			number: 4,
+		},
+	}
+
+	for i, test := range tests {
+		objs := []client.Object{test.gss}
+		for _, pod := range test.podList {
+			objs = append(objs, pod.DeepCopy())
+		}
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+		manager := &GameServerSetManager{
+			podList:       test.podList,
+			asts:          test.asts,
+			gameServerSet: test.gss,
+			client:        c,
+		}
+		actual := manager.GetReplicasAfterKilling()
+		expect := test.number
+		if *actual != expect {
+			t.Errorf("case %d: expect gs replicas %v but actually %v", i, expect, *actual)
 		}
 	}
 }

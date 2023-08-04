@@ -48,6 +48,7 @@ type Control interface {
 	IsNeedToUpdateWorkload() bool
 	SyncPodProbeMarker() error
 	SyncGameServerReplicas() error
+	GetReplicasAfterKilling() *int32
 }
 
 const (
@@ -74,6 +75,27 @@ func NewGameServerSetManager(gss *gameKruiseV1alpha1.GameServerSet, asts *kruise
 		client:        c,
 		eventRecorder: recorder,
 	}
+}
+
+func (manager *GameServerSetManager) GetReplicasAfterKilling() *int32 {
+	gss := manager.gameServerSet
+	asts := manager.asts
+	podList := manager.podList
+	if *gss.Spec.Replicas != *asts.Spec.Replicas || *gss.Spec.Replicas != int32(len(podList)) {
+		return manager.gameServerSet.Spec.Replicas
+	}
+	toKill := 0
+	for _, pod := range manager.podList {
+		if pod.GetDeletionTimestamp() != nil {
+			return manager.gameServerSet.Spec.Replicas
+		}
+		if pod.GetLabels()[gameKruiseV1alpha1.GameServerOpsStateKey] == string(gameKruiseV1alpha1.Kill) {
+			toKill++
+		}
+	}
+
+	klog.Infof("%d GameServers need to be killed", toKill)
+	return pointer.Int32(*gss.Spec.Replicas - int32(toKill))
 }
 
 func (manager *GameServerSetManager) IsNeedToScale() bool {

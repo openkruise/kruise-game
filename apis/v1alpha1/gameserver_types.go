@@ -62,6 +62,7 @@ const (
 	WaitToDelete OpsState = "WaitToBeDeleted"
 	None         OpsState = "None"
 	Allocated    OpsState = "Allocated"
+	Kill         OpsState = "Kill"
 )
 
 type ServiceQuality struct {
