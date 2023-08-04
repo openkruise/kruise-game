@@ -21,6 +21,7 @@ const (
 	BandwidthConfigName             = "Bandwidth"
 	BandwidthPackageIdConfigName    = "BandwidthPackageId"
 	ChargeTypeConfigName            = "ChargeType"
+	DescriptionConfigName           = "Description"
 	WithEIPAnnotationKey            = "k8s.aliyun.com/pod-with-eip"
 	ReleaseStrategyAnnotationkey    = "k8s.aliyun.com/pod-eip-release-strategy"
 	PoolIdAnnotationkey             = "k8s.aliyun.com/eip-public-ip-address-pool-id"
@@ -28,6 +29,8 @@ const (
 	BandwidthAnnotationkey          = "k8s.aliyun.com/eip-bandwidth"
 	BandwidthPackageIdAnnotationkey = "k8s.aliyun.com/eip-common-bandwidth-package-id"
 	ChargeTypeConfigAnnotationkey   = "k8s.aliyun.com/eip-internet-charge-type"
+	EIPNameAnnotationKey            = "k8s.aliyun.com/eip-name"
+	EIPDescriptionAnnotationKey     = "k8s.aliyun.com/eip-description"
 )
 
 type EipPlugin struct {
@@ -50,6 +53,7 @@ func (E EipPlugin) OnPodAdded(client client.Client, pod *corev1.Pod, ctx context
 	conf := networkManager.GetNetworkConfig()
 
 	pod.Annotations[WithEIPAnnotationKey] = "true"
+	pod.Annotations[EIPNameAnnotationKey] = pod.GetNamespace() + "/" + pod.GetName()
 	// parse network configuration
 	for _, c := range conf {
 		switch c.Name {
@@ -65,6 +69,8 @@ func (E EipPlugin) OnPodAdded(client client.Client, pod *corev1.Pod, ctx context
 			pod.Annotations[BandwidthPackageIdAnnotationkey] = c.Value
 		case ChargeTypeConfigName:
 			pod.Annotations[ChargeTypeConfigAnnotationkey] = c.Value
+		case DescriptionConfigName:
+			pod.Annotations[EIPDescriptionAnnotationKey] = c.Value
 		}
 	}
 

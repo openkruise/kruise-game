@@ -531,6 +531,11 @@ ChargeType
   - PayByBandwidth: Fees are charged based on bandwidth usage.
 - Configuration change supported or not: no.
 
+Description
+
+- Meaning: The description of EIP resource
+- Configuration change supported or not: no.
+
 #### Plugin configuration
 
 None
@@ -610,3 +615,5 @@ status:
   resourceGroupID: rg-xxx
   status: InUse
 ```
+
+In addition, the generated EIP resource will be named after {pod namespace}/{pod name} in the Alibaba Cloud console, which corresponds to each game server one by one.
