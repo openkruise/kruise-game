@@ -300,6 +300,13 @@ func (r *GameServerSetReconciler) initAsts(gss *gamekruiseiov1alpha1.GameServerS
 	asts.Spec.Replicas = gss.Spec.Replicas
 	asts.Spec.ReserveOrdinals = gss.Spec.ReserveGameServerIds
 
+	// set ServiceName
+	asts.Spec.ServiceName = gss.Spec.ServiceName
+	if asts.Spec.ServiceName == "" {
+		// default: GameServerSet name
+		asts.Spec.ServiceName = gss.Name
+	}
+
 	asts = util.GetNewAstsFromGss(gss.DeepCopy(), asts)
 
 	return r.Client.Create(context.Background(), asts)

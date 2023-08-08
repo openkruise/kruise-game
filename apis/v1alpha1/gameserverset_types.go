@@ -47,6 +47,7 @@ type GameServerSetSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 	GameServerTemplate   GameServerTemplate `json:"gameServerTemplate,omitempty"`
+	ServiceName          string             `json:"serviceName,omitempty"`
 	ReserveGameServerIds []int              `json:"reserveGameServerIds,omitempty"`
 	ServiceQualities     []ServiceQuality   `json:"serviceQualities,omitempty"`
 	UpdateStrategy       UpdateStrategy     `json:"updateStrategy,omitempty"`

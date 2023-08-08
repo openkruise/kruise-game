@@ -422,6 +422,8 @@ spec:
                       strategy. Default is GeneralScaleDownStrategyType
                     type: string
                 type: object
+              serviceName:
+                type: string
               serviceQualities:
                 items:
                   properties:
