@@ -94,7 +94,7 @@ func (manager *GameServerSetManager) GetReplicasAfterKilling() *int32 {
 		}
 	}
 
-	klog.Infof("%d GameServers need to be killed", toKill)
+	klog.Infof("GameServerSet %s/%s will kill %d GameServers", gss.GetNamespace(), gss.GetName(), toKill)
 	return pointer.Int32(*gss.Spec.Replicas - int32(toKill))
 }
 
