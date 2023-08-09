@@ -129,6 +129,8 @@ Clients can access the game server by using 47.97.227.137:512.
 ## Network plugins
 
 OpenKruiseGame supports the following network plugins:
+- [Higress](https://higress.io)
+- [AlibabaCloud-MSE-Gateway](https://www.alibabacloud.com/product/microservices-engine?spm=higress-website.topbar.0.0.0)
 - Kubernetes-HostPort
 - AlibabaCloud-NATGW
 - AlibabaCloud-SLB
