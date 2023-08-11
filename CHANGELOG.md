@@ -1,5 +1,22 @@
 # Change Log
 
+## v0.5.0
+> Change log since v0.4.0
+
+### Features & Enhancements
+- Improve hostport cache to record allocated ports of pod. https://github.com/openkruise/kruise-game/pull/82
+- Enhance pod scaling efficiency. https://github.com/openkruise/kruise-game/pull/81
+- Support to sync gs metadata from from gsTemplate. https://github.com/openkruise/kruise-game/pull/85
+- Refactor NetworkPortRange into a pointer. https://github.com/openkruise/kruise-game/pull/87
+- Add network plugin AlibabaCloud-EIP. https://github.com/openkruise/kruise-game/pull/86
+- Add new opsState type named Allocated. https://github.com/openkruise/kruise-game/pull/89
+- Add new opsState type named Kill. https://github.com/openkruise/kruise-game/pull/90
+- AlibabaCloud-EIP support to define EIP name & description. https://github.com/openkruise/kruise-game/pull/91
+- Support customized serviceName. https://github.com/openkruise/kruise-game/pull/92
+
+### Bug Fixes
+- correct gs network status when pod network status is nil. https://github.com/openkruise/kruise-game/pull/80 
+
 ## v0.4.0
 
 > Change log since v0.3.0
@@ -42,8 +59,6 @@
 - Avoid GameServerSet status sync failed when template metadata is not null. https://github.com/openkruise/kruise-game/pull/46
 - Add marginal conditions to avoid fatal errors when scaling. https://github.com/openkruise/kruise-game/pull/49
 
----
-
 ## v0.2.0
 
 > Change log since v0.1.0
@@ -59,8 +74,6 @@
   - AlibabaCloud-NATGW
   - AlibabaCloud-SLB
   - AlibabaCloud-SLB-SharedPort
-
----
 
 ## v0.1.0
 
