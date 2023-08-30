@@ -122,7 +122,12 @@ func (n NatGwPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.
 	}
 	networkStatus.InternalAddresses = internalAddresses
 	networkStatus.ExternalAddresses = externalAddresses
-	networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkReady
+
+	// NetworkReady when all ports have external addresses
+	if len(strings.Split(pod.Annotations[PortsAnsKey], ",")) == len(podDNat.Status.Entries) {
+		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkReady
+	}
+
 	pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 	return pod, errors.ToPluginError(err, errors.InternalError)
 }
