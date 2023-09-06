@@ -10,6 +10,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"strconv"
+)
+
+const (
+	NoneGameServerMinNumberKey = "minAvailable"
 )
 
 type ExternalScaler struct {
@@ -62,11 +67,42 @@ func (e *ExternalScaler) GetMetrics(ctx context.Context, metricRequest *GetMetri
 		return nil, err
 	}
 
+	// scale up when number of GameServers with None opsState less than minAvailable defined by user
+	isGssOwner, _ := labels.NewRequirement(gamekruiseiov1alpha1.GameServerOwnerGssKey, selection.Equals, []string{name})
+	isNone, _ := labels.NewRequirement(gamekruiseiov1alpha1.GameServerOpsStateKey, selection.Equals, []string{string(gamekruiseiov1alpha1.None)})
+	podList := &corev1.PodList{}
+	err = e.client.List(ctx, podList, &client.ListOptions{
+		Namespace: ns,
+		LabelSelector: labels.NewSelector().Add(
+			*isNone,
+			*isGssOwner,
+		),
+	})
+	if err != nil {
+		klog.Error(err)
+		return nil, err
+	}
+
+	noneNum := len(podList.Items)
+	minNum, err := strconv.ParseInt(metricRequest.ScaledObjectRef.GetScalerMetadata()[NoneGameServerMinNumberKey], 10, 32)
+	if err != nil {
+		klog.Errorf("minAvailable should be integer type, err: %s", err.Error())
+	}
+	if err == nil && noneNum < int(minNum) {
+		desireReplicas := *gss.Spec.Replicas + int32(minNum) - int32(noneNum)
+		klog.Infof("GameServerSet %s/%s desire replicas is %d", ns, name, desireReplicas)
+		return &GetMetricsResponse{
+			MetricValues: []*MetricValue{{
+				MetricName:  "gssReplicas",
+				MetricValue: int64(desireReplicas),
+			}},
+		}, nil
+	}
+
+	//  scale up those GameServers with WaitToBeDeleted opsState
 	isWaitToDelete, _ := labels.NewRequirement(gamekruiseiov1alpha1.GameServerOpsStateKey, selection.Equals, []string{string(gamekruiseiov1alpha1.WaitToDelete)})
 	notDeleting, _ := labels.NewRequirement(gamekruiseiov1alpha1.GameServerStateKey, selection.NotEquals, []string{string(gamekruiseiov1alpha1.Deleting)})
-	isGssOwner, _ := labels.NewRequirement(gamekruiseiov1alpha1.GameServerOwnerGssKey, selection.Equals, []string{name})
-
-	podList := &corev1.PodList{}
+	podList = &corev1.PodList{}
 	err = e.client.List(ctx, podList, &client.ListOptions{
 		Namespace: ns,
 		LabelSelector: labels.NewSelector().Add(

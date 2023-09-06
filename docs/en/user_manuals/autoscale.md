@@ -1,5 +1,7 @@
 ## Feature overview
 
+### Auto Scaling-down
+
 Compared to stateless service types, game servers have higher requirements for automatic scaling, especially in terms of scaling down.
 
 The differences between game servers become more and more obvious over time, and the precision requirements for scaling down are extremely high. Coarse-grained scaling mechanisms can easily cause negative effects such as player disconnections, resulting in huge losses for the business.
@@ -59,7 +61,7 @@ spec:
               periodSeconds: 15
   triggers:
     - type: external
-      metricType: Value
+      metricType: AverageValue
       metadata:
         scalerAddress: kruise-game-external-scaler.kruise-game-system:6000
 
@@ -97,3 +99,109 @@ minecraft-1   Ready   None       0     0
 minecraft-2   Ready   None       0     0
 
 ```
+
+### Auto Scaling-up
+
+In addition to setting the automatic scaling policy, you can also set the automatic scaling policy.
+
+#### Scaling with resource metrics or custom metrics
+
+Native Kubernetes supports auto scaling-up using CPU utilization, and its complete yaml is as follows:
+
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: minecraft # Fill in the name of the corresponding GameServerSet
+spec:
+  scaleTargetRef:
+    name: minecraft # Fill in the name of the corresponding GameServerSet
+    apiVersion: game.kruise.io/v1alpha1
+    kind: GameServerSet
+  pollingInterval: 30
+  minReplicaCount: 0
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior: # Inherit from HPA behavior, refer to https://kubernetes.io/zh-cn/docs/tasks/run-application/horizontal-pod-autoscale/#configurable-scaling-behavior
+        scaleDown:
+          stabilizationWindowSeconds: 45 # Set the scaling-down stabilization window time to 45 seconds
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+  triggers:
+    - type: external
+      metricType: AverageValue
+      metadata:
+        scalerAddress: kruise-game-external-scaler.kruise-game-system:6000
+    - type: cpu
+      metricType: Utilization # Allowed types are 'Utilization' or 'AverageValue'
+      metadata:
+        value: "50"
+```
+
+Pressure testing of the gameserver, you can see that the gameserver began to scale-up
+
+```bash
+kubectl get gss
+NAME        DESIRED   CURRENT   UPDATED   READY   MAINTAINING   WAITTOBEDELETED   AGE
+minecraft   5         5         5         0       0             0                 7s
+
+# After a while
+
+kubectl get gss
+NAME        DESIRED   CURRENT   UPDATED   READY   MAINTAINING   WAITTOBEDELETED   AGE
+minecraft   20        20        20        20      0             0                 137s
+```
+
+#### Set the minimum number of game servers whose opsState is None
+
+OKG supports setting the minimum number of game servers. When the current number of game servers whose opsState is None is less than the set value, OKG will automatically expand new game servers so that the number of game servers whose opsState is None meets the set minimum number.
+
+The configuration method is as follows. In this example, the minimum number of game servers with opsState set to None is 3:
+
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: minecraft # Fill in the name of the corresponding GameServerSet
+spec:
+  scaleTargetRef:
+    name: minecraft # Fill in the name of the corresponding GameServerSet
+    apiVersion: game.kruise.io/v1alpha1
+    kind: GameServerSet
+  pollingInterval: 30
+  minReplicaCount: 0
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior: # Inherit from HPA behavior, refer to https://kubernetes.io/zh-cn/docs/tasks/run-application/horizontal-pod-autoscale/#configurable-scaling-behavior
+        scaleDown:
+          stabilizationWindowSeconds: 45 # Set the scaling-down stabilization window time to 45 seconds
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+  triggers:
+    - type: external
+      metricType: AverageValue
+      metadata:
+        minAvailable: "3" # 设置opsState为None的游戏服的最小个数
+        scalerAddress: kruise-game-external-scaler.kruise-game-system:6000
+```
+
+First apply a GameServerSet with 1 replicas, after the KEDA detection cycle, immediately scale up two new game servers. At this time, the number of game servers whose opsState is None is not less than the minAvailable value, and scale-up process is completed.
+
+```bash
+kubectl get gs
+NAME          STATE   OPSSTATE   DP    UP   AGE
+minecraft-0   Ready   None       0     0    7s
+
+# After a while
+
+kubectl get gs
+NAME          STATE   OPSSTATE   DP    UP   AGE
+minecraft-0   Ready   None       0     0    20s
+minecraft-1   Ready   None       0     0    5s
+minecraft-2   Ready   None       0     0    5s
+```
+
