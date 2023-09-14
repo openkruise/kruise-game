@@ -102,7 +102,38 @@ type GameServerStatus struct {
 	UpdatePriority     *intstr.IntOrString `json:"updatePriority,omitempty"`
 	DeletionPriority   *intstr.IntOrString `json:"deletionPriority,omitempty"`
 	LastTransitionTime metav1.Time         `json:"lastTransitionTime,omitempty"`
+	// Conditions is an array of current observed GameServer conditions.
+	// +optional
+	Conditions []GameServerCondition `json:"conditions,omitempty" `
 }
+
+type GameServerCondition struct {
+	// Type is the type of the condition.
+	Type GameServerConditionType `json:"type"`
+	// Status is the status of the condition.
+	// Can be True, False, Unknown.
+	Status corev1.ConditionStatus `json:"status"`
+	// Last time we probed the condition.
+	// +optional
+	LastProbeTime metav1.Time `json:"lastProbeTime,omitempty"`
+	// Last time the condition transitioned from one status to another.
+	// +optional
+	LastTransitionTime metav1.Time `json:"lastTransitionTime,omitempty"`
+	// Unique, one-word, CamelCase reason for the condition's last transition.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+	// Human-readable message indicating details about last transition.
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
+type GameServerConditionType string
+
+const (
+	NodeNormal             GameServerConditionType = "NodeNormal"
+	PersistentVolumeNormal GameServerConditionType = "PersistentVolumeNormal"
+	PodNormal              GameServerConditionType = "PodNormal"
+)
 
 type NetworkStatus struct {
 	NetworkType         string           `json:"networkType,omitempty"`

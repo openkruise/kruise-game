@@ -67,6 +67,10 @@ func init() {
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=nodes/status,verbs=get
+// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims/status,verbs=get
+// +kubebuilder:rbac:groups=core,resources=persistentvolumes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=persistentvolumes/status,verbs=get
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=mutatingwebhookconfigurations,verbs=create;get;list;watch;update;patch
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingwebhookconfigurations,verbs=create;get;list;watch;update;patch
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch;update;patch

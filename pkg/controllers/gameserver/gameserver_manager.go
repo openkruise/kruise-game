@@ -220,6 +220,13 @@ func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerS
 		return err
 	}
 
+	// get gs conditions
+	conditions, err := getConditions(context.TODO(), manager.client, gs, manager.eventRecorder)
+	if err != nil {
+		klog.Errorf("failed to get GameServer %s Conditions in %s, because of %s.", gs.GetName(), gs.GetNamespace(), err.Error())
+		return err
+	}
+
 	// patch gs status
 	status := gameKruiseV1alpha1.GameServerStatus{
 		PodStatus:                 pod.Status,
@@ -230,6 +237,7 @@ func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerS
 		ServiceQualitiesCondition: newGsConditions,
 		NetworkStatus:             manager.syncNetworkStatus(),
 		LastTransitionTime:        metav1.Now(),
+		Conditions:                conditions,
 	}
 	patchStatus := map[string]interface{}{"status": status}
 	jsonPatchStatus, err := json.Marshal(patchStatus)
