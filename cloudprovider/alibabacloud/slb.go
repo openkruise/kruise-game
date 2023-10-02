@@ -182,6 +182,21 @@ func (s *SlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 	}
 
+	// allow not ready containers
+	if util.IsAllowNotReadyContainers(networkManager.GetNetworkConfig()) {
+		toUpDateSvc, err := utils.AllowNotReadyContainers(c, ctx, pod, svc, false)
+		if err != nil {
+			return pod, err
+		}
+
+		if toUpDateSvc {
+			err := c.Update(ctx, svc)
+			if err != nil {
+				return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
+			}
+		}
+	}
+
 	// network ready
 	internalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
 	externalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)

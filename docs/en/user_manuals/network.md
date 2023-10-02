@@ -430,6 +430,12 @@ Fixed
 - Value: false or true.
 - Configuration change supported or not: yes.
 
+AllowNotReadyContainers
+
+- Meaning: the container names that are allowed not ready when inplace updating, when traffic will not be cut.
+- Value: {containerName_0},{containerName_1},... Example：sidecar
+- Configuration change supported or not: It cannot be changed during the in-place updating process.
+
 #### Plugin configuration
 ```
 [alibabacloud]
@@ -472,6 +478,12 @@ PortProtocols
 - Meaning: the ports in the pod to be exposed and the protocols. You can specify multiple ports and protocols.
 - Value: in the format of port1/protocol1,port2/protocol2,... The protocol names must be in uppercase letters.
 - Configuration change supported or not: no. The configuration change can be supported in future.
+
+AllowNotReadyContainers
+
+- Meaning: the container names that are allowed not ready when inplace updating, when traffic will not be cut.
+- Value: {containerName_0},{containerName_1},... Example：sidecar
+- Configuration change supported or not: It cannot be changed during the in-place updating process.
 
 #### Plugin configuration
 
@@ -617,3 +629,106 @@ status:
 ```
 
 In addition, the generated EIP resource will be named after {pod namespace}/{pod name} in the Alibaba Cloud console, which corresponds to each game server one by one.
+
+---
+
+### AlibabaCloud-NLB-SharedPort
+
+#### Plugin name
+
+`AlibabaCloud-NLB-SharedPort`
+
+#### Cloud Provider
+
+AlibabaCloud
+
+#### Plugin description
+
+- AlibabaCloud-NLB-SharedPort enables game servers to be accessed from the Internet by using Layer 4 NLB of Alibaba Cloud, which is similar to AlibabaCloud-SLB-SharedPort.
+  This network plugin applies to stateless network services, such as proxy or gateway, in gaming scenarios.
+
+- This network plugin supports network isolation.
+
+#### Network parameters
+
+SlbIds
+
+- Meaning: the CLB instance IDs. You can specify multiple NLB instance IDs.
+- Value: an example value can be nlb-9zeo7prq1m25ctpfrw1m7
+- Configuration change supported or not: no.
+
+PortProtocols
+
+- Meaning: the ports in the pod to be exposed and the protocols. You can specify multiple ports and protocols.
+- Value: in the format of port1/protocol1,port2/protocol2,... The protocol names must be in uppercase letters.
+- Configuration change supported or not: no.
+
+AllowNotReadyContainers
+
+- Meaning: the container names that are allowed not ready when inplace updating, when traffic will not be cut.
+- Value: {containerName_0},{containerName_1},... Example：sidecar
+- Configuration change supported or not: It cannot be changed during the in-place updating process.
+
+#### Plugin configuration
+
+None
+
+#### Example
+
+Deploy a GameServerSet with two containers, one named app-2048 and the other named sidecar.
+
+Specify the network parameter AllowNotReadyContainers as sidecar, 
+then the entire pod will still provide services when the sidecar is updated in place.
+
+```yaml
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: gss-2048-nlb
+  namespace: default
+spec:
+  replicas: 3
+  updateStrategy:
+    rollingUpdate:
+      maxUnavailable: 100%
+      podUpdatePolicy: InPlaceIfPossible
+  network:
+    networkType: AlibabaCloud-NLB-SharedPort
+    networkConf:
+      - name: NlbIds
+        value: nlb-26jbknebrjlejt5abu
+      - name: PortProtocols
+        value: 80/TCP
+      - name: AllowNotReadyContainers
+        value: sidecar
+  gameServerTemplate:
+    spec:
+      containers:
+        - image: registry.cn-beijing.aliyuncs.com/acs/2048:v1.0
+          name: app-2048
+          volumeMounts:
+            - name: shared-dir
+              mountPath: /var/www/html/js
+        - image: registry.cn-beijing.aliyuncs.com/acs/2048-sidecar:v1.0
+          name: sidecar
+          args:
+            - bash
+            - -c
+            - rsync -aP /app/js/* /app/scripts/ && while true; do echo 11;sleep 2; done
+          volumeMounts:
+            - name: shared-dir
+              mountPath: /app/scripts
+      volumes:
+        - name: shared-dir
+          emptyDir: {}
+```
+
+After successful deployment, update the sidecar image to v2.0 and observe the corresponding endpoint:
+
+```bash
+kubectl get ep -w | grep nlb-26jbknebrjlejt5abu
+nlb-26jbknebrjlejt5abu      192.168.0.8:80,192.168.0.82:80,192.168.63.228:80    10m
+
+```
+
+After waiting for the entire update process to end, you can find that there are no changes in the ep, indicating that no extraction has been performed.

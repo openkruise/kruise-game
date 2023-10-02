@@ -325,3 +325,37 @@ func TestGetGsTemplateMetadataHash(t *testing.T) {
 		}
 	}
 }
+
+func TestIsAllowNotReadyContainers(t *testing.T) {
+	tests := []struct {
+		networkConfParams         []gameKruiseV1alpha1.NetworkConfParams
+		isAllowNotReadyContainers bool
+	}{
+		{
+			networkConfParams: []gameKruiseV1alpha1.NetworkConfParams{
+				{
+					Name:  gameKruiseV1alpha1.AllowNotReadyContainersNetworkConfName,
+					Value: "xxx",
+				},
+			},
+			isAllowNotReadyContainers: true,
+		},
+		{
+			networkConfParams: []gameKruiseV1alpha1.NetworkConfParams{
+				{
+					Name:  "xxx",
+					Value: "xxx",
+				},
+			},
+			isAllowNotReadyContainers: false,
+		},
+	}
+
+	for i, test := range tests {
+		actual := IsAllowNotReadyContainers(test.networkConfParams)
+		expect := test.isAllowNotReadyContainers
+		if actual != expect {
+			t.Errorf("case %d: expect isAllowNotReadyContainers is %v but actually got %v", i, expect, actual)
+		}
+	}
+}
