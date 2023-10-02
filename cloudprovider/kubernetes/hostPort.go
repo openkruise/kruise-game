@@ -125,7 +125,7 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 	if err != nil {
 		return pod, errors.NewPluginError(errors.ApiCallError, err.Error())
 	}
-	iip, eip := getAddress(node)
+	nodeIp := getAddress(node)
 
 	networkManager := utils.NewNetworkManager(pod, c)
 	status, _ := networkManager.GetNetworkStatus()
@@ -154,16 +154,24 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 		}
 	}
 
+	// network not ready
+	if len(iNetworkPorts) == 0 || len(eNetworkPorts) == 0 {
+		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
+			CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
+		}, pod)
+		return pod, errors.ToPluginError(err, errors.InternalError)
+	}
+
 	networkStatus := gamekruiseiov1alpha1.NetworkStatus{
 		InternalAddresses: []gamekruiseiov1alpha1.NetworkAddress{
 			{
-				IP:    iip,
+				IP:    pod.Status.PodIP,
 				Ports: iNetworkPorts,
 			},
 		},
 		ExternalAddresses: []gamekruiseiov1alpha1.NetworkAddress{
 			{
-				IP:    eip,
+				IP:    nodeIp,
 				Ports: eNetworkPorts,
 			},
 		},
@@ -285,35 +293,36 @@ func verifyContainerName(containerName string, pod *corev1.Pod) bool {
 	return false
 }
 
-func getAddress(node *corev1.Node) (string, string) {
-	var eip string
-	var iip string
+func getAddress(node *corev1.Node) string {
+	nodeIp := ""
 
 	for _, a := range node.Status.Addresses {
 		if a.Type == corev1.NodeExternalIP && net.ParseIP(a.Address) != nil {
-			eip = a.Address
+			nodeIp = a.Address
 		}
 	}
 
 	for _, a := range node.Status.Addresses {
 		if a.Type == corev1.NodeExternalDNS {
-			eip = a.Address
+			nodeIp = a.Address
 		}
 	}
 
-	for _, a := range node.Status.Addresses {
-		if a.Type == corev1.NodeInternalIP && net.ParseIP(a.Address) != nil {
-			iip = a.Address
+	if nodeIp == "" {
+		for _, a := range node.Status.Addresses {
+			if a.Type == corev1.NodeInternalIP && net.ParseIP(a.Address) != nil {
+				nodeIp = a.Address
+			}
+		}
+
+		for _, a := range node.Status.Addresses {
+			if a.Type == corev1.NodeInternalDNS {
+				nodeIp = a.Address
+			}
 		}
 	}
 
-	for _, a := range node.Status.Addresses {
-		if a.Type == corev1.NodeInternalDNS {
-			iip = a.Address
-		}
-	}
-
-	return iip, eip
+	return nodeIp
 }
 
 func parseConfig(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.Pod) (map[string][]int32, map[string][]corev1.Protocol, int) {
