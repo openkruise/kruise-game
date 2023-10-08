@@ -20,7 +20,6 @@ package atomic
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
@@ -301,7 +300,7 @@ func shouldWriteFile(path string, content []byte) (bool, error) {
 		return true, nil
 	}
 
-	contentOnFs, err := ioutil.ReadFile(path)
+	contentOnFs, err := os.ReadFile(path)
 	if err != nil {
 		return false, err
 	}
@@ -353,7 +352,7 @@ func (w *Writer) pathsToRemove(payload map[string]FileProjection, oldTsDir strin
 
 // newTimestampDir creates a new timestamp directory
 func (w *Writer) newTimestampDir() (string, error) {
-	tsDir, err := ioutil.TempDir(w.targetDir, time.Now().UTC().Format("..2006_01_02_15_04_05."))
+	tsDir, err := os.MkdirTemp(w.targetDir, time.Now().UTC().Format("..2006_01_02_15_04_05."))
 	if err != nil {
 		klog.Error(err, "unable to create new temp directory")
 		return "", err
@@ -386,12 +385,12 @@ func (w *Writer) writePayloadToDir(payload map[string]FileProjection, dir string
 			return err
 		}
 
-		err = ioutil.WriteFile(fullPath, content, mode)
+		err = os.WriteFile(fullPath, content, mode)
 		if err != nil {
 			klog.Error(err, "unable to write file", "file", fullPath, "mode", mode)
 			return err
 		}
-		// Chmod is needed because ioutil.WriteFile() ends up calling
+		// Chmod is needed because os.WriteFile ends up calling
 		// open(2) to create the file, so the final mode used is "mode &
 		// ~umask". But we want to make sure the specified mode is used
 		// in the file no matter what the umask is.
