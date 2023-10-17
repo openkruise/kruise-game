@@ -29,6 +29,7 @@ import (
 	"github.com/openkruise/kruise-game/pkg/metrics"
 	"github.com/openkruise/kruise-game/pkg/webhook"
 	"google.golang.org/grpc"
+	"k8s.io/client-go/rest"
 	"net"
 	"os"
 	"time"
@@ -53,6 +54,8 @@ import (
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
+
+	apiServerSustainedQPSFlag, apiServerBurstQPSFlag int
 )
 
 func init() {
@@ -73,6 +76,7 @@ func main() {
 	var namespace string
 	var syncPeriodStr string
 	var scaleServerAddr string
+
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8082", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
@@ -82,6 +86,8 @@ func main() {
 		"Namespace if specified restricts the manager's cache to watch objects in the desired namespace. Defaults to all namespaces.")
 	flag.StringVar(&syncPeriodStr, "sync-period", "", "Determines the minimum frequency at which watched resources are reconciled.")
 	flag.StringVar(&scaleServerAddr, "scale-server-bind-address", ":6000", "The address the scale server endpoint binds to.")
+	flag.IntVar(&apiServerSustainedQPSFlag, "api-server-qps", 0, "Maximum sustained queries per second to send to the API server")
+	flag.IntVar(&apiServerBurstQPSFlag, "api-server-qps-burst", 0, "Maximum burst queries per second to send to the API server")
 
 	// Add cloud provider flags
 	cloudprovider.InitCloudProviderFlags()
@@ -106,6 +112,8 @@ func main() {
 	}
 
 	restConfig := ctrl.GetConfigOrDie()
+	// set qps and burst
+	setRestConfig(restConfig)
 	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
 		Scheme:                 scheme,
 		MetricsBindAddress:     metricsAddr,
@@ -203,5 +211,14 @@ func main() {
 	if err := mgr.Start(signal); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
+	}
+}
+
+func setRestConfig(c *rest.Config) {
+	if apiServerSustainedQPSFlag > 0 {
+		c.QPS = float32(apiServerSustainedQPSFlag)
+	}
+	if apiServerBurstQPSFlag > 0 {
+		c.Burst = apiServerBurstQPSFlag
 	}
 }
