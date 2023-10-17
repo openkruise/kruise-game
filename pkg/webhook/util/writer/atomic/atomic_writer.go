@@ -390,7 +390,7 @@ func (w *Writer) writePayloadToDir(payload map[string]FileProjection, dir string
 			klog.Error(err, "unable to write file", "file", fullPath, "mode", mode)
 			return err
 		}
-		// Chmod is needed because os.WriteFile ends up calling
+		// Chmod is needed because os.WriteFile() ends up calling
 		// open(2) to create the file, so the final mode used is "mode &
 		// ~umask". But we want to make sure the specified mode is used
 		// in the file no matter what the umask is.
