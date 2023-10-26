@@ -36,6 +36,10 @@ const (
 	GsTemplateMetadataHashKey  = "game.kruise.io/gsTemplate-metadata-hash"
 )
 
+const (
+	InplaceUpdateNotReadyBlocker = "game.kruise.io/inplace-update-not-ready-blocker"
+)
+
 // GameServerSetSpec defines the desired state of GameServerSet
 type GameServerSetSpec struct {
 	// replicas is the desired number of replicas of the given Template.
@@ -68,6 +72,10 @@ type Network struct {
 }
 
 type NetworkConfParams KVParams
+
+const (
+	AllowNotReadyContainersNetworkConfName = "AllowNotReadyContainers"
+)
 
 type KVParams struct {
 	Name  string `json:"name,omitempty"`

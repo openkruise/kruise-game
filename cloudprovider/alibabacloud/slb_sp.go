@@ -7,6 +7,7 @@ import (
 	"github.com/openkruise/kruise-game/cloudprovider"
 	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
+	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -128,6 +129,21 @@ func (s *SlbSpPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context
 	// network not ready
 	if svc.Status.LoadBalancer.Ingress == nil {
 		return pod, nil
+	}
+
+	// allow not ready containers
+	if util.IsAllowNotReadyContainers(networkManager.GetNetworkConfig()) {
+		toUpDateSvc, err := utils.AllowNotReadyContainers(c, ctx, pod, svc, true)
+		if err != nil {
+			return pod, err
+		}
+
+		if toUpDateSvc {
+			err := c.Update(ctx, svc)
+			if err != nil {
+				return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
+			}
+		}
 	}
 
 	// network ready

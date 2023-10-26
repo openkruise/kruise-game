@@ -16,7 +16,10 @@ limitations under the License.
 
 package util
 
-import corev1 "k8s.io/api/core/v1"
+import (
+	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
+)
 
 // GetPodConditionFromList extracts the provided condition from the given list of condition and
 // returns the index of the condition and the condition. Returns -1 and nil if the condition is not present.
@@ -30,4 +33,21 @@ func GetPodConditionFromList(conditions []corev1.PodCondition, conditionType cor
 		}
 	}
 	return -1, nil
+}
+
+func IsContainersPreInplaceUpdating(pod *corev1.Pod, gss *gameKruiseV1alpha1.GameServerSet, containerNames []string) bool {
+	var diffNames []string
+	for _, actual := range pod.Status.ContainerStatuses {
+		for _, expect := range gss.Spec.GameServerTemplate.Spec.Containers {
+			if actual.Name == expect.Name && actual.Image != expect.Image {
+				diffNames = append(diffNames, actual.Name)
+			}
+		}
+	}
+	for _, containerName := range containerNames {
+		if IsStringInList(containerName, diffNames) {
+			return true
+		}
+	}
+	return false
 }

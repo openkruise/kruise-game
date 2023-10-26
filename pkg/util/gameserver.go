@@ -132,6 +132,16 @@ func GetNewAstsFromGss(gss *gameKruiseV1alpha1.GameServerSet, asts *kruiseV1beta
 	readinessGates = append(readinessGates, corev1.PodReadinessGate{ConditionType: appspub.InPlaceUpdateReady})
 	asts.Spec.Template.Spec.ReadinessGates = readinessGates
 
+	// AllowNotReadyContainers
+	if gss.Spec.Network != nil && IsAllowNotReadyContainers(gss.Spec.Network.NetworkConf) {
+		// set lifecycle
+		asts.Spec.Lifecycle = &appspub.Lifecycle{
+			InPlaceUpdate: &appspub.LifecycleHook{
+				LabelsHandler: map[string]string{gameKruiseV1alpha1.InplaceUpdateNotReadyBlocker: "true"},
+			},
+		}
+	}
+
 	// set VolumeClaimTemplates
 	asts.Spec.VolumeClaimTemplates = gss.Spec.GameServerTemplate.VolumeClaimTemplates
 
@@ -209,4 +219,13 @@ func GetGameServerSetOfPod(pod *corev1.Pod, c client.Client, ctx context.Context
 		Name:      gssName,
 	}, gss)
 	return gss, err
+}
+
+func IsAllowNotReadyContainers(networkConfParams []gameKruiseV1alpha1.NetworkConfParams) bool {
+	for _, networkConfParam := range networkConfParams {
+		if networkConfParam.Name == gameKruiseV1alpha1.AllowNotReadyContainersNetworkConfName {
+			return true
+		}
+	}
+	return false
 }

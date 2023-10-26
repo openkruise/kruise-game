@@ -17,6 +17,7 @@ limitations under the License.
 package util
 
 import (
+	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"reflect"
 	"testing"
@@ -56,6 +57,138 @@ func TestGetPodConditionFromList(t *testing.T) {
 		}
 		if !reflect.DeepEqual(*test.podCondition, *actualPodCondition) {
 			t.Errorf("expect to get condition %v but got %v", *test.podCondition, *actualPodCondition)
+		}
+	}
+}
+
+func TestIsContainersPreInplaceUpdating(t *testing.T) {
+	tests := []struct {
+		pod            *corev1.Pod
+		gss            *gameKruiseV1alpha1.GameServerSet
+		containerNames []string
+		isUpdating     bool
+	}{
+		{
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{
+						{
+							Name:  "name_A",
+							Image: "v1.0",
+						},
+						{
+							Name:  "name_B",
+							Image: "v1.0",
+						},
+					},
+				},
+			},
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					GameServerTemplate: gameKruiseV1alpha1.GameServerTemplate{
+						PodTemplateSpec: corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{
+									{
+										Name:  "name_A",
+										Image: "v1.0",
+									},
+									{
+										Name:  "name_B",
+										Image: "v2.0",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			containerNames: []string{"name_B"},
+			isUpdating:     true,
+		},
+		{
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{
+						{
+							Name:  "name_A",
+							Image: "v1.0",
+						},
+						{
+							Name:  "name_B",
+							Image: "v1.0",
+						},
+					},
+				},
+			},
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					GameServerTemplate: gameKruiseV1alpha1.GameServerTemplate{
+						PodTemplateSpec: corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{
+									{
+										Name:  "name_A",
+										Image: "v1.0",
+									},
+									{
+										Name:  "name_B",
+										Image: "v2.0",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			containerNames: []string{"name_A"},
+			isUpdating:     false,
+		},
+		{
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{
+						{
+							Name:  "name_A",
+							Image: "v1.0",
+						},
+						{
+							Name:  "name_B",
+							Image: "v1.0",
+						},
+					},
+				},
+			},
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					GameServerTemplate: gameKruiseV1alpha1.GameServerTemplate{
+						PodTemplateSpec: corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{
+									{
+										Name:  "name_A",
+										Image: "v1.0",
+									},
+									{
+										Name:  "name_B",
+										Image: "v1.0",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			containerNames: []string{"name_B"},
+			isUpdating:     false,
+		},
+	}
+
+	for i, test := range tests {
+		actual := IsContainersPreInplaceUpdating(test.pod, test.gss, test.containerNames)
+		expect := test.isUpdating
+		if actual != expect {
+			t.Errorf("case %d: expect IsContainersPreInplaceUpdating is %v but actually got %v", i, expect, actual)
 		}
 	}
 }

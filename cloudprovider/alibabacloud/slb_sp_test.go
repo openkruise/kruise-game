@@ -3,6 +3,7 @@ package alibabacloud
 import (
 	"fmt"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"reflect"
@@ -118,6 +119,35 @@ func TestParseLbSpConfig(t *testing.T) {
 		podNetConfig := parseLbSpConfig(test.conf)
 		if !reflect.DeepEqual(podNetConfig, test.podNetConfig) {
 			t.Errorf("expect podNetConfig: %v, but actual: %v", test.podNetConfig, podNetConfig)
+		}
+	}
+}
+
+func TestParsePortProtocols(t *testing.T) {
+	tests := []struct {
+		value     string
+		ports     []int
+		protocols []corev1.Protocol
+	}{
+		{
+			value:     "80",
+			ports:     []int{80},
+			protocols: []corev1.Protocol{corev1.ProtocolTCP},
+		},
+		{
+			value:     "8080/UDP,80/TCP",
+			ports:     []int{8080, 80},
+			protocols: []corev1.Protocol{corev1.ProtocolUDP, corev1.ProtocolTCP},
+		},
+	}
+
+	for i, test := range tests {
+		actualPorts, actualProtocols := parsePortProtocols(test.value)
+		if !util.IsSliceEqual(actualPorts, test.ports) {
+			t.Errorf("case %d: expect ports is %v, but actually is %v", i, test.ports, actualPorts)
+		}
+		if !reflect.DeepEqual(actualProtocols, test.protocols) {
+			t.Errorf("case %d: expect protocols is %v, but actually is %v", i, test.protocols, actualProtocols)
 		}
 	}
 }
