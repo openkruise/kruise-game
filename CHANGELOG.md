@@ -1,5 +1,20 @@
 # Change Log
 
+## v0.6.0
+> Change log since v0.5.0
+
+### Features & Enhancements
+- Support auto scaling-up based on minAvailable. https://github.com/openkruise/kruise-game/pull/88
+- Update go version to 1.19. https://github.com/openkruise/kruise-game/pull/104
+- Add GameServerConditions. https://github.com/openkruise/kruise-game/pull/95
+- Add network plugin AlibabaCloud-NLB-SharedPort. https://github.com/openkruise/kruise-game/pull/98
+- Support AllowNotReadyContainers for network plugin. https://github.com/openkruise/kruise-game/pull/98
+- Add qps and burst settings of controller-manager. https://github.com/openkruise/kruise-game/pull/108
+
+### Bug Fixes
+- Fix AlibabaCloud-NATGW network ready condition when multi-ports. https://github.com/openkruise/kruise-game/pull/94
+- Hostport network should be not ready when no ports exist. https://github.com/openkruise/kruise-game/pull/100
+
 ## v0.5.0
 > Change log since v0.4.0
 
