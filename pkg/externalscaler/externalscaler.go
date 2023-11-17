@@ -15,6 +15,7 @@ import (
 
 const (
 	NoneGameServerMinNumberKey = "minAvailable"
+	MaxReplicaCountKey         = "maxReplicaCount"
 )
 
 type ExternalScaler struct {
@@ -90,16 +91,34 @@ func (e *ExternalScaler) GetMetrics(ctx context.Context, metricRequest *GetMetri
 	}
 	if err == nil && noneNum < int(minNum) {
 		desireReplicas := *gss.Spec.Replicas + int32(minNum) - int32(noneNum)
-		klog.Infof("GameServerSet %s/%s desire replicas is %d", ns, name, desireReplicas)
-		return &GetMetricsResponse{
-			MetricValues: []*MetricValue{{
-				MetricName:  "gssReplicas",
-				MetricValue: int64(desireReplicas),
-			}},
-		}, nil
+		maxReplicaCount, err := strconv.ParseInt(metricRequest.ScaledObjectRef.GetScalerMetadata()[MaxReplicaCountKey], 10, 32)
+		// When maxReplicaCount is nil or set failed,  desireReplicas will be determined just by minAvailable.
+		if err != nil {
+			klog.Infof("GameServerSet %s/%s desire replicas is %d", ns, name, desireReplicas)
+			return &GetMetricsResponse{
+				MetricValues: []*MetricValue{{
+					MetricName:  "gssReplicas",
+					MetricValue: int64(desireReplicas),
+				}},
+			}, nil
+		}
+
+		// When maxReplicaCount is set successfully, desireReplicas will be limited by maxReplicaCount.
+		if *gss.Spec.Replicas != int32(maxReplicaCount) {
+			if desireReplicas > int32(maxReplicaCount) {
+				desireReplicas = int32(maxReplicaCount)
+			}
+			klog.Infof("GameServerSet %s/%s desire replicas is %d", ns, name, desireReplicas)
+			return &GetMetricsResponse{
+				MetricValues: []*MetricValue{{
+					MetricName:  "gssReplicas",
+					MetricValue: int64(desireReplicas),
+				}},
+			}, nil
+		}
 	}
 
-	//  scale up those GameServers with WaitToBeDeleted opsState
+	// scale down those GameServers with WaitToBeDeleted opsState
 	isWaitToDelete, _ := labels.NewRequirement(gamekruiseiov1alpha1.GameServerOpsStateKey, selection.Equals, []string{string(gamekruiseiov1alpha1.WaitToDelete)})
 	notDeleting, _ := labels.NewRequirement(gamekruiseiov1alpha1.GameServerStateKey, selection.NotEquals, []string{string(gamekruiseiov1alpha1.Deleting)})
 	podList = &corev1.PodList{}
