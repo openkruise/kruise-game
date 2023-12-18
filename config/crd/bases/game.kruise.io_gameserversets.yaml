@@ -608,6 +608,15 @@ spec:
                 type: array
               updateStrategy:
                 properties:
+                  autoUpdateStrategy:
+                    description: AutoUpdateStrategy means that the update process
+                      will be performed automatically without user intervention.
+                    properties:
+                      type:
+                        type: string
+                    required:
+                    - type
+                    type: object
                   rollingUpdate:
                     description: RollingUpdate is used to communicate parameters when
                       Type is RollingUpdateStatefulSetStrategyType.

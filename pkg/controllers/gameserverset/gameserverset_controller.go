@@ -228,6 +228,16 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return reconcile.Result{}, nil
 	}
 
+	// adjust partition when autoUpdate
+	if gsm.IsNeedToAdjustPartition() {
+		err = gsm.AdjustPartition()
+		if err != nil {
+			klog.Errorf("GameServerSet %s failed to adjust partition in %s,because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
+			return reconcile.Result{}, err
+		}
+		return reconcile.Result{}, nil
+	}
+
 	// update workload
 	if gsm.IsNeedToUpdateWorkload() {
 		err = gsm.UpdateWorkload()

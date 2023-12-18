@@ -90,7 +90,22 @@ type UpdateStrategy struct {
 	// RollingUpdate is used to communicate parameters when Type is RollingUpdateStatefulSetStrategyType.
 	// +optional
 	RollingUpdate *RollingUpdateStatefulSetStrategy `json:"rollingUpdate,omitempty"`
+	// AutoUpdateStrategy means that the update process will be performed automatically without user intervention.
+	// +optional
+	AutoUpdateStrategy *AutoUpdateStrategy `json:"autoUpdateStrategy,omitempty"`
 }
+
+type AutoUpdateStrategy struct {
+	//+kubebuilder:validation:Required
+	Type AutoUpdateStrategyType `json:"type"`
+}
+
+type AutoUpdateStrategyType string
+
+const (
+	// OnlyNewAutoUpdateStrategyType indicates exist GameServers will never be updated, new GameServers will be created in new template.
+	OnlyNewAutoUpdateStrategyType AutoUpdateStrategyType = "OnlyNew"
+)
 
 type RollingUpdateStatefulSetStrategy struct {
 	// Partition indicates the ordinal at which the StatefulSet should be partitioned by default.

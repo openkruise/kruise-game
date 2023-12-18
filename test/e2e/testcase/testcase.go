@@ -71,7 +71,25 @@ func RunTestCases(f *framework.Framework) {
 			gss, err = f.ImageUpdate(gss, client.GameContainerName, "nginx:latest")
 			gomega.Expect(err).To(gomega.BeNil())
 
-			err = f.WaitForUpdated(gss, client.GameContainerName, "nginx:latest")
+			err = f.WaitForUpdated(gss, client.GameContainerName, "nginx:latest", []int{0, 1, 2})
+			gomega.Expect(err).To(gomega.BeNil())
+
+			gss, err = f.AutoUpdateOnlyNew()
+			gomega.Expect(err).To(gomega.BeNil())
+
+			err = f.WaitOnlyNewTakeEffect()
+			gomega.Expect(err).To(gomega.BeNil())
+
+			gss, err = f.ImageUpdate(gss, client.GameContainerName, "nginx:1.9.7")
+			gomega.Expect(err).To(gomega.BeNil())
+
+			gss, err = f.GameServerScale(gss, 5, nil)
+			gomega.Expect(err).To(gomega.BeNil())
+
+			err = f.ExpectGssCorrect(gss, []int{0, 1, 2, 3, 4})
+			gomega.Expect(err).To(gomega.BeNil())
+
+			err = f.WaitForUpdated(gss, client.GameContainerName, "nginx:1.9.7", []int{3, 4})
 			gomega.Expect(err).To(gomega.BeNil())
 		})
 

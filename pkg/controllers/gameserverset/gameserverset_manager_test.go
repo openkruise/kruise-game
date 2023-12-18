@@ -997,3 +997,138 @@ func TestNumberToKill(t *testing.T) {
 		}
 	}
 }
+
+func TestIsNeedToAdjustPartition(t *testing.T) {
+	tests := []struct {
+		gss    *gameKruiseV1alpha1.GameServerSet
+		result bool
+	}{
+		// case 0
+		{
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					Replicas:       pointer.Int32(3),
+					UpdateStrategy: gameKruiseV1alpha1.UpdateStrategy{},
+				},
+			},
+			result: false,
+		},
+
+		// case 1
+		{
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					Replicas: pointer.Int32(3),
+					UpdateStrategy: gameKruiseV1alpha1.UpdateStrategy{
+						AutoUpdateStrategy: &gameKruiseV1alpha1.AutoUpdateStrategy{
+							Type: gameKruiseV1alpha1.OnlyNewAutoUpdateStrategyType,
+						},
+					},
+				},
+			},
+			result: true,
+		},
+
+		// case 2
+		{
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					Replicas: pointer.Int32(3),
+					UpdateStrategy: gameKruiseV1alpha1.UpdateStrategy{
+						RollingUpdate: &gameKruiseV1alpha1.RollingUpdateStatefulSetStrategy{
+							Partition:       pointer.Int32(3),
+							PodUpdatePolicy: kruiseV1beta1.InPlaceIfPossiblePodUpdateStrategyType,
+						},
+						AutoUpdateStrategy: &gameKruiseV1alpha1.AutoUpdateStrategy{
+							Type: gameKruiseV1alpha1.OnlyNewAutoUpdateStrategyType,
+						},
+					},
+				},
+			},
+			result: false,
+		},
+
+		// case 3
+		{
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					Replicas: pointer.Int32(3),
+					UpdateStrategy: gameKruiseV1alpha1.UpdateStrategy{
+						RollingUpdate: &gameKruiseV1alpha1.RollingUpdateStatefulSetStrategy{
+							Partition:       pointer.Int32(2),
+							PodUpdatePolicy: kruiseV1beta1.InPlaceIfPossiblePodUpdateStrategyType,
+						},
+						AutoUpdateStrategy: &gameKruiseV1alpha1.AutoUpdateStrategy{
+							Type: gameKruiseV1alpha1.OnlyNewAutoUpdateStrategyType,
+						},
+					},
+				},
+			},
+			result: true,
+		},
+	}
+
+	for i, test := range tests {
+		manager := &GameServerSetManager{
+			gameServerSet: test.gss,
+		}
+		actual := manager.IsNeedToAdjustPartition()
+		expect := test.result
+		if actual != expect {
+			t.Errorf("case %d: expect IsNeedToAdjustPartition is %v but actually %v", i, expect, actual)
+		}
+	}
+}
+
+func TestAdjustPartition(t *testing.T) {
+	tests := []struct {
+		gss *gameKruiseV1alpha1.GameServerSet
+	}{
+		// case 0
+		{
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "case0",
+				},
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					Replicas: pointer.Int32(3),
+				},
+			},
+		},
+
+		// case 1
+		{
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "case1",
+				},
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					Replicas: pointer.Int32(3),
+					UpdateStrategy: gameKruiseV1alpha1.UpdateStrategy{
+						RollingUpdate: &gameKruiseV1alpha1.RollingUpdateStatefulSetStrategy{
+							Partition: pointer.Int32(4),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for i, test := range tests {
+		objs := []client.Object{test.gss}
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+		manager := &GameServerSetManager{
+			gameServerSet: test.gss,
+			client:        c,
+		}
+		if err := manager.AdjustPartition(); err != nil {
+			t.Error(err)
+		}
+
+		if *manager.gameServerSet.Spec.Replicas != *manager.gameServerSet.Spec.UpdateStrategy.RollingUpdate.Partition {
+			t.Errorf("case %d: Replicas is not equal with Partition", i)
+		}
+	}
+}

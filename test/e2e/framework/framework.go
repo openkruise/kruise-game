@@ -110,6 +110,33 @@ func (f *Framework) GameServerScale(gss *gamekruiseiov1alpha1.GameServerSet, des
 	return f.client.PatchGameServerSet(data)
 }
 
+func (f *Framework) AutoUpdateOnlyNew() (*gamekruiseiov1alpha1.GameServerSet, error) {
+	conJson := map[string]interface{}{"spec": map[string]interface{}{"updateStrategy": map[string]interface{}{"autoUpdateStrategy": map[string]string{"type": "OnlyNew"}}}}
+	data, err := json.Marshal(conJson)
+	if err != nil {
+		return nil, err
+	}
+	return f.client.PatchGameServerSet(data)
+}
+
+func (f *Framework) WaitOnlyNewTakeEffect() error {
+	return wait.PollImmediate(5*time.Second, 3*time.Minute,
+		func() (done bool, err error) {
+			gss, err := f.client.GetGameServerSet()
+			if err != nil {
+				return false, err
+			}
+
+			if gss.Spec.UpdateStrategy.RollingUpdate.Partition == nil {
+				return false, nil
+			}
+			if *gss.Spec.Replicas != *gss.Spec.UpdateStrategy.RollingUpdate.Partition {
+				return false, nil
+			}
+			return true, nil
+		})
+}
+
 func (f *Framework) ImageUpdate(gss *gamekruiseiov1alpha1.GameServerSet, name, image string) (*gamekruiseiov1alpha1.GameServerSet, error) {
 	var newContainers []corev1.Container
 	for _, c := range gss.Spec.GameServerTemplate.Spec.Containers {
@@ -164,7 +191,7 @@ func (f *Framework) WaitForGsCreated(gss *gamekruiseiov1alpha1.GameServerSet) er
 		})
 }
 
-func (f *Framework) WaitForUpdated(gss *gamekruiseiov1alpha1.GameServerSet, name, image string) error {
+func (f *Framework) WaitForUpdated(gss *gamekruiseiov1alpha1.GameServerSet, name, image string, updateIds []int) error {
 	return wait.PollImmediate(10*time.Second, 10*time.Minute,
 		func() (done bool, err error) {
 			gssName := gss.GetName()
@@ -175,24 +202,25 @@ func (f *Framework) WaitForUpdated(gss *gamekruiseiov1alpha1.GameServerSet, name
 			if err != nil {
 				return false, err
 			}
-			updated := 0
 
 			for _, pod := range podList.Items {
-				for _, c := range pod.Status.ContainerStatuses {
-					if name == c.Name && strings.Contains(c.Image, image) {
-						updated++
-						break
+				id := util.GetIndexFromGsName(pod.GetName())
+				if util.IsNumInList(id, updateIds) {
+					// should be updated
+					for _, c := range pod.Status.ContainerStatuses {
+						if name == c.Name && !strings.Contains(c.Image, image) {
+							return false, nil
+						}
 					}
-				}
-			}
-
-			if gss.Spec.UpdateStrategy.RollingUpdate == nil || gss.Spec.UpdateStrategy.RollingUpdate.Partition == nil {
-				if int32(updated) != *gss.Spec.Replicas {
-					return false, nil
-				}
-			} else {
-				if int32(updated) != *gss.Spec.Replicas-*gss.Spec.UpdateStrategy.RollingUpdate.Partition {
-					return false, nil
+					fmt.Printf("id %d updated. Passed.\n", id)
+				} else {
+					// should not be updated
+					for _, c := range pod.Status.ContainerStatuses {
+						if name == c.Name && strings.Contains(c.Image, image) {
+							return false, nil
+						}
+					}
+					fmt.Printf("id %d not updated. Passed.\n", id)
 				}
 			}
 			return true, nil

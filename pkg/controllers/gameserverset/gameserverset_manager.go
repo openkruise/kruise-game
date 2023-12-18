@@ -49,6 +49,8 @@ type Control interface {
 	SyncPodProbeMarker() error
 	SyncGameServerReplicas() error
 	GetReplicasAfterKilling() *int32
+	IsNeedToAdjustPartition() bool
+	AdjustPartition() error
 }
 
 const (
@@ -75,6 +77,26 @@ func NewGameServerSetManager(gss *gameKruiseV1alpha1.GameServerSet, asts *kruise
 		client:        c,
 		eventRecorder: recorder,
 	}
+}
+
+func (manager *GameServerSetManager) AdjustPartition() error {
+	gss := manager.gameServerSet
+	if gss.Spec.UpdateStrategy.RollingUpdate == nil {
+		gss.Spec.UpdateStrategy.RollingUpdate = &gameKruiseV1alpha1.RollingUpdateStatefulSetStrategy{}
+	}
+	gss.Spec.UpdateStrategy.RollingUpdate.Partition = gss.Spec.Replicas
+	return manager.client.Update(context.Background(), gss)
+}
+
+func (manager *GameServerSetManager) IsNeedToAdjustPartition() bool {
+	gss := manager.gameServerSet
+	if gss.Spec.UpdateStrategy.AutoUpdateStrategy == nil {
+		return false
+	}
+	if gss.Spec.UpdateStrategy.AutoUpdateStrategy.Type == gameKruiseV1alpha1.OnlyNewAutoUpdateStrategyType && (gss.Spec.UpdateStrategy.RollingUpdate == nil || gss.Spec.UpdateStrategy.RollingUpdate.Partition == nil || *gss.Spec.Replicas != *gss.Spec.UpdateStrategy.RollingUpdate.Partition) {
+		return true
+	}
+	return false
 }
 
 func (manager *GameServerSetManager) GetReplicasAfterKilling() *int32 {

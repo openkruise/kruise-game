@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/utils/pointer"
@@ -60,6 +61,7 @@ func (client *Client) DeleteNamespace() error {
 }
 
 func (client *Client) DefaultGameServerSet() *gameKruiseV1alpha1.GameServerSet {
+	maxUnavailable := intstr.FromString("100%")
 	return &gameKruiseV1alpha1.GameServerSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      GameServerSet,
@@ -70,6 +72,7 @@ func (client *Client) DefaultGameServerSet() *gameKruiseV1alpha1.GameServerSet {
 			UpdateStrategy: gameKruiseV1alpha1.UpdateStrategy{
 				Type: apps.RollingUpdateStatefulSetStrategyType,
 				RollingUpdate: &gameKruiseV1alpha1.RollingUpdateStatefulSetStrategy{
+					MaxUnavailable:  &maxUnavailable,
 					PodUpdatePolicy: kruiseV1beta1.InPlaceIfPossiblePodUpdateStrategyType,
 				},
 			},
