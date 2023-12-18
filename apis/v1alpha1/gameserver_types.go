@@ -77,15 +77,20 @@ type ServiceQuality struct {
 }
 
 type ServiceQualityCondition struct {
-	Name                     string      `json:"name"`
-	Status                   string      `json:"status,omitempty"`
+	Name   string `json:"name"`
+	Status string `json:"status,omitempty"`
+	// Result indicate the probe message returned by the script
+	Result                   string      `json:"result,omitempty"`
 	LastProbeTime            metav1.Time `json:"lastProbeTime,omitempty"`
 	LastTransitionTime       metav1.Time `json:"lastTransitionTime,omitempty"`
 	LastActionTransitionTime metav1.Time `json:"lastActionTransitionTime,omitempty"`
 }
 
 type ServiceQualityAction struct {
-	State          bool `json:"state"`
+	State bool `json:"state"`
+	// Result indicate the probe message returned by the script.
+	// When Result is defined, it would exec action only when the according Result is actually returns.
+	Result         string `json:"result,omitempty"`
 	GameServerSpec `json:",inline"`
 }
 

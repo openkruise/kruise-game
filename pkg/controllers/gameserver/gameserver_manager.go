@@ -33,6 +33,7 @@ import (
 	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -316,25 +317,29 @@ func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, 
 	for _, sqc := range sqConditions {
 		sqConditionsMap[sqc.Name] = sqc
 	}
+	timeNow := metav1.Now()
 	for _, sq := range serviceQualities {
 		var newSqCondition gameKruiseV1alpha1.ServiceQualityCondition
 		newSqCondition.Name = sq.Name
 		index, podCondition := util.GetPodConditionFromList(podConditions, corev1.PodConditionType(util.AddPrefixGameKruise(sq.Name)))
 		if index != -1 {
+			podConditionMessage := strings.ReplaceAll(podCondition.Message, "|", "")
+			podConditionMessage = strings.ReplaceAll(podConditionMessage, "\n", "")
 			newSqCondition.Status = string(podCondition.Status)
+			newSqCondition.Result = podConditionMessage
 			newSqCondition.LastProbeTime = podCondition.LastProbeTime
 			var lastActionTransitionTime metav1.Time
 			sqCondition, exist := sqConditionsMap[sq.Name]
-			if !exist || (sqCondition.Status != string(podCondition.Status) && (sqCondition.LastActionTransitionTime.IsZero() || !sq.Permanent)) {
+			if !exist || ((sqCondition.Status != string(podCondition.Status) || (sqCondition.Result != podConditionMessage)) && (sqCondition.LastActionTransitionTime.IsZero() || !sq.Permanent)) {
 				// exec action
 				for _, action := range sq.ServiceQualityAction {
 					state, err := strconv.ParseBool(string(podCondition.Status))
-					if err == nil && state == action.State {
+					if err == nil && state == action.State && (action.Result == "" || podConditionMessage == action.Result) {
 						spec.DeletionPriority = action.DeletionPriority
 						spec.UpdatePriority = action.UpdatePriority
 						spec.OpsState = action.OpsState
 						spec.NetworkDisabled = action.NetworkDisabled
-						lastActionTransitionTime = metav1.Now()
+						lastActionTransitionTime = timeNow
 					}
 				}
 			} else {
@@ -342,7 +347,13 @@ func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, 
 			}
 			newSqCondition.LastActionTransitionTime = lastActionTransitionTime
 		}
-		newSqCondition.LastTransitionTime = metav1.Now()
+
+		// Set LastTransitionTime, which depends on which value, the LastActionTransitionTime or LastProbeTime, is closer to the current time.
+		if timeNow.Sub(newSqCondition.LastActionTransitionTime.Time) < timeNow.Sub(newSqCondition.LastProbeTime.Time) {
+			newSqCondition.LastTransitionTime = newSqCondition.LastActionTransitionTime
+		} else {
+			newSqCondition.LastTransitionTime = newSqCondition.LastProbeTime
+		}
 		newGsConditions = append(newGsConditions, newSqCondition)
 	}
 	return spec, newGsConditions
