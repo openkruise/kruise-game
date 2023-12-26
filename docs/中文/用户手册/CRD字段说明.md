@@ -202,7 +202,25 @@ type GameServerSpec struct {
 
    // 是否进行网络隔离、切断接入层网络，默认为false
    NetworkDisabled  bool                `json:"networkDisabled,omitempty"`
+   
+   // 使对应的GameServer Containers字段与GameServerSetSpec中GameServerTemplate定义的字段不同，意味着该GameServer可以拥有独立的参数配置。
+   // 当前支持更改 Image 与 Resources
+   Containers []GameServerContainer `json:"containers,omitempty"`
 }
+
+type GameServerContainer struct {
+    // Name 表示要更新的容器的名称。
+    Name string `json:"name"`
+    
+    // Image 表示要更新的容器的镜像。
+    // 当Image更新时，pod.spec.containers[*].image会立即更新。
+    Image string `json:"image,omitempty"`
+    
+    // Resources 表示要更新的容器的资源。
+    // 当Resources更新时，pod.spec.containers[*].Resources不会立即更新，它会在pod重建时更新。
+    Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+}
+
 ```
 
 ### GameServerStatus

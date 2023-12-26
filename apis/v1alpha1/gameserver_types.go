@@ -41,6 +41,21 @@ type GameServerSpec struct {
 	UpdatePriority   *intstr.IntOrString `json:"updatePriority,omitempty"`
 	DeletionPriority *intstr.IntOrString `json:"deletionPriority,omitempty"`
 	NetworkDisabled  bool                `json:"networkDisabled,omitempty"`
+	// Containers can be used to make the corresponding GameServer container fields
+	// different from the fields defined by GameServerTemplate in GameServerSetSpec.
+	Containers []GameServerContainer `json:"containers,omitempty"`
+}
+
+type GameServerContainer struct {
+	// Name indicates the name of the container to update.
+	Name string `json:"name"`
+	// Image indicates the image of the container to update.
+	// When Image updated, pod.spec.containers[*].image will be updated immediately.
+	Image string `json:"image,omitempty"`
+	// Resources indicates the resources of the container to update.
+	// When Resources updated, pod.spec.containers[*].Resources will be not updated immediately,
+	// which will be updated when pod recreate.
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 type GameServerState string

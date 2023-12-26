@@ -173,8 +173,17 @@ func (manager GameServerManager) SyncGsToPod() error {
 		}
 	}
 
-	if len(newLabels) != 0 || len(newAnnotations) != 0 {
-		patchPod := map[string]interface{}{"metadata": map[string]map[string]string{"labels": newLabels, "annotations": newAnnotations}}
+	// sync pod containers when the containers(images) in GameServer are different from that in pod.
+	containers := manager.syncPodContainers(gs.Spec.Containers, pod.DeepCopy().Spec.Containers)
+
+	if len(newLabels) != 0 || len(newAnnotations) != 0 || containers != nil {
+		patchPod := make(map[string]interface{})
+		if len(newLabels) != 0 || len(newAnnotations) != 0 {
+			patchPod["metadata"] = map[string]map[string]string{"labels": newLabels, "annotations": newAnnotations}
+		}
+		if containers != nil {
+			patchPod["spec"] = map[string]interface{}{"containers": containers}
+		}
 		patchPodBytes, err := json.Marshal(patchPod)
 		if err != nil {
 			return err
@@ -346,6 +355,29 @@ func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, 
 		newGsConditions = append(newGsConditions, newSqCondition)
 	}
 	return spec, newGsConditions
+}
+
+func (manager GameServerManager) syncPodContainers(gsContainers []gameKruiseV1alpha1.GameServerContainer, podContainers []corev1.Container) []corev1.Container {
+	var newContainers []corev1.Container
+	for _, podContainer := range podContainers {
+		for _, gsContainer := range gsContainers {
+			if gsContainer.Name == podContainer.Name {
+				var newContainer corev1.Container
+				newContainer.Name = podContainer.Name
+				changed := false
+				if gsContainer.Image != "" && gsContainer.Image != podContainer.Image {
+					newContainer.Image = gsContainer.Image
+					changed = true
+				}
+
+				if changed {
+					newContainers = append(newContainers, newContainer)
+				}
+			}
+		}
+	}
+
+	return newContainers
 }
 
 func NewGameServerManager(gs *gameKruiseV1alpha1.GameServer, pod *corev1.Pod, c client.Client, recorder record.EventRecorder) Control {

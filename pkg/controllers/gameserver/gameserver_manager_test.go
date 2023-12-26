@@ -569,3 +569,58 @@ func TestSyncNetworkStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestSyncPodContainers(t *testing.T) {
+	tests := []struct {
+		gsContainers  []gameKruiseV1alpha1.GameServerContainer
+		podContainers []corev1.Container
+		newContainers []corev1.Container
+	}{
+		// case 0
+		{
+			gsContainers: nil,
+			podContainers: []corev1.Container{
+				{
+					Name:  "A",
+					Image: "A-v1",
+				},
+			},
+			newContainers: nil,
+		},
+
+		// case 1
+		{
+			gsContainers: []gameKruiseV1alpha1.GameServerContainer{
+				{
+					Name:  "A",
+					Image: "A-v2",
+				},
+			},
+			podContainers: []corev1.Container{
+				{
+					Name:  "A",
+					Image: "A-v1",
+				},
+				{
+					Name:  "B",
+					Image: "B-v1",
+				},
+			},
+			newContainers: []corev1.Container{
+				{
+					Name:  "A",
+					Image: "A-v2",
+				},
+			},
+		},
+	}
+
+	for i, test := range tests {
+		expect := test.newContainers
+		manager := &GameServerManager{}
+		actual := manager.syncPodContainers(test.gsContainers, test.podContainers)
+		if !reflect.DeepEqual(expect, actual) {
+			t.Errorf("case %d: expect newContainers %v, but actually got %v", i, expect, actual)
+		}
+	}
+}
