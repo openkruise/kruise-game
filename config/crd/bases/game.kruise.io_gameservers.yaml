@@ -855,6 +855,10 @@ spec:
                       type: string
                     name:
                       type: string
+                    result:
+                      description: Result indicate the probe message returned by the
+                        script
+                      type: string
                     status:
                       type: string
                   required:

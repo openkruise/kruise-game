@@ -544,6 +544,11 @@ spec:
                             type: boolean
                           opsState:
                             type: string
+                          result:
+                            description: Result indicate the probe message returned
+                              by the script. When Result is defined, it would exec
+                              action only when the according Result is actually returns.
+                            type: string
                           state:
                             type: boolean
                           updatePriority:

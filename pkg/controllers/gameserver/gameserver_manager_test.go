@@ -42,6 +42,7 @@ func TestSyncServiceQualities(t *testing.T) {
 		spec             gameKruiseV1alpha1.GameServerSpec
 		newSqConditions  []gameKruiseV1alpha1.ServiceQualityCondition
 	}{
+		//case 0
 		{
 			serviceQualities: []gameKruiseV1alpha1.ServiceQuality{
 				{
@@ -88,6 +89,7 @@ func TestSyncServiceQualities(t *testing.T) {
 				},
 			},
 		},
+		// case 1
 		{
 			serviceQualities: []gameKruiseV1alpha1.ServiceQuality{
 				{
@@ -139,6 +141,7 @@ func TestSyncServiceQualities(t *testing.T) {
 				},
 			},
 		},
+		// case 2
 		{
 			serviceQualities: []gameKruiseV1alpha1.ServiceQuality{
 				{
@@ -175,6 +178,7 @@ func TestSyncServiceQualities(t *testing.T) {
 				},
 			},
 		},
+		// case 3
 		{
 			serviceQualities: []gameKruiseV1alpha1.ServiceQuality{
 				{
@@ -212,6 +216,7 @@ func TestSyncServiceQualities(t *testing.T) {
 				},
 			},
 		},
+		// case 4
 		{
 			serviceQualities: []gameKruiseV1alpha1.ServiceQuality{
 				{
@@ -265,17 +270,131 @@ func TestSyncServiceQualities(t *testing.T) {
 				},
 			},
 		},
+		// case 5
+		{
+			serviceQualities: []gameKruiseV1alpha1.ServiceQuality{
+				{
+					Name:      "multi-return",
+					Permanent: false,
+					ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{
+						{
+							State:  true,
+							Result: "A",
+							GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
+								OpsState: "A",
+							},
+						},
+						{
+							State:  true,
+							Result: "B",
+							GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
+								OpsState: "B",
+							},
+						},
+						{
+							State:  true,
+							Result: "C",
+							GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
+								OpsState: "C",
+							},
+						},
+					},
+				},
+			},
+			podConditions: []corev1.PodCondition{
+				{
+					Type:          "game.kruise.io/multi-return",
+					Status:        corev1.ConditionTrue,
+					Message:       "B",
+					LastProbeTime: fakeProbeTime,
+				},
+			},
+			sqConditions: nil,
+			spec: gameKruiseV1alpha1.GameServerSpec{
+				OpsState: "B",
+			},
+			newSqConditions: []gameKruiseV1alpha1.ServiceQualityCondition{
+				{
+					Name:                     "multi-return",
+					Result:                   "B",
+					Status:                   string(corev1.ConditionTrue),
+					LastProbeTime:            fakeProbeTime,
+					LastActionTransitionTime: fakeActionTime,
+				},
+			},
+		},
+		// case 6
+		{
+			serviceQualities: []gameKruiseV1alpha1.ServiceQuality{
+				{
+					Name:      "multi-return",
+					Permanent: false,
+					ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{
+						{
+							State:  true,
+							Result: "A",
+							GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
+								OpsState: "A",
+							},
+						},
+						{
+							State:  true,
+							Result: "B",
+							GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
+								OpsState: "B",
+							},
+						},
+						{
+							State:  true,
+							Result: "C",
+							GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
+								OpsState: "C",
+							},
+						},
+					},
+				},
+			},
+			podConditions: []corev1.PodCondition{
+				{
+					Type:          "game.kruise.io/multi-return",
+					Status:        corev1.ConditionTrue,
+					Message:       "A",
+					LastProbeTime: fakeProbeTime,
+				},
+			},
+			sqConditions: []gameKruiseV1alpha1.ServiceQualityCondition{
+				{
+					Name:                     "multi-return",
+					Result:                   "B",
+					Status:                   string(corev1.ConditionTrue),
+					LastProbeTime:            fakeProbeTime,
+					LastActionTransitionTime: fakeActionTime,
+				},
+			},
+			spec: gameKruiseV1alpha1.GameServerSpec{
+				OpsState: "A",
+			},
+			newSqConditions: []gameKruiseV1alpha1.ServiceQualityCondition{
+				{
+					Name:                     "multi-return",
+					Result:                   "A",
+					Status:                   string(corev1.ConditionTrue),
+					LastProbeTime:            fakeProbeTime,
+					LastActionTransitionTime: fakeActionTime,
+				},
+			},
+		},
 	}
 
-	for _, test := range tests {
+	for i, test := range tests {
 		actualSpec, actualNewSqConditions := syncServiceQualities(test.serviceQualities, test.podConditions, test.sqConditions)
 		expectSpec := test.spec
 		expectNewSqConditions := test.newSqConditions
 		if !reflect.DeepEqual(actualSpec, expectSpec) {
-			t.Errorf("expect spec %v but got %v", expectSpec, actualSpec)
+			t.Errorf("case %d: expect spec %v but got %v", i, expectSpec, actualSpec)
 		}
 		if len(actualNewSqConditions) != len(expectNewSqConditions) {
-			t.Errorf("expect sq conditions len %v but got %v", len(expectNewSqConditions), len(actualNewSqConditions))
+			t.Errorf("case %d: expect sq conditions len %v but got %v", i, len(expectNewSqConditions), len(actualNewSqConditions))
 		}
 		for _, expectNewSqCondition := range expectNewSqConditions {
 			exist := false
@@ -283,19 +402,19 @@ func TestSyncServiceQualities(t *testing.T) {
 				if actualNewSqCondition.Name == expectNewSqCondition.Name {
 					exist = true
 					if actualNewSqCondition.Status != expectNewSqCondition.Status {
-						t.Errorf("expect sq condition status %v but got %v", expectNewSqCondition.Status, actualNewSqCondition.Status)
+						t.Errorf("case %d: expect sq condition status %v but got %v", i, expectNewSqCondition.Status, actualNewSqCondition.Status)
 					}
 					if actualNewSqCondition.LastProbeTime != expectNewSqCondition.LastProbeTime {
-						t.Errorf("expect sq condition LastProbeTime %v but got %v", expectNewSqCondition.LastProbeTime, actualNewSqCondition.LastProbeTime)
+						t.Errorf("case %d: expect sq condition LastProbeTime %v but got %v", i, expectNewSqCondition.LastProbeTime, actualNewSqCondition.LastProbeTime)
 					}
 					if actualNewSqCondition.LastActionTransitionTime.IsZero() != expectNewSqCondition.LastActionTransitionTime.IsZero() {
-						t.Errorf("expect sq condition LastActionTransitionTime IsZero %v but got %v", expectNewSqCondition.LastActionTransitionTime.IsZero(), actualNewSqCondition.LastActionTransitionTime.IsZero())
+						t.Errorf("case %d: expect sq condition LastActionTransitionTime IsZero %v but got %v", i, expectNewSqCondition.LastActionTransitionTime.IsZero(), actualNewSqCondition.LastActionTransitionTime.IsZero())
 					}
 					break
 				}
 			}
 			if !exist {
-				t.Errorf("expect sq condition %s exist, but actually not", expectNewSqCondition.Name)
+				t.Errorf("case %d: expect sq condition %s exist, but actually not", i, expectNewSqCondition.Name)
 			}
 		}
 	}
