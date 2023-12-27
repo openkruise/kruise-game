@@ -20,10 +20,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider/errors"
 	"github.com/openkruise/kruise-game/cloudprovider/manager"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	"net/http"
@@ -56,11 +60,20 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
 
+	if req.Operation == admissionv1.Create {
+		pod, err = patchContainers(pmh.Client, pod, ctx)
+		if err != nil {
+			msg := fmt.Sprintf("Pod %s/%s patchContainers failed, because of %s", pod.Namespace, pod.Name, err.Error())
+			return admission.Denied(msg)
+		}
+	}
+
 	// get the plugin according to pod
 	plugin, ok := pmh.CloudProviderManager.FindAvailablePlugins(pod)
 	if !ok {
 		msg := fmt.Sprintf("Pod %s/%s has no available plugin", pod.Namespace, pod.Name)
-		return admission.Allowed(msg)
+		klog.Infof(msg)
+		return getAdmissionResponse(req, patchResult{pod: pod, err: nil})
 	}
 
 	// define context with timeout
@@ -135,4 +148,64 @@ func NewPodMutatingHandler(client client.Client, decoder *admission.Decoder, cpm
 		CloudProviderManager: cpm,
 		eventRecorder:        recorder,
 	}
+}
+
+func patchContainers(client client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, error) {
+	if _, ok := pod.GetLabels()[gameKruiseV1alpha1.GameServerOwnerGssKey]; !ok {
+		return pod, nil
+	}
+	gs := &gameKruiseV1alpha1.GameServer{}
+	err := client.Get(ctx, types.NamespacedName{
+		Namespace: pod.GetNamespace(),
+		Name:      pod.GetName(),
+	}, gs)
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return pod, nil
+		}
+		return pod, err
+	}
+	if gs.Spec.Containers != nil {
+		var containers []corev1.Container
+		for _, podContainer := range pod.Spec.Containers {
+			container := podContainer
+			for _, gsContainer := range gs.Spec.Containers {
+				if gsContainer.Name == podContainer.Name {
+					// patch Image
+					if gsContainer.Image != podContainer.Image {
+						container.Image = gsContainer.Image
+					}
+
+					// patch Resources
+					if limitCPU, ok := gsContainer.Resources.Limits[corev1.ResourceCPU]; ok {
+						if container.Resources.Limits == nil {
+							container.Resources.Limits = make(map[corev1.ResourceName]resource.Quantity)
+						}
+						container.Resources.Limits[corev1.ResourceCPU] = limitCPU
+					}
+					if limitMemory, ok := gsContainer.Resources.Limits[corev1.ResourceMemory]; ok {
+						if container.Resources.Limits == nil {
+							container.Resources.Limits = make(map[corev1.ResourceName]resource.Quantity)
+						}
+						container.Resources.Limits[corev1.ResourceMemory] = limitMemory
+					}
+					if requestCPU, ok := gsContainer.Resources.Requests[corev1.ResourceCPU]; ok {
+						if container.Resources.Requests == nil {
+							container.Resources.Requests = make(map[corev1.ResourceName]resource.Quantity)
+						}
+						container.Resources.Requests[corev1.ResourceCPU] = requestCPU
+					}
+					if requestMemory, ok := gsContainer.Resources.Requests[corev1.ResourceMemory]; ok {
+						if container.Resources.Requests == nil {
+							container.Resources.Requests = make(map[corev1.ResourceName]resource.Quantity)
+						}
+						container.Resources.Requests[corev1.ResourceMemory] = requestMemory
+					}
+				}
+			}
+			containers = append(containers, container)
+		}
+		pod.Spec.Containers = containers
+	}
+	return pod, nil
 }

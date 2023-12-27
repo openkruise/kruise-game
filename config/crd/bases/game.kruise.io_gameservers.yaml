@@ -58,6 +58,54 @@ spec:
           spec:
             description: GameServerSpec defines the desired state of GameServer
             properties:
+              containers:
+                description: Containers can be used to make the corresponding GameServer
+                  container fields different from the fields defined by GameServerTemplate
+                  in GameServerSetSpec.
+                items:
+                  properties:
+                    image:
+                      description: Image indicates the image of the container to update.
+                        When Image updated, pod.spec.containers[*].image will be updated
+                        immediately.
+                      type: string
+                    name:
+                      description: Name indicates the name of the container to update.
+                      type: string
+                    resources:
+                      description: Resources indicates the resources of the container
+                        to update. When Resources updated, pod.spec.containers[*].Resources
+                        will be not updated immediately, which will be updated when
+                        pod recreate.
+                      properties:
+                        limits:
+                          additionalProperties:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          description: 'Limits describes the maximum amount of compute
+                            resources allowed. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
+                          type: object
+                        requests:
+                          additionalProperties:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          description: 'Requests describes the minimum amount of compute
+                            resources required. If Requests is omitted for a container,
+                            it defaults to Limits if that is explicitly specified,
+                            otherwise to an implementation-defined value. More info:
+                            https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
+                          type: object
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
               deletionPriority:
                 anyOf:
                 - type: integer
