@@ -252,12 +252,6 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return reconcile.Result{}, err
 	}
 
-	err = gsm.SyncGameServerReplicas()
-	if err != nil {
-		klog.Errorf("GameServerSet %s failed to adjust the replicas of GameServers to match that of Pods in %s, because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
-		return reconcile.Result{}, err
-	}
-
 	return ctrl.Result{}, nil
 }
 

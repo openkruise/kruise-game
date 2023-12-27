@@ -64,7 +64,21 @@ type GameServerTemplate struct {
 	// +kubebuilder:validation:Schemaless
 	corev1.PodTemplateSpec `json:",inline"`
 	VolumeClaimTemplates   []corev1.PersistentVolumeClaim `json:"volumeClaimTemplates,omitempty"`
+	// ReclaimPolicy indicates the reclaim policy for GameServer.
+	// Default is Cascade.
+	ReclaimPolicy GameServerReclaimPolicy `json:"reclaimPolicy,omitempty"`
 }
+
+type GameServerReclaimPolicy string
+
+const (
+	// CascadeGameServerReclaimPolicy indicates that GameServer is deleted when the pod is deleted.
+	// The age of GameServer is exactly the same as that of the pod.
+	CascadeGameServerReclaimPolicy GameServerReclaimPolicy = "Cascade"
+	// DeleteGameServerReclaimPolicy indicates that GameServers will be deleted when replicas of GameServerSet decreases.
+	// The GameServer will not be deleted when the corresponding pod is deleted due to manual deletion, update, eviction, etc.
+	DeleteGameServerReclaimPolicy GameServerReclaimPolicy = "Delete"
+)
 
 type Network struct {
 	NetworkType string              `json:"networkType,omitempty"`

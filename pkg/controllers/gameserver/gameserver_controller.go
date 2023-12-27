@@ -26,7 +26,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
@@ -173,8 +172,15 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	if podFound && !gsFound {
-		err := r.initGameServer(pod)
-		if err != nil && !errors.IsAlreadyExists(err) && !errors.IsNotFound(err) {
+		gss, err := r.getGameServerSet(pod)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				return reconcile.Result{}, nil
+			}
+			return reconcile.Result{}, err
+		}
+		err = r.initGameServerByPod(gss, pod)
+		if err != nil && !errors.IsAlreadyExists(err) {
 			klog.Errorf("failed to create GameServer %s in %s, because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
 			return reconcile.Result{}, err
 		}
@@ -237,57 +243,24 @@ func (r *GameServerReconciler) getGameServerSet(pod *corev1.Pod) (*gamekruiseiov
 	return gss, err
 }
 
-func (r *GameServerReconciler) initGameServer(pod *corev1.Pod) error {
-	gs := &gamekruiseiov1alpha1.GameServer{}
-	gs.Name = pod.GetName()
-	gs.Namespace = pod.GetNamespace()
+func (r *GameServerReconciler) initGameServerByPod(gss *gamekruiseiov1alpha1.GameServerSet, pod *corev1.Pod) error {
+	// default fields
+	gs := util.InitGameServer(gss, pod.Name)
 
-	// set owner reference
-	gss, err := r.getGameServerSet(pod)
-	if err != nil {
-		return err
+	if gss.Spec.GameServerTemplate.ReclaimPolicy == gamekruiseiov1alpha1.CascadeGameServerReclaimPolicy || gss.Spec.GameServerTemplate.ReclaimPolicy == "" {
+		// rewrite ownerReferences
+		ors := make([]metav1.OwnerReference, 0)
+		or := metav1.OwnerReference{
+			APIVersion:         pod.APIVersion,
+			Kind:               pod.Kind,
+			Name:               pod.GetName(),
+			UID:                pod.GetUID(),
+			Controller:         pointer.BoolPtr(true),
+			BlockOwnerDeletion: pointer.BoolPtr(true),
+		}
+		ors = append(ors, or)
+		gs.OwnerReferences = ors
 	}
-	ors := make([]metav1.OwnerReference, 0)
-	or := metav1.OwnerReference{
-		APIVersion:         gss.APIVersion,
-		Kind:               gss.Kind,
-		Name:               gss.GetName(),
-		UID:                gss.GetUID(),
-		Controller:         pointer.BoolPtr(true),
-		BlockOwnerDeletion: pointer.BoolPtr(true),
-	}
-	ors = append(ors, or)
-	gs.OwnerReferences = ors
-
-	// set Labels
-	gsLabels := gss.Spec.GameServerTemplate.GetLabels()
-	if gsLabels == nil {
-		gsLabels = make(map[string]string)
-	}
-	gsLabels[gamekruiseiov1alpha1.GameServerOwnerGssKey] = gss.GetName()
-	gs.SetLabels(gsLabels)
-
-	// set Annotations
-	gsAnnotations := gss.Spec.GameServerTemplate.GetAnnotations()
-	if gsAnnotations == nil {
-		gsAnnotations = make(map[string]string)
-	}
-	gsAnnotations[gamekruiseiov1alpha1.GsTemplateMetadataHashKey] = util.GetGsTemplateMetadataHash(gss)
-	gs.SetAnnotations(gsAnnotations)
-
-	// set NetWork
-	gs.Spec.NetworkDisabled = false
-
-	// set OpsState
-	gs.Spec.OpsState = gamekruiseiov1alpha1.None
-
-	// set UpdatePriority
-	updatePriority := intstr.FromInt(0)
-	gs.Spec.UpdatePriority = &updatePriority
-
-	// set deletionPriority
-	deletionPriority := intstr.FromInt(0)
-	gs.Spec.DeletionPriority = &deletionPriority
 
 	return r.Client.Create(context.Background(), gs)
 }
