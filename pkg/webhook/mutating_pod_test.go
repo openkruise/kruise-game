@@ -118,6 +118,51 @@ func TestPatchContainers(t *testing.T) {
 				},
 			},
 		},
+
+		// case 2
+		{
+			gs: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{
+					Containers: []gameKruiseV1alpha1.GameServerContainer{
+						{
+							Name: "A",
+							Resources: corev1.ResourceRequirements{
+								Requests: map[corev1.ResourceName]resource.Quantity{
+									corev1.ResourceCPU: resource.MustParse("1"),
+								},
+							},
+						},
+					},
+				},
+			},
+			oldPod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						gameKruiseV1alpha1.GameServerOwnerGssKey: "xxx",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "A",
+							Image: "A-v1",
+						},
+					},
+				},
+			},
+
+			newContainers: []corev1.Container{
+				{
+					Name:  "A",
+					Image: "A-v1",
+					Resources: corev1.ResourceRequirements{
+						Requests: map[corev1.ResourceName]resource.Quantity{
+							corev1.ResourceCPU: resource.MustParse("1"),
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for i, test := range tests {

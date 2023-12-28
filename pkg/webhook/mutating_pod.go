@@ -172,7 +172,7 @@ func patchContainers(client client.Client, pod *corev1.Pod, ctx context.Context)
 			for _, gsContainer := range gs.Spec.Containers {
 				if gsContainer.Name == podContainer.Name {
 					// patch Image
-					if gsContainer.Image != podContainer.Image {
+					if gsContainer.Image != podContainer.Image && gsContainer.Image != "" {
 						container.Image = gsContainer.Image
 					}
 

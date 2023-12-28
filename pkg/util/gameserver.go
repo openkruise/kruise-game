@@ -19,7 +19,6 @@ package util
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	appspub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
@@ -200,9 +199,6 @@ func GetAstsHash(gss *gameKruiseV1alpha1.GameServerSet) string {
 }
 
 func GetGsTemplateMetadataHash(gss *gameKruiseV1alpha1.GameServerSet) string {
-	fmt.Println(gss.Spec.GameServerTemplate.GetLabels())
-	fmt.Println(gss.Spec.GameServerTemplate.GetAnnotations())
-
 	return GetHash(metav1.ObjectMeta{
 		Labels:      gss.Spec.GameServerTemplate.GetLabels(),
 		Annotations: gss.Spec.GameServerTemplate.GetAnnotations(),
