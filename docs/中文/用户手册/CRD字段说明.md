@@ -72,7 +72,23 @@ type GameServerTemplate struct {
 
     // 对持久卷的请求和声明
     VolumeClaimTemplates   []corev1.PersistentVolumeClaim `json:"volumeClaimTemplates,omitempty"`
+    
+    // ReclaimPolicy 表明GameServer的回收策略
+    // 当前支持两种，Cascade与Delete。默认为Cascade
+    ReclaimPolicy GameServerReclaimPolicy `json:"reclaimPolicy,omitempty"`
 }
+
+type GameServerReclaimPolicy string
+
+const (
+    // Cascade 表明pod删除时GameServer一并删除。GameServer的生命周期与pod相同
+    CascadeGameServerReclaimPolicy GameServerReclaimPolicy = "Cascade"
+    
+    // Delete 表明 GameServers 只会在GameServerSet副本数目减少时被删除。
+    // 当对应的pod被手动删除、更新重建、被驱逐时，GameServer都不会被删除。
+    DeleteGameServerReclaimPolicy GameServerReclaimPolicy = "Delete"
+)
+
 ```
 
 ### UpdateStrategy

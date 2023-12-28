@@ -20,6 +20,9 @@ import (
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/pointer"
+	"reflect"
 	"sort"
 	"testing"
 )
@@ -356,6 +359,84 @@ func TestIsAllowNotReadyContainers(t *testing.T) {
 		expect := test.isAllowNotReadyContainers
 		if actual != expect {
 			t.Errorf("case %d: expect isAllowNotReadyContainers is %v but actually got %v", i, expect, actual)
+		}
+	}
+}
+
+func TestInitGameServer(t *testing.T) {
+	updatePriority := intstr.FromInt(0)
+	deletionPriority := intstr.FromInt(0)
+
+	tests := []struct {
+		gss  *gameKruiseV1alpha1.GameServerSet
+		name string
+		gs   *gameKruiseV1alpha1.GameServer
+	}{
+		{
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "GameServerSet",
+					APIVersion: "game.kruise.io/v1alpha1",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "case0",
+					UID:       "xxx0",
+				},
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					GameServerTemplate: gameKruiseV1alpha1.GameServerTemplate{
+						PodTemplateSpec: corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Labels: map[string]string{
+									"label-key": "label-value",
+								},
+							},
+						},
+					},
+				},
+			},
+			name: "case0-1",
+			gs: &gameKruiseV1alpha1.GameServer{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "case0-1",
+					Namespace: "xxx",
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							Kind:               "GameServerSet",
+							APIVersion:         "game.kruise.io/v1alpha1",
+							Name:               "case0",
+							UID:                "xxx0",
+							Controller:         pointer.BoolPtr(true),
+							BlockOwnerDeletion: pointer.BoolPtr(true),
+						},
+					},
+					Labels: map[string]string{
+						"label-key":                              "label-value",
+						gameKruiseV1alpha1.GameServerOwnerGssKey: "case0",
+					},
+					Annotations: map[string]string{
+						gameKruiseV1alpha1.GsTemplateMetadataHashKey: GetHash(metav1.ObjectMeta{
+							Labels: map[string]string{
+								"label-key": "label-value",
+							},
+						}),
+					},
+				},
+				Spec: gameKruiseV1alpha1.GameServerSpec{
+					NetworkDisabled:  false,
+					OpsState:         gameKruiseV1alpha1.None,
+					UpdatePriority:   &updatePriority,
+					DeletionPriority: &deletionPriority,
+				},
+			},
+		},
+	}
+
+	for i, test := range tests {
+		expect := test.gs
+		actual := InitGameServer(test.gss, test.name)
+		if !reflect.DeepEqual(expect, actual) {
+			t.Errorf("case %d: expect generated GameServer is %v but actually got %v", i, expect, actual)
 		}
 	}
 }

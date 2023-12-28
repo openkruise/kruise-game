@@ -8,7 +8,6 @@ import (
 	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -16,6 +15,7 @@ import (
 	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"strconv"
 	"testing"
 )
 
@@ -39,6 +39,7 @@ func TestComputeToScaleGs(t *testing.T) {
 		scaleDownStrategyType gameKruiseV1alpha1.ScaleDownStrategyType
 		pods                  []corev1.Pod
 		newReserveIds         []int
+		newManageIds          []int
 	}{
 		{
 			newGssReserveIds:      []int{2, 3, 4},
@@ -85,6 +86,7 @@ func TestComputeToScaleGs(t *testing.T) {
 				},
 			},
 			newReserveIds: []int{2, 3, 4, 5},
+			newManageIds:  []int{0, 1, 6},
 		},
 		{
 			newGssReserveIds:      []int{0, 2, 3},
@@ -140,6 +142,7 @@ func TestComputeToScaleGs(t *testing.T) {
 				},
 			},
 			newReserveIds: []int{0, 2, 3, 4, 5},
+			newManageIds:  []int{1, 6, 7},
 		},
 		{
 			newGssReserveIds:      []int{0},
@@ -195,6 +198,7 @@ func TestComputeToScaleGs(t *testing.T) {
 				},
 			},
 			newReserveIds: []int{0},
+			newManageIds:  []int{1},
 		},
 		{
 			newGssReserveIds:      []int{0, 2, 3},
@@ -250,6 +254,7 @@ func TestComputeToScaleGs(t *testing.T) {
 				},
 			},
 			newReserveIds: []int{0, 2, 3, 5},
+			newManageIds:  []int{1, 4, 6, 7},
 		},
 		{
 			newGssReserveIds:      []int{0, 3, 5},
@@ -296,6 +301,7 @@ func TestComputeToScaleGs(t *testing.T) {
 				},
 			},
 			newReserveIds: []int{0, 3, 5, 2, 4, 6},
+			newManageIds:  []int{1},
 		},
 		{
 			newGssReserveIds:      []int{1, 2},
@@ -324,13 +330,37 @@ func TestComputeToScaleGs(t *testing.T) {
 				},
 			},
 			newReserveIds: []int{1, 2},
+			newManageIds:  []int{0, 3},
+		},
+		{
+			newGssReserveIds:      []int{},
+			oldGssreserveIds:      []int{},
+			notExistIds:           []int{},
+			expectedReplicas:      3,
+			scaleDownStrategyType: gameKruiseV1alpha1.GeneralScaleDownStrategyType,
+			pods:                  []corev1.Pod{},
+			newReserveIds:         []int{},
+			newManageIds:          []int{0, 1, 2},
+		},
+		{
+			newGssReserveIds:      []int{1, 2},
+			oldGssreserveIds:      []int{},
+			notExistIds:           []int{},
+			expectedReplicas:      3,
+			scaleDownStrategyType: gameKruiseV1alpha1.GeneralScaleDownStrategyType,
+			pods:                  []corev1.Pod{},
+			newReserveIds:         []int{1, 2},
+			newManageIds:          []int{0, 3, 4},
 		},
 	}
 
 	for i, test := range tests {
-		newReserveIds := computeToScaleGs(test.newGssReserveIds, test.oldGssreserveIds, test.notExistIds, test.expectedReplicas, test.pods, test.scaleDownStrategyType)
+		newManageIds, newReserveIds := computeToScaleGs(test.newGssReserveIds, test.oldGssreserveIds, test.notExistIds, test.expectedReplicas, test.pods, test.scaleDownStrategyType)
 		if !util.IsSliceEqual(newReserveIds, test.newReserveIds) {
 			t.Errorf("case %d: expect newNotExistIds %v but got %v", i, test.newReserveIds, newReserveIds)
+		}
+		if !util.IsSliceEqual(newManageIds, test.newManageIds) {
+			t.Errorf("case %d: expect newManageIds %v but got %v", i, test.newManageIds, newManageIds)
 		}
 	}
 }
@@ -700,35 +730,21 @@ func TestGameServerScale(t *testing.T) {
 	}
 }
 
-func TestSyncGameServerReplicas(t *testing.T) {
+func TestSyncGameServer(t *testing.T) {
 	tests := []struct {
-		gss      *gameKruiseV1alpha1.GameServerSet
-		podList  []corev1.Pod
-		gsList   []*gameKruiseV1alpha1.GameServer
-		toDelete []int
+		gss           *gameKruiseV1alpha1.GameServerSet
+		gsList        []*gameKruiseV1alpha1.GameServer
+		newManageIds  []int
+		oldManageIds  []int
+		IdsLabelTure  []int
+		IdsLabelFalse []int
 	}{
+		// case 0
 		{
 			gss: &gameKruiseV1alpha1.GameServerSet{
 				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "xxx",
 					Name:      "xxx",
-				},
-			},
-			podList: []corev1.Pod{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "xxx-0",
-					},
-				},
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "xxx-2",
-					},
-				},
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "xxx-4",
-					},
 				},
 			},
 			gsList: []*gameKruiseV1alpha1.GameServer{
@@ -769,41 +785,88 @@ func TestSyncGameServerReplicas(t *testing.T) {
 					},
 				},
 			},
-			toDelete: []int{3},
+			oldManageIds:  []int{0, 2, 3, 4},
+			newManageIds:  []int{0, 1},
+			IdsLabelTure:  []int{2, 3, 4},
+			IdsLabelFalse: []int{},
+		},
+
+		// case 1
+		{
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "xxx",
+				},
+			},
+			gsList:        []*gameKruiseV1alpha1.GameServer{},
+			oldManageIds:  []int{},
+			newManageIds:  []int{0, 1, 3},
+			IdsLabelTure:  []int{},
+			IdsLabelFalse: []int{},
+		},
+
+		// case 2
+		{
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "xxx",
+				},
+			},
+			gsList: []*gameKruiseV1alpha1.GameServer{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "xxx",
+						Name:      "xxx-0",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOwnerGssKey: "xxx",
+							gameKruiseV1alpha1.GameServerDeletingKey: "true",
+						},
+					},
+				},
+			},
+			oldManageIds:  []int{},
+			newManageIds:  []int{0},
+			IdsLabelTure:  []int{},
+			IdsLabelFalse: []int{0},
 		},
 	}
 
-	for _, test := range tests {
+	for i, test := range tests {
 		objs := []client.Object{test.gss}
 		for _, gs := range test.gsList {
 			objs = append(objs, gs)
 		}
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
-		recorder := record.NewFakeRecorder(100)
-		manager := &GameServerSetManager{
-			gameServerSet: test.gss,
-			podList:       test.podList,
-			eventRecorder: recorder,
-			client:        c,
-		}
-		if err := manager.SyncGameServerReplicas(); err != nil {
+		if err := SyncGameServer(test.gss, c, test.newManageIds, test.oldManageIds); err != nil {
 			t.Error(err)
 		}
 
-		gsList := &gameKruiseV1alpha1.GameServerList{}
-		if err := manager.client.List(context.Background(), gsList, &client.ListOptions{
-			Namespace: test.gss.GetNamespace(),
-			LabelSelector: labels.SelectorFromSet(map[string]string{
-				gameKruiseV1alpha1.GameServerOwnerGssKey: test.gss.GetName(),
-				gameKruiseV1alpha1.GameServerDeletingKey: "true",
-			})}); err != nil {
-			t.Error(err)
+		for _, id := range test.IdsLabelTure {
+			gs := &gameKruiseV1alpha1.GameServer{}
+			if err := c.Get(context.Background(), types.NamespacedName{
+				Namespace: test.gss.GetNamespace(),
+				Name:      test.gss.GetName() + "-" + strconv.Itoa(id),
+			}, gs); err != nil {
+				t.Errorf("case %d: err: %s", i, err.Error())
+			}
+			if gs.GetLabels()[gameKruiseV1alpha1.GameServerDeletingKey] != "true" {
+				t.Errorf("case %d: gs %d GameServerDeletingKey is not true", i, id)
+			}
 		}
 
-		actual := util.GetIndexListFromGsList(gsList.Items)
-		expect := test.toDelete
-		if !util.IsSliceEqual(actual, expect) {
-			t.Errorf("expect to delete gameservers %v but actually %v", expect, actual)
+		for _, id := range test.IdsLabelFalse {
+			gs := &gameKruiseV1alpha1.GameServer{}
+			if err := c.Get(context.Background(), types.NamespacedName{
+				Namespace: test.gss.GetNamespace(),
+				Name:      test.gss.GetName() + "-" + strconv.Itoa(id),
+			}, gs); err != nil {
+				t.Error(err)
+			}
+			if gs.GetLabels()[gameKruiseV1alpha1.GameServerDeletingKey] != "false" {
+				t.Errorf("case %d: gs %d GameServerDeletingKey is not false", i, id)
+			}
 		}
 	}
 }

@@ -92,10 +92,10 @@ func RunTestCases(f *framework.Framework) {
 			gomega.Expect(err).To(gomega.BeNil())
 		})
 
-		ginkgo.It("GameServer lifecycle", func() {
+		ginkgo.It("GameServer lifecycle(DeleteGameServerReclaimPolicy)", func() {
 
-			// deploy
-			gss, err := f.DeployGameServerSet()
+			// Deploy a gss, and the ReclaimPolicy is Delete
+			gss, err := f.DeployGameServerSetWithReclaimPolicy(gameKruiseV1alpha1.DeleteGameServerReclaimPolicy)
 			gomega.Expect(err).To(gomega.BeNil())
 
 			err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
@@ -111,6 +111,28 @@ func RunTestCases(f *framework.Framework) {
 			gomega.Expect(err).To(gomega.BeNil())
 
 			err = f.ExpectGsCorrect(gss.GetName()+"-1", "None", "100", "0")
+			gomega.Expect(err).To(gomega.BeNil())
+		})
+
+		ginkgo.It("GameServer lifecycle(CascadeGameServerReclaimPolicy)", func() {
+
+			// Deploy a gss, and the ReclaimPolicy is Cascade
+			gss, err := f.DeployGameServerSet()
+			gomega.Expect(err).To(gomega.BeNil())
+
+			err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
+			gomega.Expect(err).To(gomega.BeNil())
+
+			_, err = f.ChangeGameServerDeletionPriority(gss.GetName()+"-1", "100")
+			gomega.Expect(err).To(gomega.BeNil())
+
+			err = f.WaitForGsDeletionPriorityUpdated(gss.GetName()+"-1", "100")
+			gomega.Expect(err).To(gomega.BeNil())
+
+			err = f.DeletePodDirectly(1)
+			gomega.Expect(err).To(gomega.BeNil())
+
+			err = f.ExpectGsCorrect(gss.GetName()+"-1", "None", "0", "0")
 			gomega.Expect(err).To(gomega.BeNil())
 		})
 	})

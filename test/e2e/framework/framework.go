@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
@@ -51,11 +52,37 @@ func (f *Framework) AfterSuit() error {
 }
 
 func (f *Framework) AfterEach() error {
-	return f.client.DeleteGameServerSet()
+	return wait.PollImmediate(5*time.Second, 3*time.Minute,
+		func() (done bool, err error) {
+			err = f.client.DeleteGameServerSet()
+			if err != nil && !apierrors.IsNotFound(err) {
+				{
+					return false, err
+				}
+			}
+
+			labelSelector := labels.SelectorFromSet(map[string]string{
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: client.GameServerSet,
+			}).String()
+			podList, err := f.client.GetPodList(labelSelector)
+			if err != nil {
+				return false, err
+			}
+			if len(podList.Items) != 0 {
+				return false, nil
+			}
+			return true, nil
+		})
 }
 
 func (f *Framework) DeployGameServerSet() (*gamekruiseiov1alpha1.GameServerSet, error) {
 	gss := f.client.DefaultGameServerSet()
+	return f.client.CreateGameServerSet(gss)
+}
+
+func (f *Framework) DeployGameServerSetWithReclaimPolicy(reclaimPolicy gamekruiseiov1alpha1.GameServerReclaimPolicy) (*gamekruiseiov1alpha1.GameServerSet, error) {
+	gss := f.client.DefaultGameServerSet()
+	gss.Spec.GameServerTemplate.ReclaimPolicy = reclaimPolicy
 	return f.client.CreateGameServerSet(gss)
 }
 
@@ -160,6 +187,14 @@ func (f *Framework) WaitForGsCreated(gss *gamekruiseiov1alpha1.GameServerSet) er
 			if len(podList.Items) != int(*gss.Spec.Replicas) {
 				return false, nil
 			}
+			gsList, err := f.client.GetGameServerList(labelSelector)
+			if err != nil {
+				return false, err
+			}
+			if len(gsList.Items) != int(*gss.Spec.Replicas) {
+				return false, nil
+			}
+
 			return true, nil
 		})
 }
@@ -218,7 +253,7 @@ func (f *Framework) ExpectGssCorrect(gss *gamekruiseiov1alpha1.GameServerSet, ex
 	podIndexList := util.GetIndexListFromPodList(podList.Items)
 
 	if !util.IsSliceEqual(expectIndex, podIndexList) {
-		return fmt.Errorf("current pods and expected pods do not correspond")
+		return fmt.Errorf("current pods and expected pods do not correspond, actual podIndexList: %v", podIndexList)
 	}
 
 	return nil
@@ -255,21 +290,66 @@ func (f *Framework) WaitForGsDeletionPriorityUpdated(gsName string, deletionPrio
 }
 
 func (f *Framework) DeletePodDirectly(index int) error {
-	gsName := client.GameServerSet + "-" + strconv.Itoa(index)
-	return f.client.DeletePod(gsName)
-}
+	var uid types.UID
+	podName := client.GameServerSet + "-" + strconv.Itoa(index)
 
-func (f *Framework) ExpectGsCorrect(gsName, opsState, dp, up string) error {
-	gs, err := f.client.GetGameServer(gsName)
-	if err != nil {
+	// get
+	if err := wait.PollImmediate(5*time.Second, 3*time.Minute,
+		func() (done bool, err error) {
+
+			pod, err := f.client.GetPod(podName)
+			if err != nil {
+				return false, err
+			}
+			uid = pod.UID
+			return true, nil
+		}); err != nil {
 		return err
 	}
 
-	if gs.Status.DeletionPriority.String() != dp || gs.Status.UpdatePriority.String() != up || string(gs.Spec.OpsState) != opsState {
-		return fmt.Errorf("current GameServer is wrong")
+	// delete
+	if err := f.client.DeletePod(podName); err != nil {
+		return err
 	}
 
-	return nil
+	// check
+	return wait.PollImmediate(5*time.Second, 3*time.Minute,
+		func() (done bool, err error) {
+			pod, err := f.client.GetPod(podName)
+			if err != nil {
+				return false, err
+			}
+			if pod.UID == uid {
+				return false, nil
+			}
+			return true, nil
+		})
+}
+
+func (f *Framework) WaitForPodDeleted(podName string) error {
+	return wait.PollImmediate(5*time.Second, 3*time.Minute,
+		func() (done bool, err error) {
+			_, err = f.client.GetPod(podName)
+			if apierrors.IsNotFound(err) {
+				return true, nil
+			}
+			return false, nil
+		})
+}
+
+func (f *Framework) ExpectGsCorrect(gsName, opsState, dp, up string) error {
+	return wait.PollImmediate(5*time.Second, 3*time.Minute,
+		func() (done bool, err error) {
+			gs, err := f.client.GetGameServer(gsName)
+			if err != nil {
+				return false, nil
+			}
+
+			if gs.Status.DeletionPriority.String() != dp || gs.Status.UpdatePriority.String() != up || string(gs.Spec.OpsState) != opsState {
+				return false, nil
+			}
+			return true, nil
+		})
 }
 
 func (f *Framework) WaitForGsUpdatePriorityUpdated(gsName string, updatePriority string) error {

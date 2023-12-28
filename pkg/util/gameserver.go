@@ -19,6 +19,7 @@ package util
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	appspub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
@@ -26,6 +27,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strconv"
 	"strings"
@@ -197,6 +200,9 @@ func GetAstsHash(gss *gameKruiseV1alpha1.GameServerSet) string {
 }
 
 func GetGsTemplateMetadataHash(gss *gameKruiseV1alpha1.GameServerSet) string {
+	fmt.Println(gss.Spec.GameServerTemplate.GetLabels())
+	fmt.Println(gss.Spec.GameServerTemplate.GetAnnotations())
+
 	return GetHash(metav1.ObjectMeta{
 		Labels:      gss.Spec.GameServerTemplate.GetLabels(),
 		Annotations: gss.Spec.GameServerTemplate.GetAnnotations(),
@@ -228,4 +234,54 @@ func IsAllowNotReadyContainers(networkConfParams []gameKruiseV1alpha1.NetworkCon
 		}
 	}
 	return false
+}
+
+func InitGameServer(gss *gameKruiseV1alpha1.GameServerSet, name string) *gameKruiseV1alpha1.GameServer {
+	gs := &gameKruiseV1alpha1.GameServer{}
+	gs.Name = name
+	gs.Namespace = gss.GetNamespace()
+
+	ors := make([]metav1.OwnerReference, 0)
+	or := metav1.OwnerReference{
+		APIVersion:         gss.APIVersion,
+		Kind:               gss.Kind,
+		Name:               gss.GetName(),
+		UID:                gss.GetUID(),
+		Controller:         pointer.BoolPtr(true),
+		BlockOwnerDeletion: pointer.BoolPtr(true),
+	}
+	ors = append(ors, or)
+	gs.OwnerReferences = ors
+
+	// set Labels
+	gsLabels := gss.Spec.GameServerTemplate.DeepCopy().GetLabels()
+	if gsLabels == nil {
+		gsLabels = make(map[string]string)
+	}
+	gsLabels[gameKruiseV1alpha1.GameServerOwnerGssKey] = gss.GetName()
+	gs.SetLabels(gsLabels)
+
+	// set Annotations
+	gsAnnotations := gss.Spec.GameServerTemplate.DeepCopy().GetAnnotations()
+	if gsAnnotations == nil {
+		gsAnnotations = make(map[string]string)
+	}
+	gsAnnotations[gameKruiseV1alpha1.GsTemplateMetadataHashKey] = GetGsTemplateMetadataHash(gss)
+	gs.SetAnnotations(gsAnnotations)
+
+	// set NetWork
+	gs.Spec.NetworkDisabled = false
+
+	// set OpsState
+	gs.Spec.OpsState = gameKruiseV1alpha1.None
+
+	// set UpdatePriority
+	updatePriority := intstr.FromInt(0)
+	gs.Spec.UpdatePriority = &updatePriority
+
+	// set deletionPriority
+	deletionPriority := intstr.FromInt(0)
+	gs.Spec.DeletionPriority = &deletionPriority
+
+	return gs
 }

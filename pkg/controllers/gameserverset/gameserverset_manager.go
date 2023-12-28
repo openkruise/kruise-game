@@ -18,12 +18,6 @@ package gameserverset
 
 import (
 	"context"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/tools/record"
-	"sort"
-	"sync"
-	"time"
-
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -32,9 +26,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sort"
+	"strconv"
+	"sync"
 
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
@@ -47,7 +45,6 @@ type Control interface {
 	IsNeedToScale() bool
 	IsNeedToUpdateWorkload() bool
 	SyncPodProbeMarker() error
-	SyncGameServerReplicas() error
 	GetReplicasAfterKilling() *int32
 }
 
@@ -129,7 +126,15 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas.", gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas)
 	manager.eventRecorder.Eventf(gss, corev1.EventTypeNormal, ScaleReason, "scale from %d to %d", currentReplicas, expectedReplicas)
 
-	newReserveIds := computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, podList, gss.Spec.ScaleStrategy.ScaleDownStrategyType)
+	newManageIds, newReserveIds := computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, podList, gss.Spec.ScaleStrategy.ScaleDownStrategyType)
+
+	if gss.Spec.GameServerTemplate.ReclaimPolicy == gameKruiseV1alpha1.DeleteGameServerReclaimPolicy {
+		err := SyncGameServer(gss, c, newManageIds, util.GetIndexListFromPodList(podList))
+		if err != nil {
+			return err
+		}
+	}
+
 	asts.Spec.ReserveOrdinals = newReserveIds
 	asts.Spec.Replicas = gss.Spec.Replicas
 	asts.Spec.ScaleStrategy = &kruiseV1beta1.StatefulSetScaleStrategy{
@@ -157,7 +162,7 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	return nil
 }
 
-func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedReplicas int, pods []corev1.Pod, scaleDownType gameKruiseV1alpha1.ScaleDownStrategyType) []int {
+func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedReplicas int, pods []corev1.Pod, scaleDownType gameKruiseV1alpha1.ScaleDownStrategyType) ([]int, []int) {
 	workloadManageIds := util.GetIndexListFromPodList(pods)
 
 	var toAdd []int
@@ -215,12 +220,13 @@ func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedRepl
 		}
 	}
 
-	if scaleDownType == gameKruiseV1alpha1.ReserveIdsScaleDownStrategyType {
-		return append(gssReserveIds, util.GetSliceInANotInB(toDelete, gssReserveIds)...)
-	}
-
 	newManageIds := append(workloadManageIds, util.GetSliceInANotInB(toAdd, workloadManageIds)...)
 	newManageIds = util.GetSliceInANotInB(newManageIds, toDelete)
+
+	if scaleDownType == gameKruiseV1alpha1.ReserveIdsScaleDownStrategyType {
+		return newManageIds, append(gssReserveIds, util.GetSliceInANotInB(toDelete, gssReserveIds)...)
+	}
+
 	var newReserveIds []int
 	if len(newManageIds) != 0 {
 		sort.Ints(newManageIds)
@@ -231,63 +237,80 @@ func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedRepl
 		}
 	}
 
-	return newReserveIds
+	return newManageIds, newReserveIds
 }
 
-func (manager *GameServerSetManager) SyncGameServerReplicas() error {
-	gss := manager.gameServerSet
-	gsList := &gameKruiseV1alpha1.GameServerList{}
-	err := manager.client.List(context.Background(), gsList, &client.ListOptions{
-		Namespace: gss.GetNamespace(),
-		LabelSelector: labels.SelectorFromSet(map[string]string{
-			gameKruiseV1alpha1.GameServerOwnerGssKey: gss.GetName(),
-		})})
-	if err != nil {
-		return err
-	}
-	podIds := util.GetIndexListFromPodList(manager.podList)
-
-	gsMap := make(map[int]int)
-	deleteIds := make([]int, 0)
-	for id, gs := range gsList.Items {
-		gsId := util.GetIndexFromGsName(gs.Name)
-		if !util.IsNumInList(gsId, podIds) {
-			gsMap[gsId] = id
-			deleteIds = append(deleteIds, gsId)
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+func SyncGameServer(gss *gameKruiseV1alpha1.GameServerSet, c client.Client, newManageIds, oldManageIds []int) error {
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	errch := make(chan error, len(deleteIds))
+	addIds := util.GetSliceInANotInB(newManageIds, oldManageIds)
+	deleteIds := util.GetSliceInANotInB(oldManageIds, newManageIds)
+
+	errch := make(chan error, len(addIds)+len(deleteIds))
 	var wg sync.WaitGroup
-	for _, gsId := range deleteIds {
+	for _, gsId := range append(addIds, deleteIds...) {
 		wg.Add(1)
 		id := gsId
 		go func(ctx context.Context) {
 			defer wg.Done()
 			defer ctx.Done()
 
-			gs := gsList.Items[gsMap[id]].DeepCopy()
-			gsLabels := make(map[string]string)
-			gsLabels[gameKruiseV1alpha1.GameServerDeletingKey] = "true"
-			patchGs := map[string]interface{}{"metadata": map[string]map[string]string{"labels": gsLabels}}
-			patchBytes, err := json.Marshal(patchGs)
+			gs := &gameKruiseV1alpha1.GameServer{}
+			gsName := gss.Name + "-" + strconv.Itoa(id)
+			err := c.Get(ctx, types.NamespacedName{
+				Name:      gsName,
+				Namespace: gss.Namespace,
+			}, gs)
 			if err != nil {
+				if errors.IsNotFound(err) {
+					return
+				}
 				errch <- err
+				return
 			}
-			err = manager.client.Patch(context.TODO(), gs, client.RawPatch(types.MergePatchType, patchBytes))
-			if err != nil && !errors.IsNotFound(err) {
-				errch <- err
+
+			if util.IsNumInList(id, addIds) && gs.GetLabels()[gameKruiseV1alpha1.GameServerDeletingKey] == "true" {
+				gsLabels := make(map[string]string)
+				gsLabels[gameKruiseV1alpha1.GameServerDeletingKey] = "false"
+				patchGs := map[string]interface{}{"metadata": map[string]map[string]string{"labels": gsLabels}}
+				patchBytes, err := json.Marshal(patchGs)
+				if err != nil {
+					errch <- err
+					return
+				}
+				err = c.Patch(ctx, gs, client.RawPatch(types.MergePatchType, patchBytes))
+				if err != nil && !errors.IsNotFound(err) {
+					errch <- err
+					return
+				}
+				klog.Infof("GameServer %s/%s DeletingKey turn into false", gss.Namespace, gsName)
 			}
+
+			if util.IsNumInList(id, deleteIds) && gs.GetLabels()[gameKruiseV1alpha1.GameServerDeletingKey] != "true" {
+				gsLabels := make(map[string]string)
+				gsLabels[gameKruiseV1alpha1.GameServerDeletingKey] = "true"
+				patchGs := map[string]interface{}{"metadata": map[string]map[string]string{"labels": gsLabels}}
+				patchBytes, err := json.Marshal(patchGs)
+				if err != nil {
+					errch <- err
+					return
+				}
+				err = c.Patch(ctx, gs, client.RawPatch(types.MergePatchType, patchBytes))
+				if err != nil && !errors.IsNotFound(err) {
+					errch <- err
+					return
+				}
+				klog.Infof("GameServer %s/%s DeletingKey turn into true, who will be deleted", gss.Namespace, gsName)
+			}
+
 		}(ctx)
 	}
+
 	wg.Wait()
 	close(errch)
-	err = <-errch
+	err := <-errch
 	if err != nil {
-		klog.Errorf("failed to delete GameServers %s in %s because of %s.", gss.GetName(), gss.GetNamespace(), err.Error())
 		return err
 	}
 
