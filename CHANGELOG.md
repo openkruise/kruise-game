@@ -1,5 +1,16 @@
 # Change Log
 
+## v0.7.0
+> Change log since v0.6.0
+
+### Features & Enhancements
+- Add ReclaimPolicy for GameServer. https://github.com/openkruise/kruise-game/pull/115
+- ServiceQuality supports multiple results returned by one probe. https://github.com/openkruise/kruise-game/pull/117
+- Support differentiated updates to GameServers. https://github.com/openkruise/kruise-game/pull/120
+
+### Bug Fixes
+- Fix the error of patching pod image failure when gs image is nil. https://github.com/openkruise/kruise-game/pull/121
+
 ## v0.6.0
 > Change log since v0.5.0
 
