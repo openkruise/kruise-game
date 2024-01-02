@@ -25,6 +25,7 @@ OpenKruiseGame(OKG) 为PvP游戏提供的能力：
 
 ```bash
 cat <<EOF | kubectl apply -f -
+apiVersion: game.kruise.io/v1alpha1
 kind: GameServerSet
 metadata:
   name: xonotic
