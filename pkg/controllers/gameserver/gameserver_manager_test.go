@@ -743,3 +743,154 @@ func TestSyncPodContainers(t *testing.T) {
 		}
 	}
 }
+
+func TestSyncPodToGs(t *testing.T) {
+	tests := []struct {
+		gs       *gameKruiseV1alpha1.GameServer
+		pod      *corev1.Pod
+		gss      *gameKruiseV1alpha1.GameServerSet
+		node     *corev1.Node
+		gsStatus gameKruiseV1alpha1.GameServerStatus
+	}{
+		{
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "xxx",
+				},
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					GameServerTemplate: gameKruiseV1alpha1.GameServerTemplate{
+						PodTemplateSpec: corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Labels: map[string]string{
+									"key-0": "value-0",
+								},
+							},
+						},
+					},
+				},
+			},
+			gs: &gameKruiseV1alpha1.GameServer{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "xxx-0",
+					Labels: map[string]string{
+						gameKruiseV1alpha1.GameServerOwnerGssKey: "xxx",
+					},
+				},
+				Status: gameKruiseV1alpha1.GameServerStatus{
+					CurrentState: gameKruiseV1alpha1.Creating,
+				},
+			},
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "xxx-0",
+					Labels: map[string]string{
+						gameKruiseV1alpha1.GameServerOpsStateKey: string(gameKruiseV1alpha1.WaitToDelete),
+						gameKruiseV1alpha1.GameServerStateKey:    string(gameKruiseV1alpha1.Ready),
+					},
+				},
+				Spec: corev1.PodSpec{
+					NodeName: "node-A",
+				},
+				Status: corev1.PodStatus{
+					Conditions: []corev1.PodCondition{
+						{
+							Type:   "Ready",
+							Status: "True",
+						},
+						{
+							Type:   "PodScheduled",
+							Status: "True",
+						},
+						{
+							Type:   "ContainersReady",
+							Status: "True",
+						},
+					},
+				},
+			},
+			node: &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "node-A",
+				},
+				Status: corev1.NodeStatus{
+					Conditions: []corev1.NodeCondition{
+						{
+							Type:   "Ready",
+							Status: "True",
+						},
+						{
+							Type:   "PIDPressure",
+							Status: "False",
+						},
+						{
+							Type:   "SufficientIP",
+							Status: "True",
+						},
+						{
+							Type:   "RuntimeOffline",
+							Status: "False",
+						},
+						{
+							Type:   "DockerOffline",
+							Status: "False",
+						},
+					},
+				},
+			},
+			gsStatus: gameKruiseV1alpha1.GameServerStatus{
+				Conditions: []gameKruiseV1alpha1.GameServerCondition{
+					{
+						Type:   "PodNormal",
+						Status: "True",
+					},
+					{
+						Type:   "NodeNormal",
+						Status: "True",
+					},
+					{
+						Type:   "PersistentVolumeNormal",
+						Status: "True",
+					},
+				},
+			},
+		},
+	}
+
+	for i, test := range tests {
+		objs := []client.Object{test.gs, test.pod, test.node, test.gss}
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+		manager := &GameServerManager{
+			client:     c,
+			gameServer: test.gs,
+			pod:        test.pod,
+		}
+
+		if err := manager.SyncPodToGs(test.gss); err != nil {
+			t.Error(err)
+		}
+
+		gs := &gameKruiseV1alpha1.GameServer{}
+		if err := manager.client.Get(context.TODO(), types.NamespacedName{
+			Namespace: test.gs.Namespace,
+			Name:      test.gs.Name,
+		}, gs); err != nil {
+			t.Error(err)
+		}
+
+		// gs metadata
+		gsLabels := gs.GetLabels()
+		for key, value := range test.gss.Spec.GameServerTemplate.GetLabels() {
+			if gsLabels[key] != value {
+				t.Errorf("case %d: expect label %s=%s exists on gs, but actually not", i, key, value)
+			}
+		}
+
+		// gs status conditions
+		if !isConditionsEqual(test.gsStatus.Conditions, gs.Status.Conditions) {
+			t.Errorf("case %d: expect conditions is %v, but actually %v", i, test.gsStatus.Conditions, gs.Status.Conditions)
+		}
+	}
+}

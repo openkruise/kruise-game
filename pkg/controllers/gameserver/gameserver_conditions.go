@@ -172,18 +172,16 @@ func getPodConditions(pod *corev1.Pod) gamekruiseiov1alpha1.GameServerCondition 
 
 	if message == "" && reason == "" {
 		return gamekruiseiov1alpha1.GameServerCondition{
-			Type:          gamekruiseiov1alpha1.PodNormal,
-			Status:        corev1.ConditionTrue,
-			LastProbeTime: metav1.Now(),
+			Type:   gamekruiseiov1alpha1.PodNormal,
+			Status: corev1.ConditionTrue,
 		}
 	}
 
 	return gamekruiseiov1alpha1.GameServerCondition{
-		Type:          gamekruiseiov1alpha1.PodNormal,
-		Status:        corev1.ConditionFalse,
-		Reason:        reason,
-		Message:       message,
-		LastProbeTime: metav1.Now(),
+		Type:    gamekruiseiov1alpha1.PodNormal,
+		Status:  corev1.ConditionFalse,
+		Reason:  reason,
+		Message: message,
 	}
 }
 
@@ -216,7 +214,7 @@ func getNodeConditions(node *corev1.Node) gamekruiseiov1alpha1.GameServerConditi
 
 	for _, condition := range node.Status.Conditions {
 		switch condition.Type {
-		case corev1.NodeReady:
+		case corev1.NodeReady, "SufficientIP":
 			if condition.Status != corev1.ConditionTrue {
 				message, reason = polyMessageReason(message, reason, condition.Message, string(condition.Type)+":"+condition.Reason)
 			}
@@ -229,18 +227,16 @@ func getNodeConditions(node *corev1.Node) gamekruiseiov1alpha1.GameServerConditi
 
 	if message == "" && reason == "" {
 		return gamekruiseiov1alpha1.GameServerCondition{
-			Type:          gamekruiseiov1alpha1.NodeNormal,
-			Status:        corev1.ConditionTrue,
-			LastProbeTime: metav1.Now(),
+			Type:   gamekruiseiov1alpha1.NodeNormal,
+			Status: corev1.ConditionTrue,
 		}
 	}
 
 	return gamekruiseiov1alpha1.GameServerCondition{
-		Type:          gamekruiseiov1alpha1.NodeNormal,
-		Status:        corev1.ConditionFalse,
-		Reason:        reason,
-		Message:       message,
-		LastProbeTime: metav1.Now(),
+		Type:    gamekruiseiov1alpha1.NodeNormal,
+		Status:  corev1.ConditionFalse,
+		Reason:  reason,
+		Message: message,
 	}
 }
 
@@ -256,38 +252,34 @@ func getPersistentVolumeConditions(pvs []*corev1.PersistentVolume) gamekruiseiov
 
 	if message == "" && reason == "" {
 		return gamekruiseiov1alpha1.GameServerCondition{
-			Type:          gamekruiseiov1alpha1.PersistentVolumeNormal,
-			Status:        corev1.ConditionTrue,
-			LastProbeTime: metav1.Now(),
+			Type:   gamekruiseiov1alpha1.PersistentVolumeNormal,
+			Status: corev1.ConditionTrue,
 		}
 	}
 
 	return gamekruiseiov1alpha1.GameServerCondition{
-		Type:          gamekruiseiov1alpha1.PersistentVolumeNormal,
-		Status:        corev1.ConditionFalse,
-		Reason:        reason,
-		Message:       message,
-		LastProbeTime: metav1.Now(),
+		Type:    gamekruiseiov1alpha1.PersistentVolumeNormal,
+		Status:  corev1.ConditionFalse,
+		Reason:  reason,
+		Message: message,
 	}
 }
 
 func pvcNotFoundCondition(namespace, pvcName string) gamekruiseiov1alpha1.GameServerCondition {
 	return gamekruiseiov1alpha1.GameServerCondition{
-		Type:          gamekruiseiov1alpha1.PersistentVolumeNormal,
-		Status:        corev1.ConditionFalse,
-		Reason:        pvcNotFoundReason,
-		Message:       fmt.Sprintf("There is no pvc named %s/%s in cluster", namespace, pvcName),
-		LastProbeTime: metav1.Now(),
+		Type:    gamekruiseiov1alpha1.PersistentVolumeNormal,
+		Status:  corev1.ConditionFalse,
+		Reason:  pvcNotFoundReason,
+		Message: fmt.Sprintf("There is no pvc named %s/%s in cluster", namespace, pvcName),
 	}
 }
 
 func pvNotFoundCondition(namespace, pvcName string) gamekruiseiov1alpha1.GameServerCondition {
 	return gamekruiseiov1alpha1.GameServerCondition{
-		Type:          gamekruiseiov1alpha1.PersistentVolumeNormal,
-		Status:        corev1.ConditionFalse,
-		Reason:        pvNotFoundReason,
-		Message:       fmt.Sprintf("There is no pv which pvc %s/%s is bound with", namespace, pvcName),
-		LastProbeTime: metav1.Now(),
+		Type:    gamekruiseiov1alpha1.PersistentVolumeNormal,
+		Status:  corev1.ConditionFalse,
+		Reason:  pvNotFoundReason,
+		Message: fmt.Sprintf("There is no pv which pvc %s/%s is bound with", namespace, pvcName),
 	}
 }
 
@@ -369,5 +361,28 @@ func isConditionEqual(a, b gamekruiseiov1alpha1.GameServerCondition) bool {
 	if a.Reason != b.Reason {
 		return false
 	}
+	return true
+}
+
+func isConditionsEqual(a, b []gamekruiseiov1alpha1.GameServerCondition) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	for _, aCondition := range a {
+		found := false
+		for _, bCondition := range b {
+			if aCondition.Type == bCondition.Type {
+				found = true
+				if !isConditionEqual(aCondition, bCondition) {
+					return false
+				}
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
 	return true
 }
