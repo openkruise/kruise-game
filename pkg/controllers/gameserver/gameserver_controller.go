@@ -24,12 +24,16 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/pointer"
+	"reflect"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -80,6 +84,10 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		klog.Error(err)
 		return err
 	}
+	if err = watchNode(c, mgr.GetClient()); err != nil {
+		klog.Error(err)
+		return err
+	}
 
 	return nil
 }
@@ -118,6 +126,40 @@ func watchPod(c controller.Controller) error {
 					NamespacedName: types.NamespacedName{
 						Namespace: deleteEvent.Object.GetNamespace(),
 						Name:      deleteEvent.Object.GetName(),
+					},
+				})
+			}
+		},
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func watchNode(c controller.Controller, cli client.Client) error {
+	if err := c.Watch(&source.Kind{Type: &corev1.Node{}}, &handler.Funcs{
+		UpdateFunc: func(updateEvent event.UpdateEvent, limitingInterface workqueue.RateLimitingInterface) {
+			nodeNew := updateEvent.ObjectNew.(*corev1.Node)
+			nodeOld := updateEvent.ObjectOld.(*corev1.Node)
+			if reflect.DeepEqual(nodeNew.Status.Conditions, nodeOld.Status.Conditions) {
+				return
+			}
+			podList := &corev1.PodList{}
+			ownerGss, _ := labels.NewRequirement(gamekruiseiov1alpha1.GameServerOwnerGssKey, selection.Exists, []string{})
+			err := cli.List(context.Background(), podList, &client.ListOptions{
+				LabelSelector: labels.NewSelector().Add(*ownerGss),
+				FieldSelector: fields.Set{"spec.nodeName": nodeNew.Name}.AsSelector(),
+			})
+			if err != nil {
+				klog.Errorf("List Pods By NodeName failed: %s", err.Error())
+				return
+			}
+			for _, pod := range podList.Items {
+				klog.Infof("Watch Node %s Conditions Changed, adding pods %s/%s in reconcile queue", nodeNew.Name, pod.Namespace, pod.Name)
+				limitingInterface.Add(reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Namespace: pod.GetNamespace(),
+						Name:      pod.GetName(),
 					},
 				})
 			}

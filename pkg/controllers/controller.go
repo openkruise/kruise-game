@@ -17,10 +17,13 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"github.com/openkruise/kruise-game/pkg/controllers/gameserver"
 	"github.com/openkruise/kruise-game/pkg/controllers/gameserverset"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
@@ -32,6 +35,13 @@ func init() {
 }
 
 func SetupWithManager(m manager.Manager) error {
+	if err := m.GetFieldIndexer().IndexField(context.Background(), &corev1.Pod{}, "spec.nodeName", func(rawObj client.Object) []string {
+		pod := rawObj.(*corev1.Pod)
+		return []string{pod.Spec.NodeName}
+	}); err != nil {
+		return err
+	}
+
 	for _, f := range controllerAddFuncs {
 		if err := f(m); err != nil {
 			if kindMatchErr, ok := err.(*meta.NoKindMatchError); ok {

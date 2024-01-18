@@ -210,24 +210,23 @@ func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerS
 	podGsState := gameKruiseV1alpha1.GameServerState(podLabels[gameKruiseV1alpha1.GameServerStateKey])
 
 	// sync Service Qualities
-	spec, newGsConditions := syncServiceQualities(gss.Spec.ServiceQualities, pod.Status.Conditions, gs.Status.ServiceQualitiesCondition)
+	spec, sqConditions := syncServiceQualities(gss.Spec.ServiceQualities, pod.Status.Conditions, gs.Status.ServiceQualitiesCondition)
 
-	// sync metadata
-	var gsMetadata metav1.ObjectMeta
-	if isNeedToSyncMetadata(gss, gs) {
-		gsMetadata = syncMetadataFromGss(gss)
-	}
+	if isNeedToSyncMetadata(gss, gs) || !reflect.DeepEqual(spec, gs.Spec) {
+		// sync metadata
+		gsMetadata := syncMetadataFromGss(gss)
 
-	// patch gs spec
-	patchSpec := map[string]interface{}{"spec": spec, "metadata": gsMetadata}
-	jsonPatchSpec, err := json.Marshal(patchSpec)
-	if err != nil {
-		return err
-	}
-	err = manager.client.Patch(context.TODO(), gs, client.RawPatch(types.MergePatchType, jsonPatchSpec))
-	if err != nil && !errors.IsNotFound(err) {
-		klog.Errorf("failed to patch GameServer spec %s in %s,because of %s.", gs.GetName(), gs.GetNamespace(), err.Error())
-		return err
+		// patch gs spec & metadata
+		patchSpec := map[string]interface{}{"spec": spec, "metadata": gsMetadata}
+		jsonPatchSpec, err := json.Marshal(patchSpec)
+		if err != nil {
+			return err
+		}
+		err = manager.client.Patch(context.TODO(), gs, client.RawPatch(types.MergePatchType, jsonPatchSpec))
+		if err != nil && !errors.IsNotFound(err) {
+			klog.Errorf("failed to patch GameServer spec %s in %s,because of %s.", gs.GetName(), gs.GetNamespace(), err.Error())
+			return err
+		}
 	}
 
 	// get gs conditions
@@ -238,26 +237,30 @@ func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerS
 	}
 
 	// patch gs status
-	status := gameKruiseV1alpha1.GameServerStatus{
+	oldStatus := *gs.Status.DeepCopy()
+	newStatus := gameKruiseV1alpha1.GameServerStatus{
 		PodStatus:                 pod.Status,
 		CurrentState:              podGsState,
 		DesiredState:              gameKruiseV1alpha1.Ready,
 		UpdatePriority:            &podUpdatePriority,
 		DeletionPriority:          &podDeletePriority,
-		ServiceQualitiesCondition: newGsConditions,
+		ServiceQualitiesCondition: sqConditions,
 		NetworkStatus:             manager.syncNetworkStatus(),
-		LastTransitionTime:        metav1.Now(),
+		LastTransitionTime:        oldStatus.LastTransitionTime,
 		Conditions:                conditions,
 	}
-	patchStatus := map[string]interface{}{"status": status}
-	jsonPatchStatus, err := json.Marshal(patchStatus)
-	if err != nil {
-		return err
-	}
-	err = manager.client.Status().Patch(context.TODO(), gs, client.RawPatch(types.MergePatchType, jsonPatchStatus))
-	if err != nil && !errors.IsNotFound(err) {
-		klog.Errorf("failed to patch GameServer Status %s in %s,because of %s.", gs.GetName(), gs.GetNamespace(), err.Error())
-		return err
+	if !reflect.DeepEqual(oldStatus, newStatus) {
+		newStatus.LastTransitionTime = metav1.Now()
+		patchStatus := map[string]interface{}{"status": newStatus}
+		jsonPatchStatus, err := json.Marshal(patchStatus)
+		if err != nil {
+			return err
+		}
+		err = manager.client.Status().Patch(context.TODO(), gs, client.RawPatch(types.MergePatchType, jsonPatchStatus))
+		if err != nil && !errors.IsNotFound(err) {
+			klog.Errorf("failed to patch GameServer Status %s in %s,because of %s.", gs.GetName(), gs.GetNamespace(), err.Error())
+			return err
+		}
 	}
 
 	return nil
