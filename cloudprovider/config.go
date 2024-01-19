@@ -45,11 +45,13 @@ type ConfigFile struct {
 type CloudProviderConfig struct {
 	KubernetesOptions   CloudProviderOptions
 	AlibabaCloudOptions CloudProviderOptions
+	VolcengineOptions   CloudProviderOptions
 }
 
 type tomlConfigs struct {
 	Kubernetes   options.KubernetesOptions   `toml:"kubernetes"`
 	AlibabaCloud options.AlibabaCloudOptions `toml:"alibabacloud"`
+	Volcengine   options.VolcengineOptions   `toml:"volcengine"`
 }
 
 func (cf *ConfigFile) Parse() *CloudProviderConfig {
@@ -62,6 +64,7 @@ func (cf *ConfigFile) Parse() *CloudProviderConfig {
 	return &CloudProviderConfig{
 		KubernetesOptions:   config.Kubernetes,
 		AlibabaCloudOptions: config.AlibabaCloud,
+		VolcengineOptions:   config.Volcengine,
 	}
 }
 
