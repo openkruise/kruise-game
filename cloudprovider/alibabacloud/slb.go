@@ -120,11 +120,7 @@ func initLbCache(svcList []corev1.Service, minPort, maxPort int32) (map[string]p
 }
 
 func (s *SlbPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
-	networkManager := utils.NewNetworkManager(pod, c)
-	networkConfig := networkManager.GetNetworkConfig()
-	sc := parseLbConfig(networkConfig)
-	err := c.Create(ctx, s.consSvc(sc, pod, c, ctx))
-	return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
+	return pod, nil
 }
 
 func (s *SlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {

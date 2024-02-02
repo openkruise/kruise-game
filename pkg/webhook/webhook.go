@@ -20,6 +20,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	manager2 "github.com/openkruise/kruise-game/cloudprovider/manager"
 	"github.com/openkruise/kruise-game/pkg/webhook/util/generator"
 	"github.com/openkruise/kruise-game/pkg/webhook/util/writer"
@@ -247,12 +248,12 @@ func getValidatingWebhookConf(dnsName string, caBundle []byte) []admissionregist
 
 func getMutatingWebhookConf(dnsName string, caBundle []byte) []admissionregistrationv1.MutatingWebhook {
 	sideEffectClassNone := admissionregistrationv1.SideEffectClassNone
-	ignore := admissionregistrationv1.Ignore
+	fail := admissionregistrationv1.Fail
 	return []admissionregistrationv1.MutatingWebhook{
 		{
 			Name:                    dnsName,
 			SideEffects:             &sideEffectClassNone,
-			FailurePolicy:           &ignore,
+			FailurePolicy:           &fail,
 			AdmissionReviewVersions: []string{"v1", "v1beta1"},
 			ClientConfig: admissionregistrationv1.WebhookClientConfig{
 				Service: &admissionregistrationv1.ServiceReference{
@@ -269,6 +270,15 @@ func getMutatingWebhookConf(dnsName string, caBundle []byte) []admissionregistra
 						APIGroups:   []string{""},
 						APIVersions: []string{"v1"},
 						Resources:   []string{"pods"},
+					},
+				},
+			},
+			ObjectSelector: &metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{
+						Key:      gamekruiseiov1alpha1.GameServerOwnerGssKey,
+						Operator: metav1.LabelSelectorOpExists,
+						Values:   []string{},
 					},
 				},
 			},

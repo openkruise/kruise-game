@@ -78,23 +78,6 @@ func (i IngressPlugin) Init(client client.Client, options cloudprovider.CloudPro
 }
 
 func (i IngressPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
-	networkManager := utils.NewNetworkManager(pod, c)
-	conf := networkManager.GetNetworkConfig()
-	ic, err := parseIngConfig(conf, pod)
-	if err != nil {
-		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
-	}
-
-	err = c.Create(ctx, consSvc(ic, pod, c, ctx))
-	if err != nil {
-		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
-	}
-
-	err = c.Create(ctx, consIngress(ic, pod, c, ctx))
-	if err != nil {
-		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
-	}
-
 	return pod, nil
 }
 
