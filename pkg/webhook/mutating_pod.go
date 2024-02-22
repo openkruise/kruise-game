@@ -129,7 +129,7 @@ func getPodFromRequest(req admission.Request, decoder *admission.Decoder) (*core
 
 func getAdmissionResponse(req admission.Request, result patchResult) admission.Response {
 	if result.err != nil {
-		return admission.Allowed(result.err.Error())
+		return admission.Denied(result.err.Error())
 	}
 	if req.Operation == admissionv1.Delete {
 		return admission.Allowed("delete successfully")

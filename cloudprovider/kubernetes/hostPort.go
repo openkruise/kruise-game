@@ -70,14 +70,15 @@ func (hpp *HostPortPlugin) Alias() string {
 }
 
 func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, errors.PluginError) {
+	log.Infof("Receiving pod %s/%s ADD Operation", pod.GetNamespace(), pod.GetName())
 	podNow := &corev1.Pod{}
 	err := c.Get(ctx, types.NamespacedName{
 		Namespace: pod.GetNamespace(),
 		Name:      pod.GetName(),
 	}, podNow)
-	// There is a pod with same ns/name exists in cluster, do not allocate
 	if err == nil {
-		return pod, nil
+		log.Infof("There is a pod with same ns/name(%s/%s) exists in cluster, do not allocate", pod.GetNamespace(), pod.GetName())
+		return pod, errors.NewPluginError(errors.InternalError, "There is a pod with same ns/name exists in cluster")
 	}
 	if !k8serrors.IsNotFound(err) {
 		return pod, errors.NewPluginError(errors.ApiCallError, err.Error())
@@ -118,6 +119,7 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 }
 
 func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, errors.PluginError) {
+	log.Infof("Receiving pod %s/%s UPDATE Operation", pod.GetNamespace(), pod.GetName())
 	node := &corev1.Node{}
 	err := c.Get(ctx, types.NamespacedName{
 		Name: pod.Spec.NodeName,
@@ -183,6 +185,7 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 }
 
 func (hpp *HostPortPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.Context) errors.PluginError {
+	log.Infof("Receiving pod %s/%s DELETE Operation", pod.GetNamespace(), pod.GetName())
 	if _, ok := hpp.podAllocated[pod.GetNamespace()+"/"+pod.GetName()]; !ok {
 		return nil
 	}
