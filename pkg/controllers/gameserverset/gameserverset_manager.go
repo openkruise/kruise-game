@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -326,16 +327,16 @@ func (manager *GameServerSetManager) UpdateWorkload() error {
 	asts := manager.asts
 
 	// sync with Advanced StatefulSet
-	asts = util.GetNewAstsFromGss(gss.DeepCopy(), asts)
-	astsAns := asts.GetAnnotations()
-	astsAns[gameKruiseV1alpha1.AstsHashKey] = util.GetAstsHash(manager.gameServerSet)
+	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		asts = util.GetNewAstsFromGss(gss.DeepCopy(), asts)
+		astsAns := asts.GetAnnotations()
+		astsAns[gameKruiseV1alpha1.AstsHashKey] = util.GetAstsHash(manager.gameServerSet)
+		asts.SetAnnotations(astsAns)
 
-	patchAsts := map[string]interface{}{"metadata": map[string]map[string]string{"annotations": astsAns}, "spec": asts.Spec}
-	patchAstsBytes, err := json.Marshal(patchAsts)
-	if err != nil {
-		return err
-	}
-	return manager.client.Patch(context.TODO(), asts, client.RawPatch(types.MergePatchType, patchAstsBytes))
+		return manager.client.Update(context.TODO(), asts)
+	})
+
+	return retryErr
 }
 
 func (manager *GameServerSetManager) SyncPodProbeMarker() error {
