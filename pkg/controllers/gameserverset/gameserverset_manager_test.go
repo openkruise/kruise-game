@@ -2,10 +2,12 @@ package gameserverset
 
 import (
 	"context"
+	appspub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
+	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -13,6 +15,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/pointer"
+	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"strconv"
@@ -1057,6 +1060,110 @@ func TestNumberToKill(t *testing.T) {
 		expect := test.number
 		if *actual != expect {
 			t.Errorf("case %d: expect gs replicas %v but actually %v", i, expect, *actual)
+		}
+	}
+}
+
+func TestGameServerSetManager_UpdateWorkload(t *testing.T) {
+	tests := []struct {
+		gss     *gameKruiseV1alpha1.GameServerSet
+		asts    *kruiseV1beta1.StatefulSet
+		newAsts *kruiseV1beta1.StatefulSet
+	}{
+		{
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "case0",
+				},
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					GameServerTemplate: gameKruiseV1alpha1.GameServerTemplate{},
+				},
+			},
+			asts: &kruiseV1beta1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace:   "xxx",
+					Name:        "case0",
+					Annotations: map[string]string{gameKruiseV1alpha1.AstsHashKey: "xx"},
+				},
+				Spec: kruiseV1beta1.StatefulSetSpec{
+					Template: corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{
+							Affinity: &corev1.Affinity{
+								NodeAffinity: &corev1.NodeAffinity{
+									PreferredDuringSchedulingIgnoredDuringExecution: []corev1.PreferredSchedulingTerm{
+										{
+											Weight: 1,
+											Preference: corev1.NodeSelectorTerm{
+												MatchFields: []corev1.NodeSelectorRequirement{
+													{
+														Key:      "role",
+														Operator: corev1.NodeSelectorOpIn,
+														Values:   []string{"test"},
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			newAsts: &kruiseV1beta1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace:   "xxx",
+					Name:        "case0",
+					Annotations: map[string]string{gameKruiseV1alpha1.AstsHashKey: "xxx"},
+				},
+				Spec: kruiseV1beta1.StatefulSetSpec{
+					ScaleStrategy: &kruiseV1beta1.StatefulSetScaleStrategy{
+						MaxUnavailable: nil,
+					},
+					PodManagementPolicy: apps.ParallelPodManagement,
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels: map[string]string{gameKruiseV1alpha1.GameServerOwnerGssKey: "case0"},
+						},
+						Spec: corev1.PodSpec{
+							ReadinessGates: []corev1.PodReadinessGate{
+								{
+									ConditionType: appspub.InPlaceUpdateReady,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	recorder := record.NewFakeRecorder(100)
+
+	for _, test := range tests {
+		objs := []client.Object{test.asts, test.gss}
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+		manager := &GameServerSetManager{
+			gameServerSet: test.gss,
+			asts:          test.asts,
+			eventRecorder: recorder,
+			client:        c,
+		}
+
+		if err := manager.UpdateWorkload(); err != nil {
+			t.Error(err)
+		}
+
+		updateAsts := &kruiseV1beta1.StatefulSet{}
+		if err := manager.client.Get(context.TODO(), types.NamespacedName{
+			Namespace: test.asts.Namespace,
+			Name:      test.asts.Name,
+		}, updateAsts); err != nil {
+			t.Error(err)
+		}
+
+		if !reflect.DeepEqual(updateAsts.Spec, test.newAsts.Spec) {
+			t.Errorf("expect new asts spec %v but got %v", test.newAsts.Spec, updateAsts.Spec)
 		}
 	}
 }
