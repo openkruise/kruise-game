@@ -9,6 +9,9 @@ enable = true
 [alibabacloud.slb]
 max_port = 700
 min_port = 500
+[alibabacloud.nlb]
+max_port = 1500
+min_port = 1000
 
 [volcengine]
 enable = true
