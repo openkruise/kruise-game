@@ -34,6 +34,10 @@ min_port = 500
 - Value：{containerName_0},{containerName_1},... eg：sidecar
 - Configurable：It cannot be changed during the in-place updating process.
 
+#### Annotations
+- Meaning：the anno added to the service
+- Value：key1:value1,key2:value2...
+- Configurable：Y
 
 ### Example
 ```yaml
@@ -62,6 +66,10 @@ spec:
       - name: Fixed
         #Fill in here whether a fixed IP is required [optional] ; Default is false
         value: "false"
+      - name: Annotations
+        #Fill in the anno related to clb on the service
+        #The format is as follows: {key1}:{value1},{key2}:{value2}...
+        value: "key1:value1,key2:value2"
   gameServerTemplate:
     spec:
       containers:

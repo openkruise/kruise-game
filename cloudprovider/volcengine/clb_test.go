@@ -259,6 +259,12 @@ func TestClbPlugin_consSvc(t *testing.T) {
 						corev1.ProtocolTCP,
 					},
 					isFixed: false,
+					annotations: map[string]string{
+						"service.beta.kubernetes.io/volcengine-loadbalancer-health-check-flag": "on",
+						"service.beta.kubernetes.io/volcengine-loadbalancer-healthy-threshold": "3",
+						"service.beta.kubernetes.io/volcengine-loadbalancer-scheduler":         "wrr",
+						"service.beta.kubernetes.io/volcengine-loadbalancer-pass-through":      "true",
+					},
 				},
 				pod: &corev1.Pod{
 					TypeMeta: metav1.TypeMeta{
@@ -289,7 +295,16 @@ func TestClbPlugin_consSvc(t *testing.T) {
 								corev1.ProtocolTCP,
 							},
 							isFixed: false,
+							annotations: map[string]string{
+								"service.beta.kubernetes.io/volcengine-loadbalancer-health-check-flag": "on",
+								"service.beta.kubernetes.io/volcengine-loadbalancer-healthy-threshold": "3",
+								"service.beta.kubernetes.io/volcengine-loadbalancer-scheduler":         "wrr",
+								"service.beta.kubernetes.io/volcengine-loadbalancer-pass-through":      "true",
+							},
 						}),
+						"service.beta.kubernetes.io/volcengine-loadbalancer-health-check-flag": "on",
+						"service.beta.kubernetes.io/volcengine-loadbalancer-healthy-threshold": "3",
+						"service.beta.kubernetes.io/volcengine-loadbalancer-pass-through":      "true",
 					},
 					OwnerReferences: []metav1.OwnerReference{
 						{

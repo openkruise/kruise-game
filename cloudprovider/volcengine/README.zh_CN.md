@@ -32,7 +32,12 @@ min_port = 500
 #### AllowNotReadyContainers
 - 含义：在容器原地升级时允许不断流的对应容器名称，可填写多个
 - 填写格式：{containerName_0},{containerName_1},... 例如：sidecar
-- 是否支持变更：在原地升级过程中不可变更。
+- 是否支持变更：在原地升级过程中不可变更
+
+#### Annotations
+- 含义：添加在service上的anno，可填写多个
+- 填写格式：key1:value1,key2:value2...
+- 是否支持变更：是
 
 
 ### 使用示例
@@ -62,6 +67,10 @@ spec:
       - name: Fixed
         #Fill in here whether a fixed IP is required [optional] ; Default is false
         value: "false"
+      - name: Annotations
+        #Fill in the anno related to clb on the service
+        #The format is as follows: {key1}:{value1},{key2}:{value2}...
+        value: "key1:value1,key2:value2"
   gameServerTemplate:
     spec:
       containers:

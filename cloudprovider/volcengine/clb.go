@@ -45,6 +45,7 @@ const (
 	ClbIdsConfigName        = "ClbIds"
 	PortProtocolsConfigName = "PortProtocols"
 	FixedConfigName         = "Fixed"
+	ClbAnnotations          = "Annotations"
 	ClbConfigHashKey        = "game.kruise.io/network-config-hash"
 	ClbIdAnnotationKey      = "service.beta.kubernetes.io/volcengine-loadbalancer-id"
 	ClbAddressTypeKey       = "service.beta.kubernetes.io/volcengine-loadbalancer-address-type"
@@ -69,6 +70,7 @@ type clbConfig struct {
 	targetPorts []int
 	protocols   []corev1.Protocol
 	isFixed     bool
+	annotations map[string]string
 }
 
 func (c *ClbPlugin) Name() string {
@@ -355,6 +357,7 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *clbConfig {
 	ports := make([]int, 0)
 	protocols := make([]corev1.Protocol, 0)
 	isFixed := false
+	annotations := map[string]string{}
 	for _, c := range conf {
 		switch c.Name {
 		case ClbIdsConfigName:
@@ -383,6 +386,15 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *clbConfig {
 				continue
 			}
 			isFixed = v
+		case ClbAnnotations:
+			for _, anno := range strings.Split(c.Value, ",") {
+				annoKV := strings.Split(anno, ":")
+				if len(annoKV) == 2 {
+					annotations[annoKV[0]] = annoKV[1]
+				} else {
+					log.Warningf("clb annotation %s is invalid", annoKV[0])
+				}
+			}
 		}
 	}
 	return &clbConfig{
@@ -390,6 +402,7 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *clbConfig {
 		protocols:   protocols,
 		targetPorts: ports,
 		isFixed:     isFixed,
+		annotations: annotations,
 	}
 }
 
@@ -424,16 +437,21 @@ func (c *ClbPlugin) consSvc(config *clbConfig, pod *corev1.Pod, client client.Cl
 		})
 	}
 
+	annotations := map[string]string{
+		ClbSchedulerKey:    ClbSchedulerWRR,
+		ClbAddressTypeKey:  ClbAddressTypePublic,
+		ClbIdAnnotationKey: lbId,
+		ClbConfigHashKey:   util.GetHash(config),
+	}
+	for key, value := range config.annotations {
+		annotations[key] = value
+	}
+
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      pod.GetName(),
-			Namespace: pod.GetNamespace(),
-			Annotations: map[string]string{
-				ClbSchedulerKey:    ClbSchedulerWRR,
-				ClbAddressTypeKey:  ClbAddressTypePublic,
-				ClbIdAnnotationKey: lbId,
-				ClbConfigHashKey:   util.GetHash(config),
-			},
+			Name:            pod.GetName(),
+			Namespace:       pod.GetNamespace(),
+			Annotations:     annotations,
 			OwnerReferences: getSvcOwnerReference(client, ctx, pod, config.isFixed),
 		},
 		Spec: corev1.ServiceSpec{
