@@ -5,6 +5,7 @@ import (
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -435,6 +436,9 @@ func TestSyncGsToPod(t *testing.T) {
 					Labels: map[string]string{
 						gameKruiseV1alpha1.GameServerOwnerGssKey: "xxx",
 					},
+					Annotations: map[string]string{
+						"gs-sync/match-id": "xxx-xxx-xxx",
+					},
 				},
 				Spec: gameKruiseV1alpha1.GameServerSpec{
 					UpdatePriority:   &up,
@@ -461,6 +465,10 @@ func TestSyncGsToPod(t *testing.T) {
 					Labels: map[string]string{
 						gameKruiseV1alpha1.GameServerOwnerGssKey: "xxx",
 					},
+					Annotations: map[string]string{
+						"meaningless-key":  "meaningless-value",
+						"gs-sync/match-id": "xxx-xxx-xxx",
+					},
 				},
 				Spec: gameKruiseV1alpha1.GameServerSpec{
 					UpdatePriority:   &up,
@@ -480,6 +488,9 @@ func TestSyncGsToPod(t *testing.T) {
 						gameKruiseV1alpha1.GameServerDeletePriorityKey: dp.String(),
 						gameKruiseV1alpha1.GameServerUpdatePriorityKey: up.String(),
 						gameKruiseV1alpha1.GameServerStateKey:          string(gameKruiseV1alpha1.Creating),
+					},
+					Annotations: map[string]string{
+						"gs-sync/match-id": "xxx-xxx-xx2",
 					},
 				},
 				Status: corev1.PodStatus{
@@ -524,6 +535,12 @@ func TestSyncGsToPod(t *testing.T) {
 
 		if pod.Labels[gameKruiseV1alpha1.GameServerNetworkDisabled] != strconv.FormatBool(test.gs.Spec.NetworkDisabled) {
 			t.Errorf("expect NetworkDisabled is %s ,but actually is %s", strconv.FormatBool(test.gs.Spec.NetworkDisabled), pod.Labels[gameKruiseV1alpha1.GameServerNetworkDisabled])
+		}
+
+		for gsKey, gsValue := range test.gs.GetAnnotations() {
+			if util.IsHasPrefixGsSyncToPod(gsKey) && pod.Annotations[gsKey] != gsValue {
+				t.Errorf("expect gs annotation %s is %s ,but actually is %s", gsKey, gsValue, pod.Annotations[gsKey])
+			}
 		}
 	}
 }
