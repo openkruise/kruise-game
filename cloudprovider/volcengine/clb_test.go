@@ -265,6 +265,7 @@ func TestClbPlugin_consSvc(t *testing.T) {
 						"service.beta.kubernetes.io/volcengine-loadbalancer-scheduler":         "wrr",
 						"service.beta.kubernetes.io/volcengine-loadbalancer-pass-through":      "true",
 					},
+					allocateLoadBalancerNodePorts: true,
 				},
 				pod: &corev1.Pod{
 					TypeMeta: metav1.TypeMeta{
@@ -301,6 +302,7 @@ func TestClbPlugin_consSvc(t *testing.T) {
 								"service.beta.kubernetes.io/volcengine-loadbalancer-scheduler":         "wrr",
 								"service.beta.kubernetes.io/volcengine-loadbalancer-pass-through":      "true",
 							},
+							allocateLoadBalancerNodePorts: true,
 						}),
 						"service.beta.kubernetes.io/volcengine-loadbalancer-health-check-flag": "on",
 						"service.beta.kubernetes.io/volcengine-loadbalancer-healthy-threshold": "3",
@@ -332,6 +334,7 @@ func TestClbPlugin_consSvc(t *testing.T) {
 						},
 					},
 					},
+					AllocateLoadBalancerNodePorts: pointer.BoolPtr(true),
 				},
 			},
 		},

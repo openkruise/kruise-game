@@ -29,6 +29,11 @@ min_port = 500
 - 填写格式：false / true
 - 是否支持变更：是
 
+#### AllocateLoadBalancerNodePorts
+- 含义：生成的service是否分配nodeport, 仅在clb的直通模式（passthrough）下，才能设置为false
+- 填写格式：true/false
+- 是否支持变更：是
+
 #### AllowNotReadyContainers
 - 含义：在容器原地升级时允许不断流的对应容器名称，可填写多个
 - 填写格式：{containerName_0},{containerName_1},... 例如：sidecar
@@ -64,6 +69,9 @@ spec:
         #If there are multiple ports, the format is as follows: {port1}/{protocol1},{port2}/{protocol2}...
         #If the protocol is not filled in, the default is TCP
         value: 80/TCP
+      - name: AllocateLoadBalancerNodePorts
+        # Whether the generated service is assigned nodeport.
+        value: "true"
       - name: Fixed
         #Fill in here whether a fixed IP is required [optional] ; Default is false
         value: "false"

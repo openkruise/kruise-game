@@ -24,6 +24,11 @@ min_port = 500
 - Value：`port1/protocol1`,`port2/protocol2`,... The protocol names must be in uppercase letters.
 - Configurable：Y
 
+#### AllocateLoadBalancerNodePorts
+- Meaning：Whether the generated service is assigned nodeport, this can be set to false only in clb passthrough mode
+- Value：false / true
+- Configurable：Y
+
 #### Fixed
 - Meaning：whether the mapping relationship is fixed. If the mapping relationship is fixed, the mapping relationship remains unchanged even if the pod is deleted and recreated.
 - Value：false / true
@@ -63,6 +68,9 @@ spec:
         #If there are multiple ports, the format is as follows: {port1}/{protocol1},{port2}/{protocol2}...
         #If the protocol is not filled in, the default is TCP
         value: 80/TCP
+      - name: AllocateLoadBalancerNodePorts
+        # Whether the generated service is assigned nodeport.
+        value: "true"
       - name: Fixed
         #Fill in here whether a fixed IP is required [optional] ; Default is false
         value: "false"

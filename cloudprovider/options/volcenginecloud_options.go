@@ -12,9 +12,6 @@ type CLBOptions struct {
 
 func (v VolcengineOptions) Valid() bool {
 	clbOptions := v.CLBOptions
-	if clbOptions.MaxPort-clbOptions.MinPort > 200 {
-		return false
-	}
 
 	if clbOptions.MaxPort > 65535 {
 		return false
