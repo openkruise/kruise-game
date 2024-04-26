@@ -178,13 +178,13 @@ func (N *NlbSpPlugin) OnPodDeleted(client client.Client, pod *corev1.Pod, ctx co
 	return nil
 }
 
-type nlbConfig struct {
+type nlbSpConfig struct {
 	lbId      string
 	ports     []int
 	protocols []corev1.Protocol
 }
 
-func parseNLbSpConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *nlbConfig {
+func parseNLbSpConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *nlbSpConfig {
 	var lbIds string
 	var ports []int
 	var protocols []corev1.Protocol
@@ -196,14 +196,14 @@ func parseNLbSpConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *nlbConfig 
 			ports, protocols = parsePortProtocols(c.Value)
 		}
 	}
-	return &nlbConfig{
+	return &nlbSpConfig{
 		lbId:      lbIds,
 		ports:     ports,
 		protocols: protocols,
 	}
 }
 
-func consNlbSvc(nc *nlbConfig, pod *corev1.Pod, c client.Client, ctx context.Context) *corev1.Service {
+func consNlbSvc(nc *nlbSpConfig, pod *corev1.Pod, c client.Client, ctx context.Context) *corev1.Service {
 	svcPorts := make([]corev1.ServicePort, 0)
 	for i := 0; i < len(nc.ports); i++ {
 		svcPorts = append(svcPorts, corev1.ServicePort{

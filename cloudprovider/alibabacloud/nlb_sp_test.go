@@ -10,7 +10,7 @@ import (
 func TestParseNLbSpConfig(t *testing.T) {
 	tests := []struct {
 		conf []gamekruiseiov1alpha1.NetworkConfParams
-		nc   *nlbConfig
+		nc   *nlbSpConfig
 	}{
 		{
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
@@ -23,7 +23,7 @@ func TestParseNLbSpConfig(t *testing.T) {
 					Value: "80/UDP",
 				},
 			},
-			nc: &nlbConfig{
+			nc: &nlbSpConfig{
 				protocols: []corev1.Protocol{corev1.ProtocolUDP},
 				ports:     []int{80},
 				lbId:      "nlb-xxx",
@@ -40,7 +40,7 @@ func TestParseNLbSpConfig(t *testing.T) {
 					Value: "80",
 				},
 			},
-			nc: &nlbConfig{
+			nc: &nlbSpConfig{
 				protocols: []corev1.Protocol{corev1.ProtocolTCP},
 				ports:     []int{80},
 				lbId:      "nlb-xxx",
@@ -52,7 +52,7 @@ func TestParseNLbSpConfig(t *testing.T) {
 		expect := test.nc
 		actual := parseNLbSpConfig(test.conf)
 		if !reflect.DeepEqual(expect, actual) {
-			t.Errorf("case %d: expect nlbConfig is %v, but actually is %v", i, expect, actual)
+			t.Errorf("case %d: expect nlbSpConfig is %v, but actually is %v", i, expect, actual)
 		}
 	}
 }
