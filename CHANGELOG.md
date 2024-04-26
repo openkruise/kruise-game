@@ -7,7 +7,11 @@
 - Add AlibabaCloud-NLB network plugin. https://github.com/openkruise/kruise-game/pull/135
 - Add Volcengine-CLB network plugin. https://github.com/openkruise/kruise-game/pull/127
 - Add Kubernetes-NodePort network plugin. https://github.com/openkruise/kruise-game/pull/138
+- Sync annotations from gs to pod. https://github.com/openkruise/kruise-game/pull/140
+- FailurePolicy of PodMutatingWebhook turn to Fail. https://github.com/openkruise/kruise-game/pull/129
+- Replace patch asts with update. https://github.com/openkruise/kruise-game/pull/131
 - Kubernetes-HostPort plugin support to wait for network ready. https://github.com/openkruise/kruise-game/pull/136
+- Add AllocateLoadBalancerNodePorts in clb plugin. https://github.com/openkruise/kruise-game/pull/141
 ### Bug Fixes
 - Avoid patching gameserver continuously. https://github.com/openkruise/kruise-game/pull/124
 
