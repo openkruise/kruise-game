@@ -130,10 +130,6 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 	nodeIp := getAddress(node)
 
 	networkManager := utils.NewNetworkManager(pod, c)
-	status, _ := networkManager.GetNetworkStatus()
-	if status != nil {
-		return pod, nil
-	}
 
 	iNetworkPorts := make([]gamekruiseiov1alpha1.NetworkPort, 0)
 	eNetworkPorts := make([]gamekruiseiov1alpha1.NetworkPort, 0)
@@ -157,7 +153,7 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 	}
 
 	// network not ready
-	if len(iNetworkPorts) == 0 || len(eNetworkPorts) == 0 {
+	if len(iNetworkPorts) == 0 || len(eNetworkPorts) == 0 || pod.Status.PodIP == "" {
 		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
 			CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
 		}, pod)
