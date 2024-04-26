@@ -209,6 +209,14 @@ func AddPrefixGameKruise(s string) string {
 	return "game.kruise.io/" + s
 }
 
+func AddPrefixGsSyncToPod(s string) string {
+	return "gs-sync/" + s
+}
+
+func IsHasPrefixGsSyncToPod(s string) bool {
+	return strings.HasPrefix(s, "gs-sync/")
+}
+
 func RemovePrefixGameKruise(s string) string {
 	return strings.TrimPrefix(s, "game.kruise.io/")
 }

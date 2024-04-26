@@ -174,6 +174,17 @@ func (manager GameServerManager) SyncGsToPod() error {
 		}
 	}
 
+	// sync annotations from gs to pod
+	for gsKey, gsValue := range gs.GetAnnotations() {
+		if util.IsHasPrefixGsSyncToPod(gsKey) {
+			podValue, exist := pod.GetAnnotations()[gsKey]
+			if exist && (podValue == gsValue) {
+				continue
+			}
+			newAnnotations[gsKey] = gsValue
+		}
+	}
+
 	// sync pod containers when the containers(images) in GameServer are different from that in pod.
 	containers := manager.syncPodContainers(gs.Spec.Containers, pod.DeepCopy().Spec.Containers)
 
