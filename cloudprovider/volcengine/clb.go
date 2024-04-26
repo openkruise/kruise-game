@@ -39,20 +39,21 @@ import (
 )
 
 const (
-	ClbNetwork              = "Volcengine-CLB"
-	AliasCLB                = "CLB-Network"
-	ClbIdLabelKey           = "service.beta.kubernetes.io/volcengine-loadbalancer-id"
-	ClbIdsConfigName        = "ClbIds"
-	PortProtocolsConfigName = "PortProtocols"
-	FixedConfigName         = "Fixed"
-	ClbAnnotations          = "Annotations"
-	ClbConfigHashKey        = "game.kruise.io/network-config-hash"
-	ClbIdAnnotationKey      = "service.beta.kubernetes.io/volcengine-loadbalancer-id"
-	ClbAddressTypeKey       = "service.beta.kubernetes.io/volcengine-loadbalancer-address-type"
-	ClbAddressTypePublic    = "PUBLIC"
-	ClbSchedulerKey         = "service.beta.kubernetes.io/volcengine-loadbalancer-scheduler"
-	ClbSchedulerWRR         = "wrr"
-	SvcSelectorKey          = "statefulset.kubernetes.io/pod-name"
+	ClbNetwork                    = "Volcengine-CLB"
+	AliasCLB                      = "CLB-Network"
+	ClbIdLabelKey                 = "service.beta.kubernetes.io/volcengine-loadbalancer-id"
+	ClbIdsConfigName              = "ClbIds"
+	PortProtocolsConfigName       = "PortProtocols"
+	FixedConfigName               = "Fixed"
+	AllocateLoadBalancerNodePorts = "AllocateLoadBalancerNodePorts"
+	ClbAnnotations                = "Annotations"
+	ClbConfigHashKey              = "game.kruise.io/network-config-hash"
+	ClbIdAnnotationKey            = "service.beta.kubernetes.io/volcengine-loadbalancer-id"
+	ClbAddressTypeKey             = "service.beta.kubernetes.io/volcengine-loadbalancer-address-type"
+	ClbAddressTypePublic          = "PUBLIC"
+	ClbSchedulerKey               = "service.beta.kubernetes.io/volcengine-loadbalancer-scheduler"
+	ClbSchedulerWRR               = "wrr"
+	SvcSelectorKey                = "statefulset.kubernetes.io/pod-name"
 )
 
 type portAllocated map[int32]bool
@@ -66,11 +67,12 @@ type ClbPlugin struct {
 }
 
 type clbConfig struct {
-	lbIds       []string
-	targetPorts []int
-	protocols   []corev1.Protocol
-	isFixed     bool
-	annotations map[string]string
+	lbIds                         []string
+	targetPorts                   []int
+	protocols                     []corev1.Protocol
+	isFixed                       bool
+	annotations                   map[string]string
+	allocateLoadBalancerNodePorts bool
 }
 
 func (c *ClbPlugin) Name() string {
@@ -353,6 +355,7 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *clbConfig {
 	ports := make([]int, 0)
 	protocols := make([]corev1.Protocol, 0)
 	isFixed := false
+	allocateLoadBalancerNodePorts := true
 	annotations := map[string]string{}
 	for _, c := range conf {
 		switch c.Name {
@@ -382,6 +385,12 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *clbConfig {
 				continue
 			}
 			isFixed = v
+		case AllocateLoadBalancerNodePorts:
+			v, err := strconv.ParseBool(c.Value)
+			if err != nil {
+				continue
+			}
+			allocateLoadBalancerNodePorts = v
 		case ClbAnnotations:
 			for _, anno := range strings.Split(c.Value, ",") {
 				annoKV := strings.Split(anno, ":")
@@ -394,11 +403,12 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *clbConfig {
 		}
 	}
 	return &clbConfig{
-		lbIds:       lbIds,
-		protocols:   protocols,
-		targetPorts: ports,
-		isFixed:     isFixed,
-		annotations: annotations,
+		lbIds:                         lbIds,
+		protocols:                     protocols,
+		targetPorts:                   ports,
+		isFixed:                       isFixed,
+		annotations:                   annotations,
+		allocateLoadBalancerNodePorts: allocateLoadBalancerNodePorts,
 	}
 }
 
@@ -455,7 +465,8 @@ func (c *ClbPlugin) consSvc(config *clbConfig, pod *corev1.Pod, client client.Cl
 			Selector: map[string]string{
 				SvcSelectorKey: pod.GetName(),
 			},
-			Ports: svcPorts,
+			Ports:                         svcPorts,
+			AllocateLoadBalancerNodePorts: pointer.Bool(config.allocateLoadBalancerNodePorts),
 		},
 	}
 	return svc
