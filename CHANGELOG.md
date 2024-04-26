@@ -1,5 +1,16 @@
 # Change Log
 
+## v0.8.0
+> Change log since v0.7.0
+
+### Features & Enhancements
+- Add AlibabaCloud-NLB network plugin. https://github.com/openkruise/kruise-game/pull/135
+- Add Volcengine-CLB network plugin. https://github.com/openkruise/kruise-game/pull/127
+- Add Kubernetes-NodePort network plugin. https://github.com/openkruise/kruise-game/pull/138
+- Kubernetes-HostPort plugin support to wait for network ready. https://github.com/openkruise/kruise-game/pull/136
+### Bug Fixes
+- Avoid patching gameserver continuously. https://github.com/openkruise/kruise-game/pull/124
+
 ## v0.7.0
 > Change log since v0.6.0
 
