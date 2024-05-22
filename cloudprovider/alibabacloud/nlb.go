@@ -18,6 +18,7 @@ package alibabacloud
 
 import (
 	"context"
+	"fmt"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
@@ -30,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	log "k8s.io/klog/v2"
+	"regexp"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strconv"
 	"strings"
@@ -39,6 +41,30 @@ import (
 const (
 	NlbNetwork = "AlibabaCloud-NLB"
 	AliasNLB   = "NLB-Network"
+
+	// annotations provided by AlibabaCloud Cloud Controller Manager
+	LBHealthCheckFlagAnnotationKey           = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-health-check-flag"
+	LBHealthCheckTypeAnnotationKey           = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-health-check-type"
+	LBHealthCheckConnectPortAnnotationKey    = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-health-check-connect-port"
+	LBHealthCheckConnectTimeoutAnnotationKey = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-health-check-connect-timeout"
+	LBHealthyThresholdAnnotationKey          = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-healthy-threshold"
+	LBUnhealthyThresholdAnnotationKey        = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-unhealthy-threshold"
+	LBHealthCheckIntervalAnnotationKey       = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-health-check-interval"
+	LBHealthCheckUriAnnotationKey            = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-health-check-uri"
+	LBHealthCheckDomainAnnotationKey         = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-health-check-domain"
+	LBHealthCheckMethodAnnotationKey         = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-health-check-method"
+
+	// ConfigNames defined by OKG
+	LBHealthCheckFlagConfigName           = "LBHealthCheckFlag"
+	LBHealthCheckTypeConfigName           = "LBHealthCheckType"
+	LBHealthCheckConnectPortConfigName    = "LBHealthCheckConnectPort"
+	LBHealthCheckConnectTimeoutConfigName = "LBHealthCheckConnectTimeout"
+	LBHealthCheckIntervalConfigName       = "LBHealthCheckInterval"
+	LBHealthCheckUriConfigName            = "LBHealthCheckUri"
+	LBHealthCheckDomainConfigName         = "LBHealthCheckDomain"
+	LBHealthCheckMethodConfigName         = "LBHealthCheckMethod"
+	LBHealthyThresholdConfigName          = "LBHealthyThreshold"
+	LBUnhealthyThresholdConfigName        = "LBUnhealthyThreshold"
 )
 
 type NlbPlugin struct {
@@ -50,10 +76,20 @@ type NlbPlugin struct {
 }
 
 type nlbConfig struct {
-	lbIds       []string
-	targetPorts []int
-	protocols   []corev1.Protocol
-	isFixed     bool
+	lbIds                       []string
+	targetPorts                 []int
+	protocols                   []corev1.Protocol
+	isFixed                     bool
+	lBHealthCheckFlag           string
+	lBHealthCheckType           string
+	lBHealthCheckConnectPort    string
+	lBHealthCheckConnectTimeout string
+	lBHealthCheckInterval       string
+	lBHealthCheckUri            string
+	lBHealthCheckDomain         string
+	lBHealthCheckMethod         string
+	lBHealthyThreshold          string
+	lBUnhealthyThreshold        string
 }
 
 func (n *NlbPlugin) Name() string {
@@ -91,7 +127,10 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 
 	networkStatus, _ := networkManager.GetNetworkStatus()
 	networkConfig := networkManager.GetNetworkConfig()
-	sc := parseNlbConfig(networkConfig)
+	sc, err := parseNlbConfig(networkConfig)
+	if err != nil {
+		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+	}
 	if networkStatus == nil {
 		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
 			CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
@@ -101,7 +140,7 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 
 	// get svc
 	svc := &corev1.Service{}
-	err := c.Get(ctx, types.NamespacedName{
+	err = c.Get(ctx, types.NamespacedName{
 		Name:      pod.GetName(),
 		Namespace: pod.GetNamespace(),
 	}, svc)
@@ -258,15 +297,31 @@ func (n *NlbPlugin) consSvc(nc *nlbConfig, pod *corev1.Pod, c client.Client, ctx
 
 	loadBalancerClass := "alibabacloud.com/nlb"
 
+	svcAnnotations := map[string]string{
+		SlbListenerOverrideKey:         "true",
+		SlbIdAnnotationKey:             lbId,
+		SlbConfigHashKey:               util.GetHash(nc),
+		LBHealthCheckFlagAnnotationKey: nc.lBHealthCheckFlag,
+	}
+	if nc.lBHealthCheckFlag == "on" {
+		svcAnnotations[LBHealthCheckTypeAnnotationKey] = nc.lBHealthCheckType
+		svcAnnotations[LBHealthCheckConnectPortAnnotationKey] = nc.lBHealthCheckConnectPort
+		svcAnnotations[LBHealthCheckConnectTimeoutAnnotationKey] = nc.lBHealthCheckConnectTimeout
+		svcAnnotations[LBHealthCheckIntervalAnnotationKey] = nc.lBHealthCheckInterval
+		svcAnnotations[LBHealthyThresholdAnnotationKey] = nc.lBHealthyThreshold
+		svcAnnotations[LBUnhealthyThresholdAnnotationKey] = nc.lBUnhealthyThreshold
+		if nc.lBHealthCheckType == "http" {
+			svcAnnotations[LBHealthCheckDomainAnnotationKey] = nc.lBHealthCheckDomain
+			svcAnnotations[LBHealthCheckUriAnnotationKey] = nc.lBHealthCheckUri
+			svcAnnotations[LBHealthCheckMethodAnnotationKey] = nc.lBHealthCheckMethod
+		}
+	}
+
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      pod.GetName(),
-			Namespace: pod.GetNamespace(),
-			Annotations: map[string]string{
-				SlbListenerOverrideKey: "true",
-				SlbIdAnnotationKey:     lbId,
-				SlbConfigHashKey:       util.GetHash(nc),
-			},
+			Name:            pod.GetName(),
+			Namespace:       pod.GetNamespace(),
+			Annotations:     svcAnnotations,
 			OwnerReferences: getSvcOwnerReference(c, ctx, pod, nc.isFixed),
 		},
 		Spec: corev1.ServiceSpec{
@@ -348,11 +403,21 @@ func (n *NlbPlugin) deAllocate(nsName string) {
 	log.Infof("pod %s deallocate nlb %s ports %v", nsName, lbId, ports)
 }
 
-func parseNlbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *nlbConfig {
+func parseNlbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*nlbConfig, error) {
 	var lbIds []string
 	ports := make([]int, 0)
 	protocols := make([]corev1.Protocol, 0)
 	isFixed := false
+	lBHealthCheckFlag := "on"
+	lBHealthCheckType := "tcp"
+	lBHealthCheckConnectPort := "0"
+	lBHealthCheckConnectTimeout := "5"
+	lBHealthCheckInterval := "10"
+	lBUnhealthyThreshold := "2"
+	lBHealthyThreshold := "2"
+	lBHealthCheckUri := ""
+	lBHealthCheckDomain := ""
+	lBHealthCheckMethod := ""
 	for _, c := range conf {
 		switch c.Name {
 		case NlbIdsConfigName:
@@ -381,12 +446,138 @@ func parseNlbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *nlbConfig {
 				continue
 			}
 			isFixed = v
+		case LBHealthCheckFlagConfigName:
+			flag := strings.ToLower(c.Value)
+			if flag != "on" && flag != "off" {
+				return nil, fmt.Errorf("invalid lb health check flag value: %s", c.Value)
+			}
+			lBHealthCheckFlag = flag
+		case LBHealthCheckTypeConfigName:
+			checkType := strings.ToLower(c.Value)
+			if checkType != "tcp" && checkType != "http" {
+				return nil, fmt.Errorf("invalid lb health check type: %s", c.Value)
+			}
+			lBHealthCheckType = checkType
+		case LBHealthCheckConnectPortConfigName:
+			portInt, err := strconv.Atoi(c.Value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid lb health check connect port: %s", c.Value)
+			}
+			if portInt < 0 || portInt > 65535 {
+				return nil, fmt.Errorf("invalid lb health check connect port: %d", portInt)
+			}
+			lBHealthCheckConnectPort = c.Value
+		case LBHealthCheckConnectTimeoutConfigName:
+			timeoutInt, err := strconv.Atoi(c.Value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid lb health check connect timeout: %s", c.Value)
+			}
+			if timeoutInt < 1 || timeoutInt > 300 {
+				return nil, fmt.Errorf("invalid lb health check connect timeout: %d", timeoutInt)
+			}
+			lBHealthCheckConnectTimeout = c.Value
+		case LBHealthCheckIntervalConfigName:
+			intervalInt, err := strconv.Atoi(c.Value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid lb health check interval: %s", c.Value)
+			}
+			if intervalInt < 1 || intervalInt > 50 {
+				return nil, fmt.Errorf("invalid lb health check interval: %d", intervalInt)
+			}
+			lBHealthCheckInterval = c.Value
+		case LBHealthyThresholdConfigName:
+			thresholdInt, err := strconv.Atoi(c.Value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid lb healthy threshold: %s", c.Value)
+			}
+			if thresholdInt < 2 || thresholdInt > 10 {
+				return nil, fmt.Errorf("invalid lb healthy threshold: %d", thresholdInt)
+			}
+			lBHealthyThreshold = c.Value
+		case LBUnhealthyThresholdConfigName:
+			thresholdInt, err := strconv.Atoi(c.Value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid lb unhealthy threshold: %s", c.Value)
+			}
+			if thresholdInt < 2 || thresholdInt > 10 {
+				return nil, fmt.Errorf("invalid lb unhealthy threshold: %d", thresholdInt)
+			}
+			lBUnhealthyThreshold = c.Value
+		case LBHealthCheckUriConfigName:
+			if validateUri(c.Value) != nil {
+				return nil, fmt.Errorf("invalid lb health check uri: %s", c.Value)
+			}
+			lBHealthCheckUri = c.Value
+		case LBHealthCheckDomainConfigName:
+			if validateDomain(c.Value) != nil {
+				return nil, fmt.Errorf("invalid lb health check domain: %s", c.Value)
+			}
+			lBHealthCheckDomain = c.Value
+		case LBHealthCheckMethodConfigName:
+			method := strings.ToLower(c.Value)
+			if method != "get" && method != "head" {
+				return nil, fmt.Errorf("invalid lb health check method: %s", c.Value)
+			}
+			lBHealthCheckMethod = method
 		}
 	}
 	return &nlbConfig{
-		lbIds:       lbIds,
-		protocols:   protocols,
-		targetPorts: ports,
-		isFixed:     isFixed,
+		lbIds:                       lbIds,
+		protocols:                   protocols,
+		targetPorts:                 ports,
+		isFixed:                     isFixed,
+		lBHealthCheckFlag:           lBHealthCheckFlag,
+		lBHealthCheckType:           lBHealthCheckType,
+		lBHealthCheckConnectPort:    lBHealthCheckConnectPort,
+		lBHealthCheckConnectTimeout: lBHealthCheckConnectTimeout,
+		lBHealthCheckInterval:       lBHealthCheckInterval,
+		lBHealthCheckUri:            lBHealthCheckUri,
+		lBHealthCheckDomain:         lBHealthCheckDomain,
+		lBHealthCheckMethod:         lBHealthCheckMethod,
+		lBHealthyThreshold:          lBHealthyThreshold,
+		lBUnhealthyThreshold:        lBUnhealthyThreshold,
+	}, nil
+}
+
+func validateDomain(domain string) error {
+	if len(domain) < 1 || len(domain) > 80 {
+		return fmt.Errorf("the domain length must be between 1 and 80 characters")
 	}
+
+	// Regular expression matches lowercase letters, numbers, dashes and periods
+	domainRegex := regexp.MustCompile(`^[a-z0-9-.]+$`)
+	if !domainRegex.MatchString(domain) {
+		return fmt.Errorf("the domain must only contain lowercase letters, numbers, hyphens, and periods")
+	}
+
+	// make sure the domain name does not start or end with a dash or period
+	if domain[0] == '-' || domain[0] == '.' || domain[len(domain)-1] == '-' || domain[len(domain)-1] == '.' {
+		return fmt.Errorf("the domain must not start or end with a hyphen or period")
+	}
+
+	// make sure the domain name does not contain consecutive dots or dashes
+	if regexp.MustCompile(`(--|\.\.)`).MatchString(domain) {
+		return fmt.Errorf("the domain must not contain consecutive hyphens or periods")
+	}
+
+	return nil
+}
+
+func validateUri(uri string) error {
+	if len(uri) < 1 || len(uri) > 80 {
+		return fmt.Errorf("string length must be between 1 and 80 characters")
+	}
+
+	regexPattern := `^/[0-9a-zA-Z.!$%&'*+/=?^_` + "`" + `{|}~-]*$`
+	matched, err := regexp.MatchString(regexPattern, uri)
+
+	if err != nil {
+		return fmt.Errorf("regex error: %v", err)
+	}
+
+	if !matched {
+		return fmt.Errorf("string does not match the required pattern")
+	}
+
+	return nil
 }
