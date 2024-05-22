@@ -59,10 +59,7 @@ func TestNLBAllocateDeAllocate(t *testing.T) {
 func TestParseNlbConfig(t *testing.T) {
 	tests := []struct {
 		conf      []gamekruiseiov1alpha1.NetworkConfParams
-		lbIds     []string
-		ports     []int
-		protocols []corev1.Protocol
-		isFixed   bool
+		nlbConfig *nlbConfig
 	}{
 		{
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
@@ -74,11 +71,63 @@ func TestParseNlbConfig(t *testing.T) {
 					Name:  PortProtocolsConfigName,
 					Value: "80",
 				},
+				{
+					Name:  LBHealthCheckFlagConfigName,
+					Value: "On",
+				},
+				{
+					Name:  LBHealthCheckTypeConfigName,
+					Value: "HTTP",
+				},
+				{
+					Name:  LBHealthCheckConnectPortConfigName,
+					Value: "6000",
+				},
+				{
+					Name:  LBHealthCheckConnectTimeoutConfigName,
+					Value: "100",
+				},
+				{
+					Name:  LBHealthCheckIntervalConfigName,
+					Value: "30",
+				},
+				{
+					Name:  LBHealthCheckUriConfigName,
+					Value: "/another?valid",
+				},
+				{
+					Name:  LBHealthCheckDomainConfigName,
+					Value: "www.test.com",
+				},
+				{
+					Name:  LBHealthCheckMethodConfigName,
+					Value: "HEAD",
+				},
+				{
+					Name:  LBHealthyThresholdConfigName,
+					Value: "5",
+				},
+				{
+					Name:  LBUnhealthyThresholdConfigName,
+					Value: "5",
+				},
 			},
-			lbIds:     []string{"xxx-A"},
-			ports:     []int{80},
-			protocols: []corev1.Protocol{corev1.ProtocolTCP},
-			isFixed:   false,
+			nlbConfig: &nlbConfig{
+				lbIds:                       []string{"xxx-A"},
+				targetPorts:                 []int{80},
+				protocols:                   []corev1.Protocol{corev1.ProtocolTCP},
+				isFixed:                     false,
+				lBHealthCheckFlag:           "on",
+				lBHealthCheckType:           "http",
+				lBHealthCheckConnectPort:    "6000",
+				lBHealthCheckConnectTimeout: "100",
+				lBHealthCheckInterval:       "30",
+				lBHealthCheckUri:            "/another?valid",
+				lBHealthCheckDomain:         "www.test.com",
+				lBHealthCheckMethod:         "head",
+				lBHealthyThreshold:          "5",
+				lBUnhealthyThreshold:        "5",
+			},
 		},
 		{
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
@@ -95,26 +144,32 @@ func TestParseNlbConfig(t *testing.T) {
 					Value: "true",
 				},
 			},
-			lbIds:     []string{"xxx-A", "xxx-B"},
-			ports:     []int{81, 82, 83},
-			protocols: []corev1.Protocol{corev1.ProtocolUDP, corev1.ProtocolTCP, corev1.ProtocolTCP},
-			isFixed:   true,
+			nlbConfig: &nlbConfig{
+				lbIds:                       []string{"xxx-A", "xxx-B"},
+				targetPorts:                 []int{81, 82, 83},
+				protocols:                   []corev1.Protocol{corev1.ProtocolUDP, corev1.ProtocolTCP, corev1.ProtocolTCP},
+				isFixed:                     true,
+				lBHealthCheckFlag:           "on",
+				lBHealthCheckType:           "tcp",
+				lBHealthCheckConnectPort:    "0",
+				lBHealthCheckConnectTimeout: "5",
+				lBHealthCheckInterval:       "10",
+				lBUnhealthyThreshold:        "2",
+				lBHealthyThreshold:          "2",
+				lBHealthCheckUri:            "",
+				lBHealthCheckDomain:         "",
+				lBHealthCheckMethod:         "",
+			},
 		},
 	}
 
-	for _, test := range tests {
-		sc := parseNlbConfig(test.conf)
-		if !reflect.DeepEqual(test.lbIds, sc.lbIds) {
-			t.Errorf("lbId expect: %v, actual: %v", test.lbIds, sc.lbIds)
+	for i, test := range tests {
+		sc, err := parseNlbConfig(test.conf)
+		if err != nil {
+			t.Error(err)
 		}
-		if !util.IsSliceEqual(test.ports, sc.targetPorts) {
-			t.Errorf("ports expect: %v, actual: %v", test.ports, sc.targetPorts)
-		}
-		if !reflect.DeepEqual(test.protocols, sc.protocols) {
-			t.Errorf("protocols expect: %v, actual: %v", test.protocols, sc.protocols)
-		}
-		if test.isFixed != sc.isFixed {
-			t.Errorf("isFixed expect: %v, actual: %v", test.isFixed, sc.isFixed)
+		if !reflect.DeepEqual(test.nlbConfig, sc) {
+			t.Errorf("case %d: lbId expect: %v, actual: %v", i, test.nlbConfig, sc)
 		}
 	}
 }
@@ -158,7 +213,17 @@ func TestNlbPlugin_consSvc(t *testing.T) {
 					protocols: []corev1.Protocol{
 						corev1.ProtocolTCP,
 					},
-					isFixed: false,
+					isFixed:                     false,
+					lBHealthCheckFlag:           "on",
+					lBHealthCheckType:           "tcp",
+					lBHealthCheckConnectPort:    "0",
+					lBHealthCheckConnectTimeout: "5",
+					lBHealthCheckInterval:       "10",
+					lBUnhealthyThreshold:        "2",
+					lBHealthyThreshold:          "2",
+					lBHealthCheckUri:            "",
+					lBHealthCheckDomain:         "",
+					lBHealthCheckMethod:         "",
 				},
 				pod: &corev1.Pod{
 					TypeMeta: metav1.TypeMeta{
@@ -187,8 +252,25 @@ func TestNlbPlugin_consSvc(t *testing.T) {
 							protocols: []corev1.Protocol{
 								corev1.ProtocolTCP,
 							},
-							isFixed: false,
+							isFixed:                     false,
+							lBHealthCheckFlag:           "on",
+							lBHealthCheckType:           "tcp",
+							lBHealthCheckConnectPort:    "0",
+							lBHealthCheckConnectTimeout: "5",
+							lBHealthCheckInterval:       "10",
+							lBUnhealthyThreshold:        "2",
+							lBHealthyThreshold:          "2",
+							lBHealthCheckUri:            "",
+							lBHealthCheckDomain:         "",
+							lBHealthCheckMethod:         "",
 						}),
+						LBHealthCheckFlagAnnotationKey:           "on",
+						LBHealthCheckTypeAnnotationKey:           "tcp",
+						LBHealthCheckConnectPortAnnotationKey:    "0",
+						LBHealthCheckConnectTimeoutAnnotationKey: "5",
+						LBHealthCheckIntervalAnnotationKey:       "10",
+						LBUnhealthyThresholdAnnotationKey:        "2",
+						LBHealthyThresholdAnnotationKey:          "2",
 					},
 					OwnerReferences: []metav1.OwnerReference{
 						{

@@ -489,6 +489,178 @@ AllowNotReadyContainers
 
 None
 
+---
+
+### AlibabaCloud-NLB
+#### Plugin name
+
+`AlibabaCloud-NLB`
+
+#### Cloud Provider
+
+AlibabaCloud
+
+#### Plugin description
+
+- AlibabaCloud-NLB enables game servers to be accessed from the Internet by using Layer 4 Network Load Balancer (NLB) of Alibaba Cloud. AlibabaCloud-NLB uses different ports of the same NLB instance to forward Internet traffic to different game servers. The NLB instance only forwards traffic, but does not implement load balancing.
+
+- This network plugin supports network isolation.
+
+#### Network parameters
+
+NlbIds
+
+- Meaning: the NLB instance ID. You can fill in multiple ids.
+- Value: in the format of nlbId-0,nlbId-1,... An example value can be "nlb-ji8l844c0qzii1x6mc,nlb-26jbknebrjlejt5abu"
+- Configuration change supported or not: yes. You can add new nlbIds at the end. However, it is recommended not to change existing nlbId that is in use.
+
+PortProtocols
+
+- Meaning: the ports in the pod to be exposed and the protocols. You can specify multiple ports and protocols.
+- Value: in the format of port1/protocol1,port2/protocol2,... The protocol names must be in uppercase letters.
+- Configuration change supported or not: yes.
+
+Fixed
+
+- Meaning: whether the mapping relationship is fixed. If the mapping relationship is fixed, the mapping relationship remains unchanged even if the pod is deleted and recreated.
+- Value: false or true.
+- Configuration change supported or not: yes.
+
+AllowNotReadyContainers
+
+- Meaning: the container names that are allowed not ready when inplace updating, when traffic will not be cut.
+- Value: {containerName_0},{containerName_1},... Example：sidecar
+- Configuration change supported or not: It cannot be changed during the in-place updating process.
+
+LBHealthCheckFlag
+
+- Meaning: Whether to enable health check
+- Format: "on" means on, "off" means off. Default is on
+- Whether to support changes: Yes
+
+LBHealthCheckType
+
+- Meaning: Health Check Protocol
+- Format: fill in "tcp" or "http", the default is tcp
+- Whether to support changes: Yes
+
+LBHealthCheckConnectPort
+
+- Meaning: Server port for health check.
+- Format: Value range [0, 65535]. Default value is "0"
+- Whether to support changes: Yes
+
+LBHealthCheckConnectTimeout
+
+- Meaning: Maximum timeout for health check response.
+- Format: Unit: seconds. The value range is [1, 300]. The default value is "5"
+- Whether to support changes: Yes
+
+LBHealthyThreshold
+
+- Meaning: After the number of consecutive successful health checks, the health check status of the server will be determined from failure to success.
+- Format: Value range [2, 10]. Default value is "2"
+- Whether to support changes: Yes
+
+LBUnhealthyThreshold
+
+- Meaning: After the number of consecutive health check failures, the health check status of the server will be determined from success to failure.
+- Format: Value range [2, 10]. The default value is "2"
+- Whether to support changes: Yes
+
+LBHealthCheckInterval
+
+- Meaning: health check interval.
+- Format: Unit: seconds. The value range is [1, 50]. The default value is "10"
+- Whether to support changes: Yes
+
+LBHealthCheckUri
+
+- Meaning: The corresponding uri when the health check type is HTTP.
+- Format: The length is 1~80 characters, only letters, numbers, and characters can be used. Must start with a forward slash (/). Such as "/test/index.html"
+- Whether to support changes: Yes
+
+LBHealthCheckDomain
+
+- Meaning: The corresponding domain name when the health check type is HTTP.
+- Format: The length of a specific domain name is limited to 1~80 characters. Only lowercase letters, numbers, dashes (-), and half-width periods (.) can be used.
+- Whether to support changes: Yes
+
+LBHealthCheckMethod
+
+- Meaning: The corresponding method when the health check type is HTTP.
+- Format: "GET" or "HEAD"
+- Whether to support changes: Yes
+
+#### Plugin configuration
+```
+[alibabacloud]
+enable = true
+[alibabacloud.nlb]
+# Specify the range of available ports of the NLB instance. Ports in this range can be used to forward Internet traffic to pods. In this example, the range includes 500 ports.
+max_port = 1500
+min_port = 1000
+```
+
+#### Example
+
+```
+cat <<EOF | kubectl apply -f -
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: gs-nlb
+  namespace: default
+spec:
+  replicas: 1
+  updateStrategy:
+    rollingUpdate:
+      podUpdatePolicy: InPlaceIfPossible
+  network:
+    networkConf:
+    - name: NlbIds
+      value: nlb-muyo7fv6z646ygcxxx
+    - name: PortProtocols
+      value: "80"
+    - name: Fixed
+      value: "true"
+    networkType: AlibabaCloud-NLB
+  gameServerTemplate:
+    spec:
+      containers:
+        - image: registry.cn-hangzhou.aliyuncs.com/gs-demo/gameserver:network
+          name: gameserver
+EOF
+```
+
+The network status of GameServer would be as follows:
+
+```
+  networkStatus:
+    createTime: "2024-04-28T12:41:56Z"
+    currentNetworkState: Ready
+    desiredNetworkState: Ready
+    externalAddresses:
+    - endPoint: nlb-muyo7fv6z646ygcxxx.cn-xxx.nlb.aliyuncs.com
+      ip: ""
+      ports:
+      - name: "80"
+        port: 1047
+        protocol: TCP
+    internalAddresses:
+    - ip: 172.16.0.1
+      ports:
+      - name: "80"
+        port: 80
+        protocol: TCP
+    lastTransitionTime: "2024-04-28T12:41:56Z"
+    networkType: AlibabaCloud-NLB
+```
+
+Clients can access the game server by using nlb-muyo7fv6z646ygcxxx.cn-xxx.nlb.aliyuncs.com:1047
+
+---
+
 ### AlibabaCloud-EIP
 
 #### Plugin name
