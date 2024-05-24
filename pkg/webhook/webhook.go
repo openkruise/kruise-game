@@ -20,20 +20,22 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	manager2 "github.com/openkruise/kruise-game/cloudprovider/manager"
-	"github.com/openkruise/kruise-game/pkg/webhook/util/generator"
-	"github.com/openkruise/kruise-game/pkg/webhook/util/writer"
+	"log"
+
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	manager2 "github.com/openkruise/kruise-game/cloudprovider/manager"
+	"github.com/openkruise/kruise-game/pkg/webhook/util/generator"
+	"github.com/openkruise/kruise-game/pkg/webhook/util/writer"
 )
 
 var (
@@ -80,6 +82,9 @@ func init() {
 // +kubebuilder:rbac:groups=alibabacloud.com,resources=podeips,verbs=get;list;watch
 // +kubebuilder:rbac:groups=alibabacloud.com,resources=podeips/status,verbs=get
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=elbv2.k8s.aws,resources=targetgroupbindings,verbs=create;get;list;patch;update;watch
+// +kubebuilder:rbac:groups=elbv2.services.k8s.aws,resources=listeners,verbs=create;get;list;patch;update;watch
+// +kubebuilder:rbac:groups=elbv2.services.k8s.aws,resources=targetgroups,verbs=create;get;list;patch;update;watch
 
 type Webhook struct {
 	mgr manager.Manager
