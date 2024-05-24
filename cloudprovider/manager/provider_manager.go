@@ -21,6 +21,7 @@ import (
 	"github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	"github.com/openkruise/kruise-game/cloudprovider/alibabacloud"
+	aws "github.com/openkruise/kruise-game/cloudprovider/amazonswebservices"
 	"github.com/openkruise/kruise-game/cloudprovider/kubernetes"
 	volcengine "github.com/openkruise/kruise-game/cloudprovider/volcengine"
 	corev1 "k8s.io/api/core/v1"
@@ -124,6 +125,16 @@ func NewProviderManager() (*ProviderManager, error) {
 			log.Errorf("Failed to initialize volcengine provider.because of %s", err.Error())
 		} else {
 			pm.RegisterCloudProvider(vcp, configs.VolcengineOptions)
+		}
+	}
+
+	if configs.AmazonsWebServicesOptions.Valid() && configs.AmazonsWebServicesOptions.Enabled() {
+		// build and register amazon web services provider
+		vcp, err := aws.NewAmazonsWebServicesProvider()
+		if err != nil {
+			log.Errorf("Failed to initialize amazons web services provider.because of %s", err.Error())
+		} else {
+			pm.RegisterCloudProvider(vcp, configs.AmazonsWebServicesOptions)
 		}
 	}
 

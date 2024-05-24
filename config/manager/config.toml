@@ -18,3 +18,9 @@ enable = true
 [volcengine.clb]
 max_port = 700
 min_port = 500
+
+[aws]
+enable = false
+[aws.nlb]
+max_port = 30050
+min_port = 30001

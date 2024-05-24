@@ -187,6 +187,39 @@ rules:
   - patch
   - update
 - apiGroups:
+  - elbv2.k8s.aws
+  resources:
+  - targetgroupbindings
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - elbv2.services.k8s.aws
+  resources:
+  - listeners
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - elbv2.services.k8s.aws
+  resources:
+  - targetgroups
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - game.kruise.io
   resources:
   - gameservers
