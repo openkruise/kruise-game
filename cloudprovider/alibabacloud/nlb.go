@@ -146,7 +146,11 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	}, svc)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return pod, cperrors.ToPluginError(c.Create(ctx, n.consSvc(sc, pod, c, ctx)), cperrors.ApiCallError)
+			service, err := n.consSvc(sc, pod, c, ctx)
+			if err != nil {
+				return pod, cperrors.ToPluginError(err, cperrors.ParameterError)
+			}
+			return pod, cperrors.ToPluginError(c.Create(ctx, service), cperrors.ApiCallError)
 		}
 		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
@@ -158,7 +162,11 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 		if err != nil {
 			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
 		}
-		return pod, cperrors.ToPluginError(c.Update(ctx, n.consSvc(sc, pod, c, ctx)), cperrors.ApiCallError)
+		service, err := n.consSvc(sc, pod, c, ctx)
+		if err != nil {
+			return pod, cperrors.ToPluginError(err, cperrors.ParameterError)
+		}
+		return pod, cperrors.ToPluginError(c.Update(ctx, service), cperrors.ApiCallError)
 	}
 
 	// disable network
@@ -272,7 +280,7 @@ func init() {
 	alibabaCloudProvider.registerPlugin(&nlbPlugin)
 }
 
-func (n *NlbPlugin) consSvc(nc *nlbConfig, pod *corev1.Pod, c client.Client, ctx context.Context) *corev1.Service {
+func (n *NlbPlugin) consSvc(nc *nlbConfig, pod *corev1.Pod, c client.Client, ctx context.Context) (*corev1.Service, error) {
 	var ports []int32
 	var lbId string
 	podKey := pod.GetNamespace() + "/" + pod.GetName()
@@ -283,6 +291,9 @@ func (n *NlbPlugin) consSvc(nc *nlbConfig, pod *corev1.Pod, c client.Client, ctx
 		ports = util.StringToInt32Slice(slbPorts[1], ",")
 	} else {
 		lbId, ports = n.allocate(nc.lbIds, len(nc.targetPorts), podKey)
+		if lbId == "" && ports == nil {
+			return nil, fmt.Errorf("there are no avaialable ports for %v", nc.lbIds)
+		}
 	}
 
 	svcPorts := make([]corev1.ServicePort, 0)
@@ -334,7 +345,7 @@ func (n *NlbPlugin) consSvc(nc *nlbConfig, pod *corev1.Pod, c client.Client, ctx
 			LoadBalancerClass: &loadBalancerClass,
 		},
 	}
-	return svc
+	return svc, nil
 }
 
 func (n *NlbPlugin) allocate(lbIds []string, num int, nsName string) (string, []int32) {
@@ -356,6 +367,9 @@ func (n *NlbPlugin) allocate(lbIds []string, num int, nsName string) (string, []
 				break
 			}
 		}
+	}
+	if lbId == "" {
+		return "", nil
 	}
 
 	// select ports

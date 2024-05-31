@@ -18,6 +18,7 @@ package alibabacloud
 
 import (
 	"context"
+	"fmt"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
@@ -144,7 +145,11 @@ func (s *SlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	}, svc)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return pod, cperrors.ToPluginError(c.Create(ctx, s.consSvc(sc, pod, c, ctx)), cperrors.ApiCallError)
+			service, err := s.consSvc(sc, pod, c, ctx)
+			if err != nil {
+				return pod, cperrors.ToPluginError(err, cperrors.ParameterError)
+			}
+			return pod, cperrors.ToPluginError(c.Create(ctx, service), cperrors.ApiCallError)
 		}
 		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
@@ -156,7 +161,11 @@ func (s *SlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 		if err != nil {
 			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
 		}
-		return pod, cperrors.ToPluginError(c.Update(ctx, s.consSvc(sc, pod, c, ctx)), cperrors.ApiCallError)
+		service, err := s.consSvc(sc, pod, c, ctx)
+		if err != nil {
+			return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+		}
+		return pod, cperrors.ToPluginError(c.Update(ctx, service), cperrors.ApiCallError)
 	}
 
 	// disable network
@@ -282,6 +291,9 @@ func (s *SlbPlugin) allocate(lbIds []string, num int, nsName string) (string, []
 			}
 		}
 	}
+	if lbId == "" {
+		return "", nil
+	}
 
 	// select ports
 	for i := 0; i < num; i++ {
@@ -386,7 +398,7 @@ func getPorts(ports []corev1.ServicePort) []int32 {
 	return ret
 }
 
-func (s *SlbPlugin) consSvc(sc *slbConfig, pod *corev1.Pod, c client.Client, ctx context.Context) *corev1.Service {
+func (s *SlbPlugin) consSvc(sc *slbConfig, pod *corev1.Pod, c client.Client, ctx context.Context) (*corev1.Service, error) {
 	var ports []int32
 	var lbId string
 	podKey := pod.GetNamespace() + "/" + pod.GetName()
@@ -397,6 +409,9 @@ func (s *SlbPlugin) consSvc(sc *slbConfig, pod *corev1.Pod, c client.Client, ctx
 		ports = util.StringToInt32Slice(slbPorts[1], ",")
 	} else {
 		lbId, ports = s.allocate(sc.lbIds, len(sc.targetPorts), podKey)
+		if lbId == "" && ports == nil {
+			return nil, fmt.Errorf("there are no avaialable ports for %v", sc.lbIds)
+		}
 	}
 
 	svcPorts := make([]corev1.ServicePort, 0)
@@ -428,7 +443,7 @@ func (s *SlbPlugin) consSvc(sc *slbConfig, pod *corev1.Pod, c client.Client, ctx
 			Ports: svcPorts,
 		},
 	}
-	return svc
+	return svc, nil
 }
 
 func getSvcOwnerReference(c client.Client, ctx context.Context, pod *corev1.Pod, isFixed bool) []metav1.OwnerReference {
