@@ -10,7 +10,7 @@ on:
 
 env:
   # Common versions
-  GO_VERSION: '1.19'
+  GO_VERSION: '1.21'
   KIND_ACTION_VERSION: 'v1.3.0'
   KIND_VERSION: 'v0.14.0'
   KIND_IMAGE: 'kindest/node:v1.26.4'
