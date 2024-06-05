@@ -2,11 +2,13 @@ package gameserverset
 
 import (
 	"context"
+	"reflect"
+	"strconv"
+	"testing"
+
 	appspub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
-	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	"github.com/openkruise/kruise-game/pkg/util"
 	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,12 +16,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/utils/pointer"
-	"reflect"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"strconv"
-	"testing"
+
+	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/util"
 )
 
 var (
@@ -377,12 +379,12 @@ func TestIsNeedToScale(t *testing.T) {
 		{
 			gss: &gameKruiseV1alpha1.GameServerSet{
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
-					Replicas: pointer.Int32(5),
+					Replicas: ptr.To[int32](5),
 				},
 			},
 			asts: &kruiseV1beta1.StatefulSet{
 				Spec: kruiseV1beta1.StatefulSetSpec{
-					Replicas: pointer.Int32(5),
+					Replicas: ptr.To[int32](5),
 				},
 				Status: kruiseV1beta1.StatefulSetStatus{
 					Replicas: int32(5),
@@ -396,13 +398,13 @@ func TestIsNeedToScale(t *testing.T) {
 					Annotations: map[string]string{gameKruiseV1alpha1.GameServerSetReserveIdsKey: "1,5"},
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
-					Replicas:             pointer.Int32(5),
+					Replicas:             ptr.To[int32](5),
 					ReserveGameServerIds: []int{1, 5},
 				},
 			},
 			asts: &kruiseV1beta1.StatefulSet{
 				Spec: kruiseV1beta1.StatefulSetSpec{
-					Replicas: pointer.Int32(5),
+					Replicas: ptr.To[int32](5),
 				},
 				Status: kruiseV1beta1.StatefulSetStatus{
 					Replicas: int32(5),
@@ -442,7 +444,7 @@ func TestGameServerScale(t *testing.T) {
 					Annotations: map[string]string{gameKruiseV1alpha1.GameServerSetReserveIdsKey: "1"},
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
-					Replicas:             pointer.Int32(3),
+					Replicas:             ptr.To[int32](3),
 					ReserveGameServerIds: []int{1},
 				},
 			},
@@ -452,7 +454,7 @@ func TestGameServerScale(t *testing.T) {
 					Name:      "case0",
 				},
 				Spec: kruiseV1beta1.StatefulSetSpec{
-					Replicas:        pointer.Int32(4),
+					Replicas:        ptr.To[int32](4),
 					ReserveOrdinals: []int{1},
 				},
 				Status: kruiseV1beta1.StatefulSetStatus{
@@ -509,7 +511,7 @@ func TestGameServerScale(t *testing.T) {
 					Annotations: map[string]string{gameKruiseV1alpha1.GameServerSetReserveIdsKey: "1"},
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
-					Replicas:             pointer.Int32(3),
+					Replicas:             ptr.To[int32](3),
 					ReserveGameServerIds: []int{1, 0},
 				},
 			},
@@ -519,7 +521,7 @@ func TestGameServerScale(t *testing.T) {
 					Name:      "case1",
 				},
 				Spec: kruiseV1beta1.StatefulSetSpec{
-					Replicas:        pointer.Int32(4),
+					Replicas:        ptr.To[int32](4),
 					ReserveOrdinals: []int{1},
 				},
 				Status: kruiseV1beta1.StatefulSetStatus{
@@ -576,7 +578,7 @@ func TestGameServerScale(t *testing.T) {
 					Annotations: map[string]string{gameKruiseV1alpha1.GameServerSetReserveIdsKey: "1"},
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
-					Replicas:             pointer.Int32(5),
+					Replicas:             ptr.To[int32](5),
 					ReserveGameServerIds: []int{},
 				},
 			},
@@ -586,7 +588,7 @@ func TestGameServerScale(t *testing.T) {
 					Name:      "case2",
 				},
 				Spec: kruiseV1beta1.StatefulSetSpec{
-					Replicas:        pointer.Int32(4),
+					Replicas:        ptr.To[int32](4),
 					ReserveOrdinals: []int{1},
 				},
 				Status: kruiseV1beta1.StatefulSetStatus{
@@ -643,7 +645,7 @@ func TestGameServerScale(t *testing.T) {
 					Annotations: map[string]string{gameKruiseV1alpha1.GameServerSetReserveIdsKey: "1"},
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
-					Replicas:             pointer.Int32(5),
+					Replicas:             ptr.To[int32](5),
 					ReserveGameServerIds: []int{},
 				},
 			},
@@ -653,7 +655,7 @@ func TestGameServerScale(t *testing.T) {
 					Name:      "case3",
 				},
 				Spec: kruiseV1beta1.StatefulSetSpec{
-					Replicas:        pointer.Int32(3),
+					Replicas:        ptr.To[int32](3),
 					ReserveOrdinals: []int{1, 3},
 				},
 				Status: kruiseV1beta1.StatefulSetStatus{
@@ -886,12 +888,12 @@ func TestNumberToKill(t *testing.T) {
 		{
 			gss: &gameKruiseV1alpha1.GameServerSet{
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
-					Replicas: pointer.Int32(3),
+					Replicas: ptr.To[int32](3),
 				},
 			},
 			asts: &kruiseV1beta1.StatefulSet{
 				Spec: kruiseV1beta1.StatefulSetSpec{
-					Replicas: pointer.Int32(3),
+					Replicas: ptr.To[int32](3),
 				},
 			},
 			podList: []corev1.Pod{
@@ -923,7 +925,7 @@ func TestNumberToKill(t *testing.T) {
 		{
 			gss: &gameKruiseV1alpha1.GameServerSet{
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
-					Replicas: pointer.Int32(3),
+					Replicas: ptr.To[int32](3),
 				},
 				Status: gameKruiseV1alpha1.GameServerSetStatus{
 					Replicas: int32(3),
@@ -931,7 +933,7 @@ func TestNumberToKill(t *testing.T) {
 			},
 			asts: &kruiseV1beta1.StatefulSet{
 				Spec: kruiseV1beta1.StatefulSetSpec{
-					Replicas: pointer.Int32(3),
+					Replicas: ptr.To[int32](3),
 				},
 			},
 			podList: []corev1.Pod{
@@ -964,7 +966,7 @@ func TestNumberToKill(t *testing.T) {
 		{
 			gss: &gameKruiseV1alpha1.GameServerSet{
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
-					Replicas: pointer.Int32(2),
+					Replicas: ptr.To[int32](2),
 				},
 				Status: gameKruiseV1alpha1.GameServerSetStatus{
 					Replicas: int32(2),
@@ -972,7 +974,7 @@ func TestNumberToKill(t *testing.T) {
 			},
 			asts: &kruiseV1beta1.StatefulSet{
 				Spec: kruiseV1beta1.StatefulSetSpec{
-					Replicas: pointer.Int32(2),
+					Replicas: ptr.To[int32](2),
 				},
 			},
 			podList: []corev1.Pod{
@@ -1005,7 +1007,7 @@ func TestNumberToKill(t *testing.T) {
 		{
 			gss: &gameKruiseV1alpha1.GameServerSet{
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
-					Replicas: pointer.Int32(4),
+					Replicas: ptr.To[int32](4),
 				},
 				Status: gameKruiseV1alpha1.GameServerSetStatus{
 					Replicas: int32(3),
@@ -1013,7 +1015,7 @@ func TestNumberToKill(t *testing.T) {
 			},
 			asts: &kruiseV1beta1.StatefulSet{
 				Spec: kruiseV1beta1.StatefulSetSpec{
-					Replicas: pointer.Int32(3),
+					Replicas: ptr.To[int32](3),
 				},
 			},
 			podList: []corev1.Pod{

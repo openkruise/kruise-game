@@ -17,14 +17,16 @@ limitations under the License.
 package util
 
 import (
-	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/pointer"
 	"reflect"
 	"sort"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
+
+	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 )
 
 func TestGetIndexFromGsName(t *testing.T) {
@@ -406,8 +408,8 @@ func TestInitGameServer(t *testing.T) {
 							APIVersion:         "game.kruise.io/v1alpha1",
 							Name:               "case0",
 							UID:                "xxx0",
-							Controller:         pointer.BoolPtr(true),
-							BlockOwnerDeletion: pointer.BoolPtr(true),
+							Controller:         ptr.To[bool](true),
+							BlockOwnerDeletion: ptr.To[bool](true),
 						},
 					},
 					Labels: map[string]string{

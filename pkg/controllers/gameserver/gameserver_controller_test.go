@@ -18,19 +18,21 @@ package gameserver
 
 import (
 	"context"
-	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	"github.com/openkruise/kruise-game/pkg/util"
+	"reflect"
+	"testing"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/pointer"
-	"reflect"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"testing"
+
+	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/util"
 )
 
 func TestGameServerReconcile(t *testing.T) {
@@ -117,8 +119,8 @@ func TestGameServerReconcile(t *testing.T) {
 						Kind:               podTemplate.Kind,
 						Name:               podTemplate.GetName(),
 						UID:                podTemplate.GetUID(),
-						Controller:         pointer.BoolPtr(true),
-						BlockOwnerDeletion: pointer.BoolPtr(true),
+						Controller:         ptr.To[bool](true),
+						BlockOwnerDeletion: ptr.To[bool](true),
 					},
 				}
 				updatePriority := intstr.FromInt(0)

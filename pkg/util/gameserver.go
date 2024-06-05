@@ -19,18 +19,20 @@ package util
 import (
 	"context"
 	"encoding/json"
-	appspub "github.com/openkruise/kruise-api/apps/pub"
-	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
-	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"strconv"
+	"strings"
+
 	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strconv"
-	"strings"
+
+	appspub "github.com/openkruise/kruise-api/apps/pub"
+	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
+	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 )
 
 type DeleteSequenceGs []corev1.Pod
@@ -251,8 +253,8 @@ func InitGameServer(gss *gameKruiseV1alpha1.GameServerSet, name string) *gameKru
 		Kind:               gss.Kind,
 		Name:               gss.GetName(),
 		UID:                gss.GetUID(),
-		Controller:         pointer.BoolPtr(true),
-		BlockOwnerDeletion: pointer.BoolPtr(true),
+		Controller:         ptr.To[bool](true),
+		BlockOwnerDeletion: ptr.To[bool](true),
 	}
 	ors = append(ors, or)
 	gs.OwnerReferences = ors
