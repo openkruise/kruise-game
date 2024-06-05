@@ -18,17 +18,18 @@ package volcengine
 
 import (
 	"context"
+	"k8s.io/utils/ptr"
 	"reflect"
 	"sync"
 	"testing"
 
-	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/util"
 )
 
 func TestAllocateDeAllocate(t *testing.T) {
@@ -314,8 +315,8 @@ func TestClbPlugin_consSvc(t *testing.T) {
 							Kind:               "pod",
 							Name:               "test-pod",
 							UID:                "32fqwfqfew",
-							Controller:         pointer.BoolPtr(true),
-							BlockOwnerDeletion: pointer.BoolPtr(true),
+							Controller:         ptr.To[bool](true),
+							BlockOwnerDeletion: ptr.To[bool](true),
 						},
 					},
 				},
@@ -334,7 +335,7 @@ func TestClbPlugin_consSvc(t *testing.T) {
 						},
 					},
 					},
-					AllocateLoadBalancerNodePorts: pointer.BoolPtr(true),
+					AllocateLoadBalancerNodePorts: ptr.To[bool](true),
 				},
 			},
 		},

@@ -29,7 +29,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sort"
 	"strconv"
@@ -93,7 +93,7 @@ func (manager *GameServerSetManager) GetReplicasAfterKilling() *int32 {
 	}
 
 	klog.Infof("GameServerSet %s/%s will kill %d GameServers", gss.GetNamespace(), gss.GetName(), toKill)
-	return pointer.Int32(*gss.Spec.Replicas - int32(toKill))
+	return ptr.To[int32](*gss.Spec.Replicas - int32(toKill))
 }
 
 func (manager *GameServerSetManager) IsNeedToScale() bool {
@@ -401,8 +401,8 @@ func createPpm(gss *gameKruiseV1alpha1.GameServerSet) *kruiseV1alpha1.PodProbeMa
 		Kind:               gss.Kind,
 		Name:               gss.GetName(),
 		UID:                gss.GetUID(),
-		Controller:         pointer.BoolPtr(true),
-		BlockOwnerDeletion: pointer.BoolPtr(true),
+		Controller:         ptr.To[bool](true),
+		BlockOwnerDeletion: ptr.To[bool](true),
 	}
 	ors = append(ors, or)
 	return &kruiseV1alpha1.PodProbeMarker{
@@ -454,8 +454,8 @@ func (manager *GameServerSetManager) SyncStatus() error {
 		ReadyReplicas:           asts.Status.ReadyReplicas,
 		UpdatedReplicas:         asts.Status.UpdatedReplicas,
 		UpdatedReadyReplicas:    asts.Status.UpdatedReadyReplicas,
-		MaintainingReplicas:     pointer.Int32Ptr(int32(maintainingGs)),
-		WaitToBeDeletedReplicas: pointer.Int32Ptr(int32(waitToBeDeletedGs)),
+		MaintainingReplicas:     ptr.To[int32](int32(maintainingGs)),
+		WaitToBeDeletedReplicas: ptr.To[int32](int32(waitToBeDeletedGs)),
 		LabelSelector:           asts.Status.LabelSelector,
 		ObservedGeneration:      gss.GetGeneration(),
 	}

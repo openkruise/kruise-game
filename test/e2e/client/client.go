@@ -3,9 +3,8 @@ package client
 import (
 	"context"
 	"fmt"
-	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
-	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	kruisegameclientset "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
+	"time"
+
 	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -13,8 +12,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
-	"k8s.io/utils/pointer"
-	"time"
+	"k8s.io/utils/ptr"
+
+	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
+	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	kruisegameclientset "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
 )
 
 const (
@@ -66,7 +68,7 @@ func (client *Client) DefaultGameServerSet() *gameKruiseV1alpha1.GameServerSet {
 			Namespace: Namespace,
 		},
 		Spec: gameKruiseV1alpha1.GameServerSetSpec{
-			Replicas: pointer.Int32Ptr(3),
+			Replicas: ptr.To[int32](3),
 			UpdateStrategy: gameKruiseV1alpha1.UpdateStrategy{
 				Type: apps.RollingUpdateStatefulSetStrategyType,
 				RollingUpdate: &gameKruiseV1alpha1.RollingUpdateStatefulSetStrategy{

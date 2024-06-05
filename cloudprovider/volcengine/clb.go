@@ -19,23 +19,25 @@ package volcengine
 import (
 	"context"
 	"fmt"
-	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	"github.com/openkruise/kruise-game/cloudprovider"
-	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
-	provideroptions "github.com/openkruise/kruise-game/cloudprovider/options"
-	"github.com/openkruise/kruise-game/cloudprovider/utils"
-	"github.com/openkruise/kruise-game/pkg/util"
+	"strconv"
+	"strings"
+	"sync"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	log "k8s.io/klog/v2"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strconv"
-	"strings"
-	"sync"
+
+	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/cloudprovider"
+	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
+	provideroptions "github.com/openkruise/kruise-game/cloudprovider/options"
+	"github.com/openkruise/kruise-game/cloudprovider/utils"
+	"github.com/openkruise/kruise-game/pkg/util"
 )
 
 const (
@@ -466,7 +468,7 @@ func (c *ClbPlugin) consSvc(config *clbConfig, pod *corev1.Pod, client client.Cl
 				SvcSelectorKey: pod.GetName(),
 			},
 			Ports:                         svcPorts,
-			AllocateLoadBalancerNodePorts: pointer.Bool(config.allocateLoadBalancerNodePorts),
+			AllocateLoadBalancerNodePorts: ptr.To[bool](config.allocateLoadBalancerNodePorts),
 		},
 	}
 	return svc
@@ -479,8 +481,8 @@ func getSvcOwnerReference(c client.Client, ctx context.Context, pod *corev1.Pod,
 			Kind:               pod.Kind,
 			Name:               pod.GetName(),
 			UID:                pod.GetUID(),
-			Controller:         pointer.BoolPtr(true),
-			BlockOwnerDeletion: pointer.BoolPtr(true),
+			Controller:         ptr.To[bool](true),
+			BlockOwnerDeletion: ptr.To[bool](true),
 		},
 	}
 	if isFixed {
@@ -492,8 +494,8 @@ func getSvcOwnerReference(c client.Client, ctx context.Context, pod *corev1.Pod,
 					Kind:               gss.Kind,
 					Name:               gss.GetName(),
 					UID:                gss.GetUID(),
-					Controller:         pointer.BoolPtr(true),
-					BlockOwnerDeletion: pointer.BoolPtr(true),
+					Controller:         ptr.To[bool](true),
+					BlockOwnerDeletion: ptr.To[bool](true),
 				},
 			}
 		}

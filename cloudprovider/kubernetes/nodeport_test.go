@@ -1,14 +1,16 @@
 package kubernetes
 
 import (
-	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	"github.com/openkruise/kruise-game/pkg/util"
+	"reflect"
+	"testing"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/pointer"
-	"reflect"
-	"testing"
+	"k8s.io/utils/ptr"
+
+	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/util"
 )
 
 func TestParseNPConfig(t *testing.T) {
@@ -89,8 +91,8 @@ func TestConsNPSvc(t *testing.T) {
 					Kind:               "Pod",
 					Name:               "pod-3",
 					UID:                "bff0afd6-bb30-4641-8607-8329547324eb",
-					Controller:         pointer.BoolPtr(true),
-					BlockOwnerDeletion: pointer.BoolPtr(true),
+					Controller:         ptr.To[bool](true),
+					BlockOwnerDeletion: ptr.To[bool](true),
 				},
 			},
 		},
@@ -139,8 +141,8 @@ func TestConsNPSvc(t *testing.T) {
 					Kind:               "Pod",
 					Name:               "pod-3",
 					UID:                "bff0afd6-bb30-4641-8607-8329547324eb",
-					Controller:         pointer.BoolPtr(true),
-					BlockOwnerDeletion: pointer.BoolPtr(true),
+					Controller:         ptr.To[bool](true),
+					BlockOwnerDeletion: ptr.To[bool](true),
 				},
 			},
 		},

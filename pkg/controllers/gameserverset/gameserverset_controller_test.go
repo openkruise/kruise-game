@@ -10,7 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -34,7 +34,7 @@ func TestInitAsts(t *testing.T) {
 					UID:       "xxx0",
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
-					Replicas: pointer.Int32(5),
+					Replicas: ptr.To[int32](5),
 					UpdateStrategy: gameKruiseV1alpha1.UpdateStrategy{
 						Type:          apps.RollingUpdateStatefulSetStrategyType,
 						RollingUpdate: &gameKruiseV1alpha1.RollingUpdateStatefulSetStrategy{},
@@ -55,14 +55,14 @@ func TestInitAsts(t *testing.T) {
 							Kind:               "GameServerSet",
 							Name:               "case0",
 							UID:                "xxx0",
-							Controller:         pointer.BoolPtr(true),
-							BlockOwnerDeletion: pointer.BoolPtr(true),
+							Controller:         ptr.To[bool](true),
+							BlockOwnerDeletion: ptr.To[bool](true),
 						},
 					},
 					ResourceVersion: "1",
 				},
 				Spec: kruiseV1beta1.StatefulSetSpec{
-					Replicas:            pointer.Int32(5),
+					Replicas:            ptr.To[int32](5),
 					PodManagementPolicy: apps.ParallelPodManagement,
 					ServiceName:         "case0",
 					Selector: &metav1.LabelSelector{

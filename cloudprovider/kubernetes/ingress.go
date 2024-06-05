@@ -15,7 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strconv"
 	"strings"
@@ -222,7 +222,7 @@ func parseIngConfig(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.P
 				return ingConfig{}, fmt.Errorf("%s", paramsError)
 			}
 		case IngressClassNameKey:
-			ic.ingressClassName = pointer.String(c.Value)
+			ic.ingressClassName = ptr.To[string](c.Value)
 		case TlsSecretNameKey:
 			ic.tlsSecretName = c.Value
 		case TlsHostsKey:
@@ -358,8 +358,8 @@ func consOwnerReference(c client.Client, ctx context.Context, pod *corev1.Pod, i
 			Kind:               pod.Kind,
 			Name:               pod.GetName(),
 			UID:                pod.GetUID(),
-			Controller:         pointer.BoolPtr(true),
-			BlockOwnerDeletion: pointer.BoolPtr(true),
+			Controller:         ptr.To[bool](true),
+			BlockOwnerDeletion: ptr.To[bool](true),
 		},
 	}
 	if isFixed {
@@ -371,8 +371,8 @@ func consOwnerReference(c client.Client, ctx context.Context, pod *corev1.Pod, i
 					Kind:               gss.Kind,
 					Name:               gss.GetName(),
 					UID:                gss.GetUID(),
-					Controller:         pointer.BoolPtr(true),
-					BlockOwnerDeletion: pointer.BoolPtr(true),
+					Controller:         ptr.To[bool](true),
+					BlockOwnerDeletion: ptr.To[bool](true),
 				},
 			}
 		}
