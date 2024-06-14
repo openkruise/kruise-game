@@ -436,6 +436,72 @@ AllowNotReadyContainers
 - Value: {containerName_0},{containerName_1},... Example：sidecar
 - Configuration change supported or not: It cannot be changed during the in-place updating process.
 
+LBHealthCheckSwitch
+
+- Meaning：Whether to enable health check
+- Format："on" means on, "off" means off. Default is on
+- Whether to support changes: Yes
+
+LBHealthCheckFlag
+
+- Meaning: Whether to enable http type health check
+- Format: "on" means on, "off" means off. Default is on
+- Whether to support changes: Yes
+
+LBHealthCheckType
+
+- Meaning: Health Check Protocol
+- Format: fill in "tcp" or "http", the default is tcp
+- Whether to support changes: Yes
+
+LBHealthCheckConnectTimeout
+
+- Meaning: Maximum timeout for health check response.
+- Format: Unit: seconds. The value range is [1, 300]. The default value is "5"
+- Whether to support changes: Yes
+
+LBHealthyThreshold
+
+- Meaning: After the number of consecutive successful health checks, the health check status of the server will be determined from failure to success.
+- Format: Value range [2, 10]. Default value is "2"
+- Whether to support changes: Yes
+
+LBUnhealthyThreshold
+
+- Meaning: After the number of consecutive health check failures, the health check status of the server will be determined from success to failure.
+- Format: Value range [2, 10]. The default value is "2"
+- Whether to support changes: Yes
+
+LBHealthCheckInterval
+
+- Meaning: health check interval.
+- Format: Unit: seconds. The value range is [1, 50]. The default value is "10"
+- Whether to support changes: Yes
+
+LBHealthCheckProtocolPort
+
+- Meaning：the protocols & ports of HTTP type health check.
+- Format：Multiple values are separated by ','. e.g. https:443,http:80
+- Whether to support changes: Yes
+
+LBHealthCheckUri
+
+- Meaning: The corresponding uri when the health check type is HTTP.
+- Format: The length is 1~80 characters, only letters, numbers, and characters can be used. Must start with a forward slash (/). Such as "/test/index.html"
+- Whether to support changes: Yes
+
+LBHealthCheckDomain
+
+- Meaning: The corresponding domain name when the health check type is HTTP.
+- Format: The length of a specific domain name is limited to 1~80 characters. Only lowercase letters, numbers, dashes (-), and half-width periods (.) can be used.
+- Whether to support changes: Yes
+
+LBHealthCheckMethod
+
+- Meaning: The corresponding method when the health check type is HTTP.
+- Format: "GET" or "HEAD"
+- Whether to support changes: Yes
+
 #### Plugin configuration
 ```
 [alibabacloud]
