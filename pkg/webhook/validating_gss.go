@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/cloudprovider/manager"
 	"github.com/openkruise/kruise-game/pkg/util"
 	admissionv1 "k8s.io/api/admission/v1"
 	"net/http"
@@ -28,8 +29,9 @@ import (
 )
 
 type GssValidaatingHandler struct {
-	Client  client.Client
-	decoder *admission.Decoder
+	Client               client.Client
+	decoder              *admission.Decoder
+	CloudProviderManager *manager.ProviderManager
 }
 
 func (gvh *GssValidaatingHandler) Handle(ctx context.Context, req admission.Request) admission.Response {
@@ -52,6 +54,9 @@ func (gvh *GssValidaatingHandler) Handle(ctx context.Context, req admission.Requ
 			return admission.Errored(http.StatusBadRequest, err)
 		}
 		return validatingUpdate(newGss, oldGss)
+	case admissionv1.Create:
+		newGss := gss.DeepCopy()
+		return validatingCreate(newGss, gvh.CloudProviderManager)
 	}
 
 	return admission.ValidationResponse(true, "pass validating")
@@ -77,4 +82,27 @@ func validatingUpdate(newGss, oldGss *gamekruiseiov1alpha1.GameServerSet) admiss
 		}
 	}
 	return admission.ValidationResponse(true, "validatingUpdate success")
+}
+
+func validatingCreate(gss *gamekruiseiov1alpha1.GameServerSet, cpm *manager.ProviderManager) admission.Response {
+	if gss.Spec.Network != nil {
+		if gss.Spec.Network.NetworkType == "" {
+			return admission.ValidationResponse(false, "network type is required")
+		}
+		if pn := listPluginNames(cpm); !util.IsStringInList(gss.Spec.Network.NetworkType, pn) {
+			return admission.ValidationResponse(false, fmt.Sprintf("network type must be one of %v", pn))
+		}
+	}
+	return admission.ValidationResponse(true, "validatingCreate success")
+}
+
+func listPluginNames(cpm *manager.ProviderManager) []string {
+	var pluginNames []string
+	for _, cp := range cpm.CloudProviders {
+		plugins, _ := cp.ListPlugins()
+		for _, p := range plugins {
+			pluginNames = append(pluginNames, p.Name())
+		}
+	}
+	return pluginNames
 }
