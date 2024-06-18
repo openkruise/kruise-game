@@ -235,7 +235,10 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 func (n *NlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.Context) cperrors.PluginError {
 	networkManager := utils.NewNetworkManager(pod, c)
 	networkConfig := networkManager.GetNetworkConfig()
-	sc := parseLbConfig(networkConfig)
+	sc, err := parseNlbConfig(networkConfig)
+	if err != nil {
+		return cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+	}
 
 	var podKeys []string
 	if sc.isFixed {

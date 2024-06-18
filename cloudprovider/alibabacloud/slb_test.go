@@ -18,7 +18,6 @@ package alibabacloud
 
 import (
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -72,10 +71,7 @@ func TestAllocateDeAllocate(t *testing.T) {
 func TestParseLbConfig(t *testing.T) {
 	tests := []struct {
 		conf      []gamekruiseiov1alpha1.NetworkConfParams
-		lbIds     []string
-		ports     []int
-		protocols []corev1.Protocol
-		isFixed   bool
+		slbConfig *slbConfig
 	}{
 		{
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
@@ -87,11 +83,72 @@ func TestParseLbConfig(t *testing.T) {
 					Name:  PortProtocolsConfigName,
 					Value: "80",
 				},
+				{
+					Name:  LBHealthCheckSwitchConfigName,
+					Value: "off",
+				},
+				{
+					Name:  LBHealthCheckFlagConfigName,
+					Value: "off",
+				},
+				{
+					Name:  LBHealthCheckTypeConfigName,
+					Value: "HTTP",
+				},
+				{
+					Name:  LBHealthCheckConnectPortConfigName,
+					Value: "6000",
+				},
+				{
+					Name:  LBHealthCheckConnectTimeoutConfigName,
+					Value: "100",
+				},
+				{
+					Name:  LBHealthCheckIntervalConfigName,
+					Value: "30",
+				},
+				{
+					Name:  LBHealthCheckUriConfigName,
+					Value: "/another?valid",
+				},
+				{
+					Name:  LBHealthCheckDomainConfigName,
+					Value: "www.test.com",
+				},
+				{
+					Name:  LBHealthCheckMethodConfigName,
+					Value: "HEAD",
+				},
+				{
+					Name:  LBHealthyThresholdConfigName,
+					Value: "5",
+				},
+				{
+					Name:  LBUnhealthyThresholdConfigName,
+					Value: "5",
+				},
+				{
+					Name:  LBHealthCheckProtocolPortConfigName,
+					Value: "http:80",
+				},
 			},
-			lbIds:     []string{"xxx-A"},
-			ports:     []int{80},
-			protocols: []corev1.Protocol{corev1.ProtocolTCP},
-			isFixed:   false,
+			slbConfig: &slbConfig{
+				lbIds:                       []string{"xxx-A"},
+				targetPorts:                 []int{80},
+				protocols:                   []corev1.Protocol{corev1.ProtocolTCP},
+				isFixed:                     false,
+				lBHealthCheckSwitch:         "off",
+				lBHealthCheckFlag:           "off",
+				lBHealthCheckType:           "http",
+				lBHealthCheckConnectTimeout: "100",
+				lBHealthCheckInterval:       "30",
+				lBHealthCheckUri:            "/another?valid",
+				lBHealthCheckDomain:         "www.test.com",
+				lBHealthCheckMethod:         "head",
+				lBHealthyThreshold:          "5",
+				lBUnhealthyThreshold:        "5",
+				lBHealthCheckProtocolPort:   "http:80",
+			},
 		},
 		{
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
@@ -108,26 +165,33 @@ func TestParseLbConfig(t *testing.T) {
 					Value: "true",
 				},
 			},
-			lbIds:     []string{"xxx-A", "xxx-B"},
-			ports:     []int{81, 82, 83},
-			protocols: []corev1.Protocol{corev1.ProtocolUDP, corev1.ProtocolTCP, corev1.ProtocolTCP},
-			isFixed:   true,
+			slbConfig: &slbConfig{
+				lbIds:                       []string{"xxx-A", "xxx-B"},
+				targetPorts:                 []int{81, 82, 83},
+				protocols:                   []corev1.Protocol{corev1.ProtocolUDP, corev1.ProtocolTCP, corev1.ProtocolTCP},
+				isFixed:                     true,
+				lBHealthCheckSwitch:         "on",
+				lBHealthCheckFlag:           "off",
+				lBHealthCheckType:           "tcp",
+				lBHealthCheckConnectTimeout: "5",
+				lBHealthCheckInterval:       "10",
+				lBUnhealthyThreshold:        "2",
+				lBHealthyThreshold:          "2",
+				lBHealthCheckUri:            "",
+				lBHealthCheckDomain:         "",
+				lBHealthCheckMethod:         "",
+				lBHealthCheckProtocolPort:   "",
+			},
 		},
 	}
 
-	for _, test := range tests {
-		sc := parseLbConfig(test.conf)
-		if !reflect.DeepEqual(test.lbIds, sc.lbIds) {
-			t.Errorf("lbId expect: %v, actual: %v", test.lbIds, sc.lbIds)
+	for i, test := range tests {
+		sc, err := parseLbConfig(test.conf)
+		if err != nil {
+			t.Error(err)
 		}
-		if !util.IsSliceEqual(test.ports, sc.targetPorts) {
-			t.Errorf("ports expect: %v, actual: %v", test.ports, sc.targetPorts)
-		}
-		if !reflect.DeepEqual(test.protocols, sc.protocols) {
-			t.Errorf("protocols expect: %v, actual: %v", test.protocols, sc.protocols)
-		}
-		if test.isFixed != sc.isFixed {
-			t.Errorf("isFixed expect: %v, actual: %v", test.isFixed, sc.isFixed)
+		if !reflect.DeepEqual(test.slbConfig, sc) {
+			t.Errorf("case %d: lbId expect: %v, actual: %v", i, test.slbConfig, sc)
 		}
 	}
 }
