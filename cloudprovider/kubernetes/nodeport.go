@@ -37,6 +37,8 @@ const (
 	NodePortNetwork = "Kubernetes-NodePort"
 
 	PortProtocolsConfigName = "PortProtocols"
+
+	SvcSelectorDisabledKey = "game.kruise.io/svc-selector-disabled"
 )
 
 type NodePortPlugin struct {
@@ -96,6 +98,24 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
 		}
 		return pod, cperrors.ToPluginError(client.Update(ctx, consNodePortSvc(npc, pod, client, ctx)), cperrors.ApiCallError)
+	}
+
+	// disable network
+	if networkManager.GetNetworkDisabled() && svc.Spec.Selector[SvcSelectorKey] == pod.GetName() {
+		newSelector := svc.Spec.Selector
+		newSelector[SvcSelectorDisabledKey] = pod.GetName()
+		delete(svc.Spec.Selector, SvcSelectorKey)
+		svc.Spec.Selector = newSelector
+		return pod, cperrors.ToPluginError(client.Update(ctx, svc), cperrors.ApiCallError)
+	}
+
+	// enable network
+	if !networkManager.GetNetworkDisabled() && svc.Spec.Selector[SvcSelectorDisabledKey] == pod.GetName() {
+		newSelector := svc.Spec.Selector
+		newSelector[SvcSelectorKey] = pod.GetName()
+		delete(svc.Spec.Selector, SvcSelectorDisabledKey)
+		svc.Spec.Selector = newSelector
+		return pod, cperrors.ToPluginError(client.Update(ctx, svc), cperrors.ApiCallError)
 	}
 
 	// allow not ready containers
