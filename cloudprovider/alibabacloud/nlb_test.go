@@ -311,7 +311,11 @@ func TestNlbPlugin_consSvc(t *testing.T) {
 			cache:       tt.fields.cache,
 			podAllocate: tt.fields.podAllocate,
 		}
-		if got := c.consSvc(tt.args.config, tt.args.pod, tt.args.client, tt.args.ctx); !reflect.DeepEqual(got, tt.want) {
+		got, err := c.consSvc(tt.args.config, tt.args.pod, tt.args.client, tt.args.ctx)
+		if err != nil {
+			t.Error(err)
+		}
+		if !reflect.DeepEqual(got, tt.want) {
 			t.Errorf("consSvc() = %v, want %v", got, tt.want)
 		}
 	}
