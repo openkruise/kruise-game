@@ -539,6 +539,10 @@ spec:
                     serviceQualityAction:
                       items:
                         properties:
+                          annotations:
+                            additionalProperties:
+                              type: string
+                            type: object
                           containers:
                             description: Containers can be used to make the corresponding
                               GameServer container fields different from the fields
@@ -594,6 +598,10 @@ spec:
                             - type: integer
                             - type: string
                             x-kubernetes-int-or-string: true
+                          labels:
+                            additionalProperties:
+                              type: string
+                            type: object
                           networkDisabled:
                             type: boolean
                           opsState:
