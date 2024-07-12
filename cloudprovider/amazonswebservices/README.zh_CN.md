@@ -42,36 +42,33 @@ aws:
 
 ##### 步骤 2：配置 IAM 角色信任策略
 
-创建 IAM 角色：
-
-- 在 IAM 控制台中，创建一个新的 IAM 角色，并选择 “Custom trust policy”。
-
-- 使用以下信任策略，允许 EKS 使用这个角色：
-
-  ```json
-  {
-    "Version": "2012-10-17",
-    "Statement": [
-      {
-        "Effect": "Allow",
-        "Principal": {
-          "Federated": "arn:aws:iam::<AWS_ACCOUNT_ID>:oidc-provider/oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>"
-        },
-        "Action": "sts:AssumeRoleWithWebIdentity",
-        "Condition": {
-          "StringEquals": {
-            "oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>:sub": "system:serviceaccount:<NAMESPACE>:<SERVICE_ACCOUNT_NAME>",
-            "oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>:aud": "sts.amazonaws.com"
-          }
-        }
-      }
-    ]
-  }
-  ```
-
-- 将 `<AWS_ACCOUNT_ID>`、`<REGION>`、`<OIDC_ID>`、`<NAMESPACE>` 和 `<SERVICE_ACCOUNT_NAME>` 替换为您的实际值。
-
-- 添加权限 `ElasticLoadBalancingFullAccess`
+1. 在 IAM 控制台中，创建一个新的身份提供商，并选择 “OpenID Connect”
+   - 提供商URL填写EKS 集群的 OIDC 提供者 URL
+   - 受众填写：`sts.amazonaws.com`
+2. 在 IAM 控制台中，创建一个新的 IAM 角色，并选择 “Custom trust policy”。
+   - 使用以下信任策略，允许 EKS 使用这个角色：
+     ```json
+     {
+       "Version": "2012-10-17",
+       "Statement": [
+         {
+           "Effect": "Allow",
+           "Principal": {
+             "Federated": "arn:aws:iam::<AWS_ACCOUNT_ID>:oidc-provider/oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>"
+           },
+           "Action": "sts:AssumeRoleWithWebIdentity",
+           "Condition": {
+             "StringEquals": {
+               "oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>:sub": "system:serviceaccount:<NAMESPACE>:ack-elbv2-controller",
+               "oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>:aud": "sts.amazonaws.com"
+             }
+           }
+         }
+       ]
+     }
+     ```
+   - 将 `<AWS_ACCOUNT_ID>`、`<REGION>`、`<OIDC_ID>`、`<NAMESPACE>` 和 `<SERVICE_ACCOUNT_NAME>` 替换为您的实际值。
+   - 添加权限 `ElasticLoadBalancingFullAccess`
 
 
 
