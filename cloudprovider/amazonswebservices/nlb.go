@@ -56,10 +56,6 @@ const (
 	NlbAnnotations           = "Annotations"
 	NlbARNAnnoKey            = "service.beta.kubernetes.io/aws-load-balancer-nlb-arn"
 	NlbPortAnnoKey           = "service.beta.kubernetes.io/aws-load-balancer-nlb-port"
-	NlbTypeKey               = "service.beta.kubernetes.io/aws-load-balancer-type"
-	NlbTypeExternal          = "external"
-	NlbTargetTypeKey         = "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type"
-	NlbTargetTypeIP          = "ip"
 	AWSTargetGroupSyncStatus = "aws-load-balancer-nlb-target-group-synced"
 	SvcSelectorKey           = "statefulset.kubernetes.io/pod-name"
 	NlbConfigHashKey         = "game.kruise.io/network-config-hash"
@@ -255,7 +251,7 @@ func (n *NlbPlugin) initLbCache(svcList []corev1.Service) {
 	}
 }
 
-func (n *NlbPlugin) OnPodAdded(client client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
+func (n *NlbPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
 	return pod, nil
 }
 
@@ -651,7 +647,7 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 		targetGroupName := fmt.Sprintf("%s-%d", pod.GetName(), ports[i])
 		protocol := string(config.backends[i].protocol)
 		targetPort := int64(config.backends[i].targetPort)
-		targetType := NlbTargetTypeIP
+		var targetTypeIP = string(ackv1alpha1.TargetTypeEnum_ip)
 		_, err := controllerutil.CreateOrUpdate(ctx, client, &ackv1alpha1.TargetGroup{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:            targetGroupName,
@@ -679,8 +675,8 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 				Name:                       &targetGroupName,
 				Protocol:                   &protocol,
 				Port:                       &targetPort,
-				TargetType:                 &targetType,
 				VPCID:                      &config.vpcID,
+				TargetType:                 &targetTypeIP,
 				Tags: []*ackv1alpha1.Tag{{Key: ptr.To[string](ResourceTagKey),
 					Value: ptr.To[string](ResourceTagValue)}},
 			},
@@ -700,8 +696,6 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 		})
 	}
 	annotations := map[string]string{
-		NlbTypeKey:       NlbTypeExternal,
-		NlbTargetTypeKey: NlbTargetTypeIP,
 		NlbARNAnnoKey:    lbARN,
 		NlbConfigHashKey: util.GetHash(config),
 	}
@@ -771,7 +765,7 @@ func syncListenerAndTargetGroupBinding(ctx context.Context, client client.Client
 		return err
 	}
 
-	var targetType = elbv2api.TargetTypeIP
+	var targetTypeIP = elbv2api.TargetTypeIP
 	_, err = controllerutil.CreateOrUpdate(ctx, client, &elbv2api.TargetGroupBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            tg.GetName(),
@@ -784,7 +778,7 @@ func syncListenerAndTargetGroupBinding(ctx context.Context, client client.Client
 		},
 		Spec: elbv2api.TargetGroupBindingSpec{
 			TargetGroupARN: *targetGroupARN,
-			TargetType:     &targetType,
+			TargetType:     &targetTypeIP,
 			ServiceRef: elbv2api.ServiceReference{
 				Name: podName,
 				Port: intstr.FromInt(int(port)),

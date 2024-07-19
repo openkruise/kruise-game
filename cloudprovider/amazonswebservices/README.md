@@ -42,39 +42,34 @@ The key to deploying this project lies in authorizing the k8s ServiceAccount to 
 4. On the cluster details page, ensure that the OIDC provider is enabled. Obtain the OIDC provider URL for the EKS cluster. In the "Configuration" section of the cluster details page, find the "OpenID Connect provider URL".
 
 ##### Step 2：Configure the IAM role trust policy
+1. In the IAM console, create a new identity provider and select "OpenID Connect".
+   - For the Provider URL, enter the OIDC provider URL of your EKS cluster.
+   - For Audience, enter: `sts.amazonaws.com`
 
-Create an IAM role:
-
-- In the IAM console, create a new IAM role and select "Custom trust policy".
-
-- Use the following trust policy to allow EKS to use this role:
-
-  ```json
-  {
-    "Version": "2012-10-17",
-    "Statement": [
-      {
-        "Effect": "Allow",
-        "Principal": {
-          "Federated": "arn:aws:iam::<AWS_ACCOUNT_ID>:oidc-provider/oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>"
-        },
-        "Action": "sts:AssumeRoleWithWebIdentity",
-        "Condition": {
-          "StringEquals": {
-            "oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>:sub": "system:serviceaccount:<NAMESPACE>:<SERVICE_ACCOUNT_NAME>",
-            "oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>:aud": "sts.amazonaws.com"
-          }
-        }
-      }
-    ]
-  }
-  ```
-
-- Replace `<AWS_ACCOUNT_ID>`、`<REGION>`、`<OIDC_ID>`、`<NAMESPACE>` and `<SERVICE_ACCOUNT_NAME>` with your actual values.
-
-
-
-- Add the permission `ElasticLoadBalancingFullAccess`
+2. In the IAM console, create a new IAM role and select "Custom trust policy".
+   - Use the following trust policy to allow EKS to use this role:
+     ```json
+     {
+       "Version": "2012-10-17",
+       "Statement": [
+         {
+           "Effect": "Allow",
+           "Principal": {
+             "Federated": "arn:aws:iam::<AWS_ACCOUNT_ID>:oidc-provider/oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>"
+           },
+           "Action": "sts:AssumeRoleWithWebIdentity",
+           "Condition": {
+             "StringEquals": {
+               "oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>:sub": "system:serviceaccount:<NAMESPACE>:ack-elbv2-controller",
+               "oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>:aud": "sts.amazonaws.com"
+             }
+           }
+         }
+       ]
+     }
+     ```
+     - Replace `<AWS_ACCOUNT_ID>`、`<REGION>`、`<OIDC_ID>`、`<NAMESPACE>` and `<SERVICE_ACCOUNT_NAME>` with your actual values.
+     - Add the permission `ElasticLoadBalancingFullAccess`
 
 
 
