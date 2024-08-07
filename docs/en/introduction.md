@@ -78,6 +78,13 @@ OpenKruiseGame has the following core features:
         <td style="border: none;"><center><img src="../images/gsshosting-logo.png" width="120" ></center> </td>
         <td style="border: none;"><center><img src="../images/yongshi-logo.png" width="120" ></center> </td>
     </tr>
+    <tr style="border: none;">
+        <td style="border: none;"><center><img src="../images/yahaha-logo.png" width="130" ></center> </td>
+        <td style="border: none;"><center><img src="../images/yostar-logo.png" width="130" ></center> </td>
+        <td style="border: none;"><center><img src="../images/360-logo.png" width="130" ></center> </td>
+        <td style="border: none;"><center><img src="../images/vma-logo.png" width="130" ></center> </td>
+        <td style="border: none;"><center><img src="../images/bekko-logo.png" width="130" ></center> </td>
+    </tr>
 </table>
 
 ### What to do next
