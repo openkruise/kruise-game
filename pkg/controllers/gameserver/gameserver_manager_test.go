@@ -464,6 +464,7 @@ func TestSyncGsToPod(t *testing.T) {
 					Name:      "xxx-0",
 					Labels: map[string]string{
 						gameKruiseV1alpha1.GameServerOwnerGssKey: "xxx",
+						"gs-sync/pre-deleting":                   "false",
 					},
 					Annotations: map[string]string{
 						"meaningless-key":  "meaningless-value",
@@ -488,6 +489,7 @@ func TestSyncGsToPod(t *testing.T) {
 						gameKruiseV1alpha1.GameServerDeletePriorityKey: dp.String(),
 						gameKruiseV1alpha1.GameServerUpdatePriorityKey: up.String(),
 						gameKruiseV1alpha1.GameServerStateKey:          string(gameKruiseV1alpha1.Creating),
+						"gs-sync/pre-deleting":                         "false",
 					},
 					Annotations: map[string]string{
 						"gs-sync/match-id": "xxx-xxx-xx2",
