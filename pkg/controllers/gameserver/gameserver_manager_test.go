@@ -39,8 +39,10 @@ func TestSyncServiceQualities(t *testing.T) {
 	tests := []struct {
 		serviceQualities []gameKruiseV1alpha1.ServiceQuality
 		podConditions    []corev1.PodCondition
-		sqConditions     []gameKruiseV1alpha1.ServiceQualityCondition
+		gs               *gameKruiseV1alpha1.GameServer
 		spec             gameKruiseV1alpha1.GameServerSpec
+		labels           map[string]string
+		annotations      map[string]string
 		newSqConditions  []gameKruiseV1alpha1.ServiceQualityCondition
 	}{
 		//case 0
@@ -77,7 +79,12 @@ func TestSyncServiceQualities(t *testing.T) {
 					LastProbeTime: fakeProbeTime,
 				},
 			},
-			sqConditions: nil,
+			gs: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{},
+				Status: gameKruiseV1alpha1.GameServerStatus{
+					ServiceQualitiesCondition: nil,
+				},
+			},
 			spec: gameKruiseV1alpha1.GameServerSpec{
 				UpdatePriority: &up,
 			},
@@ -124,12 +131,17 @@ func TestSyncServiceQualities(t *testing.T) {
 					LastProbeTime: fakeProbeTime,
 				},
 			},
-			sqConditions: []gameKruiseV1alpha1.ServiceQualityCondition{
-				{
-					Name:                     "healthy",
-					Status:                   string(corev1.ConditionFalse),
-					LastProbeTime:            fakeProbeTime,
-					LastActionTransitionTime: fakeActionTime,
+			gs: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{},
+				Status: gameKruiseV1alpha1.GameServerStatus{
+					ServiceQualitiesCondition: []gameKruiseV1alpha1.ServiceQualityCondition{
+						{
+							Name:                     "healthy",
+							Status:                   string(corev1.ConditionFalse),
+							LastProbeTime:            fakeProbeTime,
+							LastActionTransitionTime: fakeActionTime,
+						},
+					},
 				},
 			},
 			spec: gameKruiseV1alpha1.GameServerSpec{},
@@ -171,8 +183,13 @@ func TestSyncServiceQualities(t *testing.T) {
 					LastProbeTime: fakeProbeTime,
 				},
 			},
-			sqConditions: nil,
-			spec:         gameKruiseV1alpha1.GameServerSpec{},
+			gs: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{},
+				Status: gameKruiseV1alpha1.GameServerStatus{
+					ServiceQualitiesCondition: nil,
+				},
+			},
+			spec: gameKruiseV1alpha1.GameServerSpec{},
 			newSqConditions: []gameKruiseV1alpha1.ServiceQualityCondition{
 				{
 					Name: "healthy",
@@ -207,8 +224,13 @@ func TestSyncServiceQualities(t *testing.T) {
 					LastProbeTime: fakeProbeTime,
 				},
 			},
-			sqConditions: nil,
-			spec:         gameKruiseV1alpha1.GameServerSpec{},
+			gs: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{},
+				Status: gameKruiseV1alpha1.GameServerStatus{
+					ServiceQualitiesCondition: nil,
+				},
+			},
+			spec: gameKruiseV1alpha1.GameServerSpec{},
 			newSqConditions: []gameKruiseV1alpha1.ServiceQualityCondition{
 				{
 					Name:          "healthy",
@@ -228,6 +250,9 @@ func TestSyncServiceQualities(t *testing.T) {
 							State: true,
 							GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
 								UpdatePriority: &up,
+							},
+							Annotations: map[string]string{
+								"case-4": "new",
 							},
 						},
 						{
@@ -251,16 +276,24 @@ func TestSyncServiceQualities(t *testing.T) {
 					LastProbeTime: fakeProbeTime,
 				},
 			},
-			sqConditions: []gameKruiseV1alpha1.ServiceQualityCondition{
-				{
-					Name:                     "healthy",
-					Status:                   string(corev1.ConditionFalse),
-					LastProbeTime:            fakeProbeTime,
-					LastActionTransitionTime: fakeActionTime,
+			gs: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{},
+				Status: gameKruiseV1alpha1.GameServerStatus{
+					ServiceQualitiesCondition: []gameKruiseV1alpha1.ServiceQualityCondition{
+						{
+							Name:                     "healthy",
+							Status:                   string(corev1.ConditionFalse),
+							LastProbeTime:            fakeProbeTime,
+							LastActionTransitionTime: fakeActionTime,
+						},
+					},
 				},
 			},
 			spec: gameKruiseV1alpha1.GameServerSpec{
 				UpdatePriority: &up,
+			},
+			annotations: map[string]string{
+				"case-4": "new",
 			},
 			newSqConditions: []gameKruiseV1alpha1.ServiceQualityCondition{
 				{
@@ -310,7 +343,12 @@ func TestSyncServiceQualities(t *testing.T) {
 					LastProbeTime: fakeProbeTime,
 				},
 			},
-			sqConditions: nil,
+			gs: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{},
+				Status: gameKruiseV1alpha1.GameServerStatus{
+					ServiceQualitiesCondition: nil,
+				},
+			},
 			spec: gameKruiseV1alpha1.GameServerSpec{
 				OpsState: "B",
 			},
@@ -363,13 +401,18 @@ func TestSyncServiceQualities(t *testing.T) {
 					LastProbeTime: fakeProbeTime,
 				},
 			},
-			sqConditions: []gameKruiseV1alpha1.ServiceQualityCondition{
-				{
-					Name:                     "multi-return",
-					Result:                   "B",
-					Status:                   string(corev1.ConditionTrue),
-					LastProbeTime:            fakeProbeTime,
-					LastActionTransitionTime: fakeActionTime,
+			gs: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{},
+				Status: gameKruiseV1alpha1.GameServerStatus{
+					ServiceQualitiesCondition: []gameKruiseV1alpha1.ServiceQualityCondition{
+						{
+							Name:                     "multi-return",
+							Result:                   "B",
+							Status:                   string(corev1.ConditionTrue),
+							LastProbeTime:            fakeProbeTime,
+							LastActionTransitionTime: fakeActionTime,
+						},
+					},
 				},
 			},
 			spec: gameKruiseV1alpha1.GameServerSpec{
@@ -388,11 +431,17 @@ func TestSyncServiceQualities(t *testing.T) {
 	}
 
 	for i, test := range tests {
-		actualSpec, actualNewSqConditions := syncServiceQualities(test.serviceQualities, test.podConditions, test.sqConditions)
+		actualNewSqConditions := syncServiceQualities(test.serviceQualities, test.podConditions, test.gs)
 		expectSpec := test.spec
 		expectNewSqConditions := test.newSqConditions
-		if !reflect.DeepEqual(actualSpec, expectSpec) {
-			t.Errorf("case %d: expect spec %v but got %v", i, expectSpec, actualSpec)
+		if !reflect.DeepEqual(test.gs.Spec, expectSpec) {
+			t.Errorf("case %d: expect spec %v but got %v", i, expectSpec, test.gs.Spec)
+		}
+		if !reflect.DeepEqual(test.gs.GetLabels(), test.labels) {
+			t.Errorf("case %d: expect labels %v but got %v", i, test.labels, test.gs.GetLabels())
+		}
+		if !reflect.DeepEqual(test.gs.GetAnnotations(), test.annotations) {
+			t.Errorf("case %d: expect annotations %v but got %v", i, test.annotations, test.gs.GetAnnotations())
 		}
 		if len(actualNewSqConditions) != len(expectNewSqConditions) {
 			t.Errorf("case %d: expect sq conditions len %v but got %v", i, len(expectNewSqConditions), len(actualNewSqConditions))
