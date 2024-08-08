@@ -55,6 +55,27 @@ func TestGetHash(t *testing.T) {
 			objectB: nil,
 			result:  true,
 		},
+		{
+			objectA: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "containerA",
+						},
+					},
+				},
+			},
+			objectB: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "containerB",
+						},
+					},
+				},
+			},
+			result: false,
+		},
 	}
 
 	for _, test := range tests {
