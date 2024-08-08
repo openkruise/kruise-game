@@ -130,10 +130,21 @@ func (manager GameServerManager) SyncGsToPod() error {
 	case corev1.PodRunning:
 		// GameServer Updating
 		lifecycleState, exist := pod.GetLabels()[kruisePub.LifecycleStateKey]
-		if exist && (lifecycleState == string(kruisePub.LifecycleStateUpdating) || lifecycleState == string(kruisePub.LifecycleStatePreparingUpdate)) {
+		if exist && lifecycleState == string(kruisePub.LifecycleStateUpdating) {
 			gsState = gameKruiseV1alpha1.Updating
 			break
 		}
+		// GameServer PreUpdate
+		if exist && lifecycleState == string(kruisePub.LifecycleStatePreparingUpdate) {
+			gsState = gameKruiseV1alpha1.PreUpdate
+			break
+		}
+		// GameServer PreDelete
+		if exist && lifecycleState == string(kruisePub.LifecycleStatePreparingDelete) {
+			gsState = gameKruiseV1alpha1.PreDelete
+			break
+		}
+
 		// GameServer Deleting
 		if !pod.DeletionTimestamp.IsZero() {
 			gsState = gameKruiseV1alpha1.Deleting

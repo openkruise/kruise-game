@@ -136,14 +136,20 @@ func GetNewAstsFromGss(gss *gameKruiseV1alpha1.GameServerSet, asts *kruiseV1beta
 	readinessGates = append(readinessGates, corev1.PodReadinessGate{ConditionType: appspub.InPlaceUpdateReady})
 	asts.Spec.Template.Spec.ReadinessGates = readinessGates
 
+	// set Lifecycle
+	asts.Spec.Lifecycle = gss.Spec.Lifecycle
 	// AllowNotReadyContainers
 	if gss.Spec.Network != nil && IsAllowNotReadyContainers(gss.Spec.Network.NetworkConf) {
-		// set lifecycle
-		asts.Spec.Lifecycle = &appspub.Lifecycle{
-			InPlaceUpdate: &appspub.LifecycleHook{
-				LabelsHandler: map[string]string{gameKruiseV1alpha1.InplaceUpdateNotReadyBlocker: "true"},
-			},
+		if asts.Spec.Lifecycle == nil {
+			asts.Spec.Lifecycle = &appspub.Lifecycle{}
 		}
+		if asts.Spec.Lifecycle.InPlaceUpdate == nil {
+			asts.Spec.Lifecycle.InPlaceUpdate = &appspub.LifecycleHook{}
+		}
+		if asts.Spec.Lifecycle.InPlaceUpdate.LabelsHandler == nil {
+			asts.Spec.Lifecycle.InPlaceUpdate.LabelsHandler = make(map[string]string)
+		}
+		asts.Spec.Lifecycle.InPlaceUpdate.LabelsHandler[gameKruiseV1alpha1.InplaceUpdateNotReadyBlocker] = "true"
 	}
 
 	// set VolumeClaimTemplates
