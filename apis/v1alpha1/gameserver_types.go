@@ -61,13 +61,15 @@ type GameServerContainer struct {
 type GameServerState string
 
 const (
-	Unknown  GameServerState = "Unknown"
-	Creating GameServerState = "Creating"
-	Ready    GameServerState = "Ready"
-	NotReady GameServerState = "NotReady"
-	Crash    GameServerState = "Crash"
-	Updating GameServerState = "Updating"
-	Deleting GameServerState = "Deleting"
+	Unknown   GameServerState = "Unknown"
+	Creating  GameServerState = "Creating"
+	Ready     GameServerState = "Ready"
+	NotReady  GameServerState = "NotReady"
+	Crash     GameServerState = "Crash"
+	Updating  GameServerState = "Updating"
+	Deleting  GameServerState = "Deleting"
+	PreDelete GameServerState = "PreDelete"
+	PreUpdate GameServerState = "PreUpdate"
 )
 
 type OpsState string

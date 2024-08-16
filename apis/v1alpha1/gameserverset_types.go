@@ -57,6 +57,7 @@ type GameServerSetSpec struct {
 	UpdateStrategy       UpdateStrategy     `json:"updateStrategy,omitempty"`
 	ScaleStrategy        ScaleStrategy      `json:"scaleStrategy,omitempty"`
 	Network              *Network           `json:"network,omitempty"`
+	Lifecycle            *appspub.Lifecycle `json:"lifecycle,omitempty"`
 }
 
 type GameServerTemplate struct {
