@@ -235,6 +235,10 @@ func (manager GameServerManager) SyncGsToPod() error {
 func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerSet) error {
 	gs := manager.gameServer
 	pod := manager.pod
+	oldGsSpec := gs.Spec.DeepCopy()
+	oldGsLabels := gs.GetLabels()
+	oldGsAnnotations := gs.GetAnnotations()
+	oldGsStatus := *gs.Status.DeepCopy()
 
 	// sync DeletePriority/UpdatePriority/State
 	podLabels := pod.GetLabels()
@@ -243,14 +247,18 @@ func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerS
 	podGsState := gameKruiseV1alpha1.GameServerState(podLabels[gameKruiseV1alpha1.GameServerStateKey])
 
 	// sync Service Qualities
-	spec, sqConditions := syncServiceQualities(gss.Spec.ServiceQualities, pod.Status.Conditions, gs.Status.ServiceQualitiesCondition)
+	sqConditions := syncServiceQualities(gss.Spec.ServiceQualities, pod.Status.Conditions, gs)
 
-	if isNeedToSyncMetadata(gss, gs) || !reflect.DeepEqual(spec, gs.Spec) {
-		// sync metadata
+	// sync Metadata from Gss
+	if isNeedToSyncMetadata(gss, gs) {
 		gsMetadata := syncMetadataFromGss(gss)
+		gs.SetLabels(util.MergeMapString(gs.GetLabels(), gsMetadata.GetLabels()))
+		gs.SetAnnotations(util.MergeMapString(gs.GetAnnotations(), gsMetadata.GetAnnotations()))
+	}
 
+	if !reflect.DeepEqual(oldGsSpec, gs.Spec) || !reflect.DeepEqual(oldGsLabels, gs.GetLabels()) || !reflect.DeepEqual(oldGsAnnotations, gs.GetAnnotations()) {
 		// patch gs spec & metadata
-		patchSpec := map[string]interface{}{"spec": spec, "metadata": gsMetadata}
+		patchSpec := map[string]interface{}{"spec": gs.Spec, "metadata": map[string]interface{}{"labels": gs.GetLabels(), "annotations": gs.GetAnnotations()}}
 		jsonPatchSpec, err := json.Marshal(patchSpec)
 		if err != nil {
 			return err
@@ -270,7 +278,6 @@ func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerS
 	}
 
 	// patch gs status
-	oldStatus := *gs.Status.DeepCopy()
 	newStatus := gameKruiseV1alpha1.GameServerStatus{
 		PodStatus:                 pod.Status,
 		CurrentState:              podGsState,
@@ -279,10 +286,10 @@ func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerS
 		DeletionPriority:          &podDeletePriority,
 		ServiceQualitiesCondition: sqConditions,
 		NetworkStatus:             manager.syncNetworkStatus(),
-		LastTransitionTime:        oldStatus.LastTransitionTime,
+		LastTransitionTime:        oldGsStatus.LastTransitionTime,
 		Conditions:                conditions,
 	}
-	if !reflect.DeepEqual(oldStatus, newStatus) {
+	if !reflect.DeepEqual(oldGsStatus, newStatus) {
 		newStatus.LastTransitionTime = metav1.Now()
 		patchStatus := map[string]interface{}{"status": newStatus}
 		jsonPatchStatus, err := json.Marshal(patchStatus)
@@ -355,11 +362,10 @@ func desiredNetworkState(disabled bool) gameKruiseV1alpha1.NetworkState {
 	return gameKruiseV1alpha1.NetworkReady
 }
 
-func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, podConditions []corev1.PodCondition, sqConditions []gameKruiseV1alpha1.ServiceQualityCondition) (gameKruiseV1alpha1.GameServerSpec, []gameKruiseV1alpha1.ServiceQualityCondition) {
-	var spec gameKruiseV1alpha1.GameServerSpec
+func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, podConditions []corev1.PodCondition, gs *gameKruiseV1alpha1.GameServer) []gameKruiseV1alpha1.ServiceQualityCondition {
 	var newGsConditions []gameKruiseV1alpha1.ServiceQualityCondition
 	sqConditionsMap := make(map[string]gameKruiseV1alpha1.ServiceQualityCondition)
-	for _, sqc := range sqConditions {
+	for _, sqc := range gs.Status.ServiceQualitiesCondition {
 		sqConditionsMap[sqc.Name] = sqc
 	}
 	timeNow := metav1.Now()
@@ -380,10 +386,12 @@ func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, 
 				for _, action := range sq.ServiceQualityAction {
 					state, err := strconv.ParseBool(string(podCondition.Status))
 					if err == nil && state == action.State && (action.Result == "" || podConditionMessage == action.Result) {
-						spec.DeletionPriority = action.DeletionPriority
-						spec.UpdatePriority = action.UpdatePriority
-						spec.OpsState = action.OpsState
-						spec.NetworkDisabled = action.NetworkDisabled
+						gs.Spec.DeletionPriority = action.DeletionPriority
+						gs.Spec.UpdatePriority = action.UpdatePriority
+						gs.Spec.OpsState = action.OpsState
+						gs.Spec.NetworkDisabled = action.NetworkDisabled
+						gs.SetLabels(util.MergeMapString(gs.GetLabels(), action.Labels))
+						gs.SetAnnotations(util.MergeMapString(gs.GetAnnotations(), action.Annotations))
 						lastActionTransitionTime = timeNow
 					}
 				}
@@ -401,7 +409,7 @@ func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, 
 		}
 		newGsConditions = append(newGsConditions, newSqCondition)
 	}
-	return spec, newGsConditions
+	return newGsConditions
 }
 
 func (manager GameServerManager) syncPodContainers(gsContainers []gameKruiseV1alpha1.GameServerContainer, podContainers []corev1.Container) []corev1.Container {

@@ -109,6 +109,8 @@ type ServiceQualityAction struct {
 	// When Result is defined, it would exec action only when the according Result is actually returns.
 	Result         string `json:"result,omitempty"`
 	GameServerSpec `json:",inline"`
+	Annotations    map[string]string `json:"annotations,omitempty"`
+	Labels         map[string]string `json:"labels,omitempty"`
 }
 
 // GameServerStatus defines the observed state of GameServer

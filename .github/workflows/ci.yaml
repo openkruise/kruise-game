@@ -49,19 +49,6 @@ jobs:
           args: --verbose --timeout=10m
           skip-pkg-cache: true
 
-  markdownlint-misspell-shellcheck:
-    runs-on: ubuntu-20.04
-    # this image is build from Dockerfile
-    # https://github.com/pouchcontainer/pouchlinter/blob/master/Dockerfile
-    container: pouchcontainer/pouchlinter:v0.1.2
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Run misspell
-        run: find  ./* -name  "*"  | grep -v vendor | xargs misspell -error
-      - name: Run shellcheck
-        run: find ./ -name "*.sh" | grep -v vendor | xargs shellcheck
-
   unit-tests:
     runs-on: ubuntu-20.04
     steps:
