@@ -1,5 +1,23 @@
 # Change Log
 
+## v0.9.0
+> Change log since v0.8.0
+
+### Features & Enhancements
+- Enhance: support custom health checks for AlibabaCloud-NLB. https://github.com/openkruise/kruise-game/pull/147
+- Feat: add AmazonWebServices-NLB network plugin. https://github.com/openkruise/kruise-game/pull/150
+- Enhance: support custom health checks for AlibabaCloud-SLB. https://github.com/openkruise/kruise-game/pull/154
+- Enhance: Kubernetes-NodePort supports network disabled. https://github.com/openkruise/kruise-game/pull/156
+- Enhance: check networkType when create GameServerSet. https://github.com/openkruise/kruise-game/pull/157
+- Enhance: service quality support patch labels & annotations. https://github.com/openkruise/kruise-game/pull/159
+- Enhance: labels from gs can be synced to pod. https://github.com/openkruise/kruise-game/pull/160
+- Feat: add lifecycle field for gameserverset. https://github.com/openkruise/kruise-game/pull/162
+
+### Bug Fixes
+- Fix the allocation error when Ali loadbalancers reache the limit of ports number. https://github.com/openkruise/kruise-game/pull/149
+- Fix: AmazonWebServices-NLB controller parameter modification. https://github.com/openkruise/kruise-game/pull/164
+- Fix old svc remain after pod recreate when using ali-lb models. https://github.com/openkruise/kruise-game/pull/165
+
 ## v0.8.0
 > Change log since v0.7.0
 
