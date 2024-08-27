@@ -1,11 +1,11 @@
 package server
 
 import (
+	"log"
+
 	"github.com/gin-gonic/gin"
 	gameV1alpha1 "github.com/openkruise/kruise-game/pkg/client/clientset/versioned/typed/apis/v1alpha1"
 	"k8s.io/client-go/tools/clientcmd"
-	"log"
-	"net/http"
 )
 
 type gameServerUpdateRequest struct {
@@ -41,5 +41,7 @@ func StartServer() {
 
 func updateImageTagHandler(client *gameV1alpha1.GameV1alpha1Client, c *gin.Context) {
 
-	client.
+}
+func changeUpdatePriority(client *gameV1alpha1.GameV1alpha1Client, c *gin.Context) {
+
 }
