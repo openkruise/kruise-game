@@ -8,6 +8,7 @@ require (
 	github.com/BurntSushi/toml v1.2.1
 	github.com/aws-controllers-k8s/elbv2-controller v0.0.9
 	github.com/davecgh/go-spew v1.1.1
+	github.com/gin-gonic/gin v1.10.0
 	github.com/kr/pretty v0.3.1
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/gomega v1.30.0
@@ -47,7 +48,6 @@ require (
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.3 // indirect
 	github.com/gin-contrib/sse v0.1.0 // indirect
-	github.com/gin-gonic/gin v1.10.0 // indirect
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-logr/zapr v1.3.0 // indirect
 	github.com/go-openapi/jsonpointer v0.19.6 // indirect
