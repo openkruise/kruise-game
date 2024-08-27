@@ -9,8 +9,8 @@ import (
 )
 
 type gameServerUpdateRequest struct {
-	gameServerIds []int
-	imageTag      string
+	gameServerIds []int  `json:"gameServerIds"`
+	imageTag      string `json:"imageTag"`
 }
 
 func StartServer() {
