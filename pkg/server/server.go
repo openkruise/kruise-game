@@ -9,8 +9,9 @@ import (
 )
 
 type gameServerUpdateRequest struct {
-	gameServerIds []int  `json:"gameServerIds"`
-	imageTag      string `json:"imageTag"`
+	gameServerIds  []int32 `json:"gameServerIds"`
+	imageTag       string  `json:"imageTag"`
+	updatePriority int32   `json:"updatePriority,omitempty"`
 }
 
 func StartServer() {
@@ -40,6 +41,8 @@ func StartServer() {
 }
 
 func updateImageTagHandler(client *gameV1alpha1.GameV1alpha1Client, c *gin.Context) {
+
+	//get gameServers with IDs in request
 
 }
 func changeUpdatePriority(client *gameV1alpha1.GameV1alpha1Client, c *gin.Context) {
