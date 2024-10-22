@@ -58,32 +58,31 @@ OpenKruiseGame has the following core features:
 
 <table style="border-collapse: collapse;">
     <tr style="border: none;">
-        <td style="border: none;"><center><img src="./docs/images/hypergryph-logo.png" width="120" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/lilith-logo.png" width="120" ></center></td>
-        <td style="border: none;"><center><img src="./docs/images/bilibili-logo.png" width="120"> </center></td>
-        <td style="border: none;"><center><img src="./docs/images/shangyou-logo.jpeg" width="120" ></center></td>
-        <td style="border: none;"><center><img src="./docs/images/xingzhe-logo.png" width="120" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/lilith-logo.png" width="80" ></center></td>
+        <td style="border: none;"><center><img src="./docs/images/hypergryph-logo.png" width="80" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/jjworld-logo.png" width="80" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/bilibili-logo.png" width="80"> </center></td>
+        <td style="border: none;"><center><img src="./docs/images/shangyou-logo.png" width="80" ></center></td>
+        <td style="border: none;"><center><img src="./docs/images/yahaha-logo.png" width="80" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/xingzhe-logo.png" width="80" ></center> </td>
     </tr>
     <tr style="border: none;">
-        <td style="border: none;"><center><img src="./docs/images/juren-logo.png" width="90" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/baibian-logo.png" width="120" ></center></td>
-        <td style="border: none;"><center><img src="./docs/images/chillyroom-logo.png" width="120" ></center></td>
-        <td style="border: none;"><center><img src="./docs/images/wuduan-logo.png" width="120" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/xingchao-logo.png" width="120" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/juren-logo.png" width="80" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/baibian-logo.png" width="80" ></center></td>
+        <td style="border: none;"><center><img src="./docs/images/chillyroom-logo.png" width="80" ></center></td>
+        <td style="border: none;"><center><img src="./docs/images/wuduan-logo.png" width="80" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/yostar-logo.png" width="80" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/bekko-logo.png" width="80" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/xingchao-logo.png" width="80" ></center> </td>
     </tr>
     <tr style="border: none;">
-        <td style="border: none;"><center><img src="./docs/images/wanglong-logo.png" width="120" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/guanying-logo.png" width="120" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/booming-logo.png" width="120" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/gsshosting-logo.png" width="120" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/yongshi-logo.png" width="120" ></center> </td>
-    </tr>
-    <tr style="border: none;">
-        <td style="border: none;"><center><img src="./docs/images/yahaha-logo.png" width="130" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/yostar-logo.png" width="130" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/360-logo.png" width="130" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/vma-logo.png" width="130" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/bekko-logo.png" width="130" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/wanglong-logo.png" width="80" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/guanying-logo.png" width="80" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/booming-logo.png" width="80" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/gsshosting-logo.png" width="80" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/yongshi-logo.png" width="80" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/360-logo.png" width="80" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/vma-logo.png" width="80" ></center> </td>
     </tr>
 </table>
 
