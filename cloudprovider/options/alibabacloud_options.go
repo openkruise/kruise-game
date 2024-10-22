@@ -7,19 +7,26 @@ type AlibabaCloudOptions struct {
 }
 
 type SLBOptions struct {
-	MaxPort int32 `toml:"max_port"`
-	MinPort int32 `toml:"min_port"`
+	MaxPort    int32   `toml:"max_port"`
+	MinPort    int32   `toml:"min_port"`
+	BlockPorts []int32 `toml:"block_ports"`
 }
 
 type NLBOptions struct {
-	MaxPort int32 `toml:"max_port"`
-	MinPort int32 `toml:"min_port"`
+	MaxPort    int32   `toml:"max_port"`
+	MinPort    int32   `toml:"min_port"`
+	BlockPorts []int32 `toml:"block_ports"`
 }
 
 func (o AlibabaCloudOptions) Valid() bool {
 	// SLB valid
 	slbOptions := o.SLBOptions
-	if slbOptions.MaxPort-slbOptions.MinPort != 200 {
+	for _, blockPort := range slbOptions.BlockPorts {
+		if blockPort >= slbOptions.MaxPort || blockPort < slbOptions.MinPort {
+			return false
+		}
+	}
+	if int(slbOptions.MaxPort-slbOptions.MinPort)-len(slbOptions.BlockPorts) != 200 {
 		return false
 	}
 	if slbOptions.MinPort <= 0 {
@@ -27,7 +34,12 @@ func (o AlibabaCloudOptions) Valid() bool {
 	}
 	// NLB valid
 	nlbOptions := o.NLBOptions
-	if nlbOptions.MaxPort-nlbOptions.MinPort != 500 {
+	for _, blockPort := range nlbOptions.BlockPorts {
+		if blockPort >= nlbOptions.MaxPort || blockPort < nlbOptions.MinPort {
+			return false
+		}
+	}
+	if int(nlbOptions.MaxPort-nlbOptions.MinPort)-len(nlbOptions.BlockPorts) != 500 {
 		return false
 	}
 	if nlbOptions.MinPort <= 0 {

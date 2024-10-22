@@ -7,11 +7,13 @@ min_port = 8000
 [alibabacloud]
 enable = true
 [alibabacloud.slb]
-max_port = 700
+max_port = 701
 min_port = 500
+block_ports = [593]
 [alibabacloud.nlb]
-max_port = 1500
+max_port = 1503
 min_port = 1000
+block_ports = [1025, 1434, 1068]
 
 [volcengine]
 enable = true

@@ -67,6 +67,7 @@ type portAllocated map[int32]bool
 type SlbPlugin struct {
 	maxPort     int32
 	minPort     int32
+	blockPorts  []int32
 	cache       map[string]portAllocated
 	podAllocate map[string]string
 	mutex       sync.RWMutex
@@ -105,6 +106,7 @@ func (s *SlbPlugin) Init(c client.Client, options cloudprovider.CloudProviderOpt
 	slbOptions := options.(provideroptions.AlibabaCloudOptions).SLBOptions
 	s.minPort = slbOptions.MinPort
 	s.maxPort = slbOptions.MaxPort
+	s.blockPorts = slbOptions.BlockPorts
 
 	svcList := &corev1.ServiceList{}
 	err := c.List(ctx, svcList)
@@ -112,23 +114,31 @@ func (s *SlbPlugin) Init(c client.Client, options cloudprovider.CloudProviderOpt
 		return err
 	}
 
-	s.cache, s.podAllocate = initLbCache(svcList.Items, s.minPort, s.maxPort)
+	s.cache, s.podAllocate = initLbCache(svcList.Items, s.minPort, s.maxPort, s.blockPorts)
 	log.Infof("[%s] podAllocate cache complete initialization: %v", SlbNetwork, s.podAllocate)
 	return nil
 }
 
-func initLbCache(svcList []corev1.Service, minPort, maxPort int32) (map[string]portAllocated, map[string]string) {
+func initLbCache(svcList []corev1.Service, minPort, maxPort int32, blockPorts []int32) (map[string]portAllocated, map[string]string) {
 	newCache := make(map[string]portAllocated)
 	newPodAllocate := make(map[string]string)
 	for _, svc := range svcList {
 		lbId := svc.Labels[SlbIdLabelKey]
 		if lbId != "" && svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
+			// init cache for that lb
 			if newCache[lbId] == nil {
 				newCache[lbId] = make(portAllocated, maxPort-minPort)
 				for i := minPort; i < maxPort; i++ {
 					newCache[lbId][i] = false
 				}
 			}
+
+			// block ports
+			for _, blockPort := range blockPorts {
+				newCache[lbId][blockPort] = true
+			}
+
+			// fill in cache for that lb
 			var ports []int32
 			for _, port := range getPorts(svc.Spec.Ports) {
 				if port <= maxPort && port >= minPort {
@@ -335,9 +345,14 @@ func (s *SlbPlugin) allocate(lbIds []string, num int, nsName string) (string, []
 	for i := 0; i < num; i++ {
 		var port int32
 		if s.cache[lbId] == nil {
+			// init cache for new lb
 			s.cache[lbId] = make(portAllocated, s.maxPort-s.minPort)
 			for i := s.minPort; i < s.maxPort; i++ {
 				s.cache[lbId][i] = false
+			}
+			// block ports
+			for _, blockPort := range s.blockPorts {
+				s.cache[lbId][blockPort] = true
 			}
 		}
 
@@ -370,6 +385,10 @@ func (s *SlbPlugin) deAllocate(nsName string) {
 	ports := util.StringToInt32Slice(slbPorts[1], ",")
 	for _, port := range ports {
 		s.cache[lbId][port] = false
+	}
+	// block ports
+	for _, blockPort := range s.blockPorts {
+		s.cache[lbId][blockPort] = true
 	}
 
 	delete(s.podAllocate, nsName)
