@@ -124,10 +124,11 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	notExistIds := util.GetSliceInANotInB(asts.Spec.ReserveOrdinals, reserveIds)
 	gssReserveIds := gss.Spec.ReserveGameServerIds
 
-	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas.", gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas)
+	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas; With newExplicit: %v; oldExplicit: %v; oldImplicit: %v",
+		gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas, gssReserveIds, reserveIds, notExistIds)
 	manager.eventRecorder.Eventf(gss, corev1.EventTypeNormal, ScaleReason, "scale from %d to %d", currentReplicas, expectedReplicas)
 
-	newManageIds, newReserveIds := computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, podList, gss.Spec.ScaleStrategy.ScaleDownStrategyType)
+	newManageIds, newReserveIds := computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, podList)
 
 	if gss.Spec.GameServerTemplate.ReclaimPolicy == gameKruiseV1alpha1.DeleteGameServerReclaimPolicy {
 		err := SyncGameServer(gss, c, newManageIds, util.GetIndexListFromPodList(podList))
@@ -163,82 +164,59 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	return nil
 }
 
-func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedReplicas int, pods []corev1.Pod, scaleDownType gameKruiseV1alpha1.ScaleDownStrategyType) ([]int, []int) {
-	workloadManageIds := util.GetIndexListFromPodList(pods)
+// computeToScaleGs is to compute what the id list the pods should be existed in cluster, and what the asts reserve id list should be.
+// reserveIds is the explicit id list.
+// notExistIds is the implicit id list.
+// gssReserveIds is the newest explicit id list.
+// pods is the pods that managed by gss now.
+func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedReplicas int, pods []corev1.Pod) ([]int, []int) {
+	// 1. Get newest implicit list & explicit.
+	newAddExplicit := util.GetSliceInANotInB(gssReserveIds, reserveIds)
+	newDeleteExplicit := util.GetSliceInANotInB(reserveIds, gssReserveIds)
+	newImplicit := util.GetSliceInANotInB(notExistIds, newAddExplicit)
+	newImplicit = append(newImplicit, newDeleteExplicit...)
+	newExplicit := gssReserveIds
 
-	var toAdd []int
-	var toDelete []int
-
-	// 1. compute reserved GameServerIds, firstly
-
-	// 1.a. to delete those new reserved GameServers already in workloadManageIds
-	toDelete = util.GetSliceInAandInB(util.GetSliceInANotInB(gssReserveIds, reserveIds), workloadManageIds)
-
-	// 1.b. to add those remove-reserved GameServers already in workloadManageIds
-	existLastIndex := -1
-	if len(workloadManageIds) != 0 {
-		sort.Ints(workloadManageIds)
-		existLastIndex = workloadManageIds[len(workloadManageIds)-1]
-	}
-	for _, id := range util.GetSliceInANotInB(reserveIds, gssReserveIds) {
-		if existLastIndex > id {
-			toAdd = append(toAdd, id)
+	// 2. Remove the pods ids is in newExplicit.
+	var workloadManageIds []int
+	var newPods []corev1.Pod
+	for _, pod := range pods {
+		index := util.GetIndexFromGsName(pod.Name)
+		if util.IsNumInList(index, newExplicit) {
+			continue
 		}
-	}
-	// those remove-reserved GameServers will only be added when expansion is required
-	if len(toDelete)-len(pods)+expectedReplicas > 0 {
-		index := util.Min(len(toAdd), len(toDelete)-len(pods)+expectedReplicas)
-		sort.Ints(toAdd)
-		toAdd = toAdd[:index]
-	} else {
-		toAdd = nil
+		workloadManageIds = append(workloadManageIds, index)
+		newPods = append(newPods, pod)
 	}
 
-	// 2. compute remain GameServerIds, secondly
+	// 3. Continue to delete or add pods based on the current and expected number of pods.
+	existReplicas := len(workloadManageIds)
 
-	numToAdd := expectedReplicas - len(pods) + len(toDelete) - len(toAdd)
-	if numToAdd < 0 {
-
-		// 2.a to delete GameServers according to DeleteSequence
-		sortedGs := util.DeleteSequenceGs(pods)
+	if existReplicas < expectedReplicas {
+		// Add pods.
+		num := 0
+		var toAdd []int
+		for i := 0; num < expectedReplicas-existReplicas; i++ {
+			if util.IsNumInList(i, workloadManageIds) || util.IsNumInList(i, newExplicit) {
+				continue
+			}
+			if util.IsNumInList(i, newImplicit) {
+				newImplicit = util.GetSliceInANotInB(newImplicit, []int{i})
+			}
+			toAdd = append(toAdd, i)
+			num++
+		}
+		workloadManageIds = append(workloadManageIds, toAdd...)
+	} else if existReplicas > expectedReplicas {
+		// Delete pods.
+		sortedGs := util.DeleteSequenceGs(newPods)
 		sort.Sort(sortedGs)
-		toDelete = append(toDelete, util.GetIndexListFromPodList(sortedGs[:-numToAdd])...)
-	} else {
-
-		// 2.b to add GameServers, firstly add those in add notExistIds, secondly add those in future sequence
-		numNotExist := len(notExistIds)
-		if numNotExist < numToAdd {
-			toAdd = append(toAdd, notExistIds...)
-			times := 0
-			for i := existLastIndex + 1; times < numToAdd-numNotExist; i++ {
-				if !util.IsNumInList(i, gssReserveIds) {
-					toAdd = append(toAdd, i)
-					times++
-				}
-			}
-		} else {
-			toAdd = append(toAdd, notExistIds[:numToAdd]...)
-		}
+		toDelete := util.GetIndexListFromPodList(sortedGs[:existReplicas-expectedReplicas])
+		workloadManageIds = util.GetSliceInANotInB(workloadManageIds, toDelete)
+		newImplicit = append(newImplicit, toDelete...)
 	}
 
-	newManageIds := append(workloadManageIds, util.GetSliceInANotInB(toAdd, workloadManageIds)...)
-	newManageIds = util.GetSliceInANotInB(newManageIds, toDelete)
-
-	if scaleDownType == gameKruiseV1alpha1.ReserveIdsScaleDownStrategyType {
-		return newManageIds, append(gssReserveIds, util.GetSliceInANotInB(toDelete, gssReserveIds)...)
-	}
-
-	var newReserveIds []int
-	if len(newManageIds) != 0 {
-		sort.Ints(newManageIds)
-		for i := 0; i < newManageIds[len(newManageIds)-1]; i++ {
-			if !util.IsNumInList(i, newManageIds) {
-				newReserveIds = append(newReserveIds, i)
-			}
-		}
-	}
-
-	return newManageIds, newReserveIds
+	return workloadManageIds, append(newImplicit, newExplicit...)
 }
 
 func SyncGameServer(gss *gameKruiseV1alpha1.GameServerSet, c client.Client, newManageIds, oldManageIds []int) error {
