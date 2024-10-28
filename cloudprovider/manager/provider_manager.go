@@ -18,11 +18,13 @@ package manager
 
 import (
 	"context"
+
 	"github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	"github.com/openkruise/kruise-game/cloudprovider/alibabacloud"
 	aws "github.com/openkruise/kruise-game/cloudprovider/amazonswebservices"
 	"github.com/openkruise/kruise-game/cloudprovider/kubernetes"
+	"github.com/openkruise/kruise-game/cloudprovider/tencentcloud"
 	volcengine "github.com/openkruise/kruise-game/cloudprovider/volcengine"
 	corev1 "k8s.io/api/core/v1"
 	log "k8s.io/klog/v2"
@@ -135,6 +137,16 @@ func NewProviderManager() (*ProviderManager, error) {
 			log.Errorf("Failed to initialize amazons web services provider.because of %s", err.Error())
 		} else {
 			pm.RegisterCloudProvider(vcp, configs.AmazonsWebServicesOptions)
+		}
+	}
+
+	if configs.TencentCloudOptions.Valid() && configs.TencentCloudOptions.Enabled() {
+		// build and register amazon web services provider
+		tcp, err := tencentcloud.NewTencentCloudProvider()
+		if err != nil {
+			log.Errorf("Failed to initialize tencentcloud provider.because of %s", err.Error())
+		} else {
+			pm.RegisterCloudProvider(tcp, configs.TencentCloudOptions)
 		}
 	}
 

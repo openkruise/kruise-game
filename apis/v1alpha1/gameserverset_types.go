@@ -30,6 +30,7 @@ import (
 
 const (
 	GameServerOwnerGssKey      = "game.kruise.io/owner-gss"
+	OwnerPodKey                = "game.kruise.io/owner-pod"
 	GameServerSetReserveIdsKey = "game.kruise.io/reserve-ids"
 	AstsHashKey                = "game.kruise.io/asts-hash"
 	PpmHashKey                 = "game.kruise.io/ppm-hash"

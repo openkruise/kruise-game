@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -42,6 +43,7 @@ import (
 	"github.com/openkruise/kruise-game/cloudprovider"
 	aliv1beta1 "github.com/openkruise/kruise-game/cloudprovider/alibabacloud/apis/v1beta1"
 	cpmanager "github.com/openkruise/kruise-game/cloudprovider/manager"
+	tencentv1alpha1 "github.com/openkruise/kruise-game/cloudprovider/tencentcloud/apis/v1alpha1"
 	kruisegameclientset "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
 	kruisegamevisions "github.com/openkruise/kruise-game/pkg/client/informers/externalversions"
 	controller "github.com/openkruise/kruise-game/pkg/controllers"
@@ -67,6 +69,7 @@ func init() {
 	utilruntime.Must(kruiseV1alpha1.AddToScheme(scheme))
 
 	utilruntime.Must(aliv1beta1.AddToScheme(scheme))
+	utilruntime.Must(tencentv1alpha1.AddToScheme(scheme))
 
 	utilruntime.Must(ackv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(elbv2api.AddToScheme(scheme))
@@ -138,7 +141,6 @@ func main() {
 		SyncPeriod: syncPeriod,
 		NewClient:  utilclient.NewClient,
 	})
-
 	if err != nil {
 		setupLog.Error(err, "unable to start kruise-game-manager")
 		os.Exit(1)
