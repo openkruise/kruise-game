@@ -992,6 +992,8 @@ The [tke-extend-network-controller](https://github.com/tkestack/tke-extend-netwo
 
 #### Network parameters
 
+ClbIds
+
 - Meaning: the CLB instance ID. You can fill in multiple ids.
 - Value: in the format of slbId-0,slbId-1,... An example value can be "lb-9zeo7prq1m25ctpfrw1m7,lb-bp1qz7h50yd3w58h2f8je"
 - Configuration change supported or not: yes. You can add new slbIds at the end. However, it is recommended not to change existing slbId that is in use.

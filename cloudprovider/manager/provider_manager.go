@@ -141,7 +141,7 @@ func NewProviderManager() (*ProviderManager, error) {
 	}
 
 	if configs.TencentCloudOptions.Valid() && configs.TencentCloudOptions.Enabled() {
-		// build and register amazon web services provider
+		// build and register tencent cloud  provider
 		tcp, err := tencentcloud.NewTencentCloudProvider()
 		if err != nil {
 			log.Errorf("Failed to initialize tencentcloud provider.because of %s", err.Error())
