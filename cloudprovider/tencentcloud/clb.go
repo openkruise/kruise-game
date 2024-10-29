@@ -32,6 +32,7 @@ const (
 	PortProtocolsConfigName = "PortProtocols"
 	MinPortConfigName       = "MinPort"
 	MaxPortConfigName       = "MaxPort"
+	OwnerPodKey             = "game.kruise.io/owner-pod"
 )
 
 type portAllocated map[int32]bool
@@ -83,7 +84,7 @@ func initLbCache(listenerList []v1alpha1.DedicatedCLBListener, minPort, maxPort 
 	newCache := make(map[string]portAllocated)
 	newPodAllocate := make(map[string][]string)
 	for _, lis := range listenerList {
-		podName, exist := lis.GetLabels()[kruisev1alpha1.OwnerPodKey]
+		podName, exist := lis.GetLabels()[OwnerPodKey]
 		if !exist || podName == "" {
 			continue
 		}
@@ -137,7 +138,7 @@ func (p *ClbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 		ctx, listeners,
 		client.InNamespace(pod.Namespace),
 		client.MatchingLabels{
-			kruisev1alpha1.OwnerPodKey:           pod.Name,
+			OwnerPodKey:                          pod.Name,
 			kruisev1alpha1.GameServerOwnerGssKey: gss.Name,
 		},
 	); err != nil {
@@ -303,7 +304,7 @@ func (p *ClbPlugin) consLis(clbConf *clbConfig, pod *corev1.Pod, port portProtoc
 			GenerateName: pod.Name + "-",
 			Namespace:    pod.Namespace,
 			Labels: map[string]string{
-				kruisev1alpha1.OwnerPodKey:           pod.Name,
+				OwnerPodKey:                          pod.Name,
 				kruisev1alpha1.GameServerOwnerGssKey: gssName,
 			},
 			OwnerReferences: []metav1.OwnerReference{

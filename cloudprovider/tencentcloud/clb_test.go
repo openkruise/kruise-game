@@ -140,7 +140,7 @@ func TestInitLbCache(t *testing.T) {
 			{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						kruisev1alpha1.OwnerPodKey: "name-0",
+						OwnerPodKey: "name-0",
 					},
 					Namespace: "ns-0",
 					Name:      "name-0-xxx",
@@ -158,7 +158,7 @@ func TestInitLbCache(t *testing.T) {
 			{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						kruisev1alpha1.OwnerPodKey: "name-1",
+						OwnerPodKey: "name-1",
 					},
 					Namespace: "ns-1",
 					Name:      "name-1-xxx",
