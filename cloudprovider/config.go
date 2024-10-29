@@ -17,12 +17,12 @@ limitations under the License.
 package cloudprovider
 
 import (
+	"flag"
+
 	"github.com/BurntSushi/toml"
 	"github.com/openkruise/kruise-game/cloudprovider/options"
 	"k8s.io/klog/v2"
 )
-
-import "flag"
 
 var Opt *Options
 
@@ -47,6 +47,7 @@ type CloudProviderConfig struct {
 	AlibabaCloudOptions       CloudProviderOptions
 	VolcengineOptions         CloudProviderOptions
 	AmazonsWebServicesOptions CloudProviderOptions
+	TencentCloudOptions       CloudProviderOptions
 }
 
 type tomlConfigs struct {
@@ -54,10 +55,10 @@ type tomlConfigs struct {
 	AlibabaCloud       options.AlibabaCloudOptions       `toml:"alibabacloud"`
 	Volcengine         options.VolcengineOptions         `toml:"volcengine"`
 	AmazonsWebServices options.AmazonsWebServicesOptions `toml:"aws"`
+	TencentCloud       options.TencentCloudOptions       `toml:"tencentcloud"`
 }
 
 func (cf *ConfigFile) Parse() *CloudProviderConfig {
-
 	var config tomlConfigs
 	if _, err := toml.DecodeFile(cf.Path, &config); err != nil {
 		klog.Fatal(err)
@@ -68,6 +69,7 @@ func (cf *ConfigFile) Parse() *CloudProviderConfig {
 		AlibabaCloudOptions:       config.AlibabaCloud,
 		VolcengineOptions:         config.Volcengine,
 		AmazonsWebServicesOptions: config.AmazonsWebServices,
+		TencentCloudOptions:       config.TencentCloud,
 	}
 }
 

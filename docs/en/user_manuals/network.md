@@ -970,3 +970,108 @@ nlb-26jbknebrjlejt5abu      192.168.0.8:80,192.168.0.82:80,192.168.63.228:80    
 ```
 
 After waiting for the entire update process to end, you can find that there are no changes in the ep, indicating that no extraction has been performed.
+
+---
+
+### TencentCloud-CLB
+
+#### Plugin name
+
+`TencentCloud-CLB`
+
+#### Cloud Provider
+
+TencentCloud
+
+#### Plugin description
+
+
+- TencentCloud-CLB enables game servers to be accessed from the Internet by using Cloud Load Balancer (CLB) of Tencent Cloud. CLB is a type of Server Load Balancer (CLB). TencentCloud-CLB uses different ports for different game servers. The CLB instance only forwards traffic, but does not implement load balancing.
+The [tke-extend-network-controller](https://github.com/tkestack/tke-extend-network-controller) network plugin needs to be installed (can be installed through the TKE application market).
+- This network plugin does not support network isolation.
+
+#### Network parameters
+
+ClbIds
+
+- Meaning: the CLB instance ID. You can fill in multiple ids.
+- Value: in the format of slbId-0,slbId-1,... An example value can be "lb-9zeo7prq1m25ctpfrw1m7,lb-bp1qz7h50yd3w58h2f8je"
+- Configuration change supported or not: yes. You can add new slbIds at the end. However, it is recommended not to change existing slbId that is in use.
+
+PortProtocols
+
+- Meaning: the ports in the pod to be exposed and the protocols. You can specify multiple ports and protocols.
+- Value: in the format of port1/protocol1,port2/protocol2,... The protocol names must be in uppercase letters.
+- Configuration change supported or not: yes.
+
+#### Plugin configuration
+
+```
+[tencentcloud]
+enable = true
+[tencentcloud.clb]
+# Specify the range of available ports of the CLB instance. Ports in this range can be used to forward Internet traffic to pods. In this example, the range includes 200 ports.
+min_port = 1000
+max_port = 1100
+```
+
+#### Example
+
+```yaml
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: clb-nginx
+  namespace: default
+spec:
+  replicas: 1
+  updateStrategy:
+    rollingUpdate:
+      podUpdatePolicy: InPlaceIfPossible
+  network:
+    networkType: TencentCloud-CLB
+    networkConf:
+      - name: ClbIds
+        value: "lb-3ip9k5kr,lb-4ia8k0yh"
+      - name: PortProtocols
+        value: "80/TCP,7777/UDP"
+  gameServerTemplate:
+    spec:
+      containers:
+        - image: nginx
+          name: nginx
+```
+
+The network status of GameServer would be as follows:
+
+```yaml
+  networkStatus:
+    createTime: "2024-10-28T03:16:20Z"
+    currentNetworkState: Ready
+    desiredNetworkState: Ready
+    externalAddresses:
+    - ip: 139.155.64.52
+      ports:
+      - name: "80"
+        port: 1002
+        protocol: TCP
+    - ip: 139.155.64.52
+      ports:
+      - name: "7777"
+        port: 1003
+        protocol: UDP
+    internalAddresses:
+    - ip: 172.16.7.106
+      ports:
+      - name: "80"
+        port: 80
+        protocol: TCP
+    - ip: 172.16.7.106
+      ports:
+      - name: "7777"
+        port: 7777
+        protocol: UDP
+    lastTransitionTime: "2024-10-28T03:16:20Z"
+    networkType: TencentCloud-CLB
+```
+
