@@ -70,6 +70,7 @@ const (
 type NlbPlugin struct {
 	maxPort     int32
 	minPort     int32
+	blockPorts  []int32
 	cache       map[string]portAllocated
 	podAllocate map[string]string
 	mutex       sync.RWMutex
@@ -106,6 +107,7 @@ func (n *NlbPlugin) Init(c client.Client, options cloudprovider.CloudProviderOpt
 	slbOptions := options.(provideroptions.AlibabaCloudOptions).NLBOptions
 	n.minPort = slbOptions.MinPort
 	n.maxPort = slbOptions.MaxPort
+	n.blockPorts = slbOptions.BlockPorts
 
 	svcList := &corev1.ServiceList{}
 	err := c.List(ctx, svcList)
@@ -113,7 +115,7 @@ func (n *NlbPlugin) Init(c client.Client, options cloudprovider.CloudProviderOpt
 		return err
 	}
 
-	n.cache, n.podAllocate = initLbCache(svcList.Items, n.minPort, n.maxPort)
+	n.cache, n.podAllocate = initLbCache(svcList.Items, n.minPort, n.maxPort, n.blockPorts)
 	log.Infof("[%s] podAllocate cache complete initialization: %v", NlbNetwork, n.podAllocate)
 	return nil
 }
@@ -385,9 +387,14 @@ func (n *NlbPlugin) allocate(lbIds []string, num int, nsName string) (string, []
 	for i := 0; i < num; i++ {
 		var port int32
 		if n.cache[lbId] == nil {
+			// init cache for new lb
 			n.cache[lbId] = make(portAllocated, n.maxPort-n.minPort)
 			for i := n.minPort; i < n.maxPort; i++ {
 				n.cache[lbId][i] = false
+			}
+			// block ports
+			for _, blockPort := range n.blockPorts {
+				n.cache[lbId][blockPort] = true
 			}
 		}
 
@@ -420,6 +427,10 @@ func (n *NlbPlugin) deAllocate(nsName string) {
 	ports := util.StringToInt32Slice(slbPorts[1], ",")
 	for _, port := range ports {
 		n.cache[lbId][port] = false
+	}
+	// block ports
+	for _, blockPort := range n.blockPorts {
+		n.cache[lbId][blockPort] = true
 	}
 
 	delete(n.podAllocate, nsName)
