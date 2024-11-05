@@ -48,6 +48,7 @@ type CloudProviderConfig struct {
 	VolcengineOptions         CloudProviderOptions
 	AmazonsWebServicesOptions CloudProviderOptions
 	TencentCloudOptions       CloudProviderOptions
+	JdCloudOptions            CloudProviderOptions
 }
 
 type tomlConfigs struct {
@@ -56,6 +57,7 @@ type tomlConfigs struct {
 	Volcengine         options.VolcengineOptions         `toml:"volcengine"`
 	AmazonsWebServices options.AmazonsWebServicesOptions `toml:"aws"`
 	TencentCloud       options.TencentCloudOptions       `toml:"tencentcloud"`
+	JdCloud            options.JdCloudOptions            `toml:"jdcloud"`
 }
 
 func (cf *ConfigFile) Parse() *CloudProviderConfig {
@@ -70,6 +72,7 @@ func (cf *ConfigFile) Parse() *CloudProviderConfig {
 		VolcengineOptions:         config.Volcengine,
 		AmazonsWebServicesOptions: config.AmazonsWebServices,
 		TencentCloudOptions:       config.TencentCloud,
+		JdCloudOptions:            config.JdCloud,
 	}
 }
 
