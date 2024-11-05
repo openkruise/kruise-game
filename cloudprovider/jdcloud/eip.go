@@ -7,24 +7,27 @@ import (
 	"github.com/openkruise/kruise-game/cloudprovider"
 	"github.com/openkruise/kruise-game/cloudprovider/errors"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
-	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strings"
 )
 
 const (
-	EIPNetwork = "JdCloud-EIP"
-	AliasSEIP  = "EIP-Network"
+	EIPNetwork            = "JdCloud-EIP"
+	AliasSEIP             = "EIP-Network"
+	EIPIdConfigName       = "EIPId"
+	EIPIdAnnotationKey    = "jdos.jd.com/eip.id"
+	EIPIfaceAnnotationKey = "jdos.jd.com/eip.iface"
+	EIPAnnotationKey      = "jdos.jd.com/eip.ip"
 
-	EIPIdAnnotationKey      = "jdos.jd.com/eip.id"
-	EIPIfaceAnnotationKey   = "jdos.jd.com/eip.iface"
-	EIPAnnotationKey        = "jdos.jd.com/eip.ip"
+	BandwidthConfigName     = "Bandwidth"
 	BandwidthAnnotationkey  = "jdos.jd.com/eip.bandwith"
+	ChargeTypeConfigName    = "ChargeType"
 	ChargeTypeAnnotationkey = "jdos.jd.com/eip.chargeMode"
 	EnableEIPAnnotationKey  = "jdos.jd.com/eip.enable"
+	FixedEIPConfigName      = "Fixed"
 	FixedEIPAnnotationKey   = "jdos.jd.com/eip.static"
 	EIPNameAnnotationKey    = "jdos.jd.com/eip-name"
+	AssignEIPConfigName     = "AssignEIP"
 	AssignEIPAnnotationKey  = "jdos.jd.com/eip.userAssign"
 )
 
@@ -44,17 +47,22 @@ func (E EipPlugin) Init(client client.Client, options cloudprovider.CloudProvide
 }
 
 func (E EipPlugin) OnPodAdded(client client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, errors.PluginError) {
-	gss, err := util.GetGameServerSetOfPod(pod, client, ctx)
-	if err != nil {
-		return pod, errors.ToPluginError(err, errors.ApiCallError)
-	}
-	gssAnnotations := gss.GetAnnotations()
-	for k, v := range gssAnnotations {
-		if strings.Contains(k, "jdos.jd.com") {
-			pod.Annotations[k] = v
+	networkManager := utils.NewNetworkManager(pod, client)
+	conf := networkManager.GetNetworkConfig()
+
+	pod.Annotations[EnableEIPAnnotationKey] = "true"
+	pod.Annotations[EIPNameAnnotationKey] = pod.GetNamespace() + "/" + pod.GetName()
+	//parse network configuration
+	for _, c := range conf {
+		switch c.Name {
+		case BandwidthConfigName:
+			pod.Annotations[BandwidthAnnotationkey] = c.Value
+		case ChargeTypeConfigName:
+			pod.Annotations[ChargeTypeAnnotationkey] = c.Value
+		case FixedEIPConfigName:
+			pod.Annotations[FixedEIPAnnotationKey] = c.Value
 		}
 	}
-	pod.Annotations[EIPNameAnnotationKey] = pod.GetNamespace() + "/" + pod.GetName()
 	return pod, nil
 }
 

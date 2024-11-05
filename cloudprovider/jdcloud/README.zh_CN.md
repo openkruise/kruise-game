@@ -123,49 +123,30 @@ networkStatus:
 - 安装 EIP-Controller 组件
 - 弹性公网 IP 不会随 POD 的销毁而删除
 
-### Annotation参数
+### 参数
 
-
-#### EnableEIPAnnotationKey
-- 含义：是否开启弹性公网IP
-- 填写格式：字符串，"true"/"false"
-
-#### 
-
-#### BandwidthAnnotationkey
+#### BandwidthConfigName
 - 含义：弹性公网IP的带宽，单位为 Mbps，取值范围为 [1,1024]
 - 填写格式：必须填整数，且不带单位
 - 是否支持变更：是
 
-#### ChargeTypeConfigAnnotationkey
+#### ChargeTypeConfigName
 - 含义：弹性公网IP的计费方式，取值：按量计费：postpaid_by_usage，包年包月：postpaid_by_duration
 - 填写格式：字符串
 - 是否支持变更：是
 
-#### FixedEIPAnnotationKey
+#### FixedEIPConfigName
 - 含义：是否固定弹性公网IP。若是，即使pod删除重建，弹性公网IP也不会改变
 - 填写格式："false" / "true"，字符串
 - 是否支持变更：是
 
-#### AssignEIPAnnotationKey
+#### AssignEIPConfigName
 - 含义：是否指定使用某个弹性公网IP，请填写 true，否则自动分配一个EIP
 - 填写格式："false" / "true"，字符串
 
-#### EIPIdAnnotationKey
+#### EIPIdConfigName
 - 含义：若指定使用某个弹性公网IP，则必须填写弹性公网IP的ID，，组件会自动进行进行查询和绑定
 - 填写格式：字符串，例如：fip-xxxxxxxx
-
-需要注意的是，创建JdCloud-EIP网络类型的Gss时，必须在gss annotations中添加以上配置,而非在NetworkConf中添加，否则无法正常创建EIP资源。
-```YAML
-apiVersion: game.kruise.io/v1alpha1
-kind: GameServerSet
-metadata:
-  annotations:
-    jdos.jd.com/eip.bandwith: "10"
-    jdos.jd.com/eip.chargeMode: postpaid_by_usage
-    jdos.jd.com/eip.enable: "true"
-    jdos.jd.com/eip.static: "true"
-```
 
 ### 使用示例
 ```yaml
@@ -173,11 +154,6 @@ cat <<EOF | kubectl apply -f -
 apiVersion: game.kruise.io/v1alpha1
 kind: GameServerSet
 metadata:
-  annotations:
-    jdos.jd.com/eip.bandwith: "10"
-    jdos.jd.com/eip.chargeMode: postpaid_by_usage
-    jdos.jd.com/eip.enable: "true"
-    jdos.jd.com/eip.static: "true"
   name: eip
   namespace: default
 spec:
@@ -190,6 +166,13 @@ spec:
       name: game-server
   network:
     networkType: JdCloud-EIP
+    networkConf:
+      - name: "BandWidth"
+        value: "10"
+      - name: "ChargeType"
+        value: postpaid_by_usage
+      - name: "Fixed"
+        value: "false"
   replicas: 3
 EOF
 ```

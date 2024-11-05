@@ -124,47 +124,30 @@ JdCloud Container Service supports binding an Elastic Public IP directly to a po
 - Install the EIP-Controller component.
 - The Elastic Public IP will not be deleted when the pod is destroyed.
 
-### Annotation Parameter
+###  Parameter
 
-#### EnableEIPAnnotationKey
-- Meaning：Whether to enable Elastic Public IP
-- Value：string，"true"/"false"
-
-#### BandwidthAnnotationkey
+#### BandwidthConfigName
 - Meaning：The bandwidth of the Elastic Public IP, measured in Mbps, has a value range of [1, 1024].
 - Value：Must be an integer
 - Configurable：Y
 
-#### ChargeTypeConfigAnnotationkey
+#### ChargeTypeConfigName
 - Meaning：The billing method for the Elastic Public IP
 - Value：string, `postpaid_by_usage`/`postpaid_by_duration`
 - Configurable：Y
 
-#### FixedEIPAnnotationKey
+#### FixedEIPConfigName
 - Meaning：Whether to fixed the Elastic Public IP,if so, the EIP will not be changed when the pod is recreated.
 - Value：string, "false" / "true"
 - Configurable：Y
 
-#### AssignEIPAnnotationKey
+#### AssignEIPConfigName
 - Meaning：Whether to designate a specific Elastic Public IP. If true, provide the ID of the Elastic Public IP; otherwise, an EIP will be automatically allocated.
 - Value：string, "false" / "true"
 
-#### EIPIdAnnotationKey
+#### EIPIdConfigName
 - Meaning：If a specific Elastic Public IP is designated, the ID of the Elastic Public IP must be provided, and the component will automatically perform the lookup and binding.
 - Value：string，for example：`fip-xxxxxxxx`
-
-Note that when creating a Gss with the JdCloud-EIP network type, the above configuration must be added to the gss annotations, not in the NetworkConf. Otherwise, the EIP resource will not be created properly.
-
-```YAML
-apiVersion: game.kruise.io/v1alpha1
-kind: GameServerSet
-metadata:
-  annotations:
-    jdos.jd.com/eip.bandwith: "10"
-    jdos.jd.com/eip.chargeMode: postpaid_by_usage
-    jdos.jd.com/eip.enable: "true"
-    jdos.jd.com/eip.static: "true"
-```
 
 ### Example
 ```yaml
@@ -172,11 +155,6 @@ cat <<EOF | kubectl apply -f -
 apiVersion: game.kruise.io/v1alpha1
 kind: GameServerSet
 metadata:
-  annotations:
-    jdos.jd.com/eip.bandwith: "10"
-    jdos.jd.com/eip.chargeMode: postpaid_by_usage
-    jdos.jd.com/eip.enable: "true"
-    jdos.jd.com/eip.static: "true"
   name: eip
   namespace: default
 spec:
@@ -189,6 +167,13 @@ spec:
       name: game-server
   network:
     networkType: JdCloud-EIP
+    networkConf:
+      - name: "BandWidth"
+        value: "10"
+      - name: "ChargeType"
+        value: postpaid_by_usage
+      - name: "Fixed"
+        value: "false"
   replicas: 3
 EOF
 ```

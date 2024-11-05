@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	v1 "github.com/openkruise/kruise-game/cloudprovider/jdcloud/apis/v1"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,6 +40,42 @@ import (
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
 	"github.com/openkruise/kruise-game/pkg/util"
 )
+
+const (
+	LbType_NLB = "nlb"
+)
+
+type JdNLBElasticIp struct {
+	ElasticIpId string `json:"elasticIpId"`
+}
+
+type JdNLBAlgorithm string
+
+const (
+	JdNLBDefaultConnIdleTime int            = 600
+	JdNLBAlgorithmRoundRobin JdNLBAlgorithm = "RoundRobin"
+	JdNLBAlgorithmLeastConn  JdNLBAlgorithm = "LeastConn"
+	JdNLBAlgorithmIpHash     JdNLBAlgorithm = "IpHash"
+)
+
+type JdNLBListenerBackend struct {
+	ProxyProtocol bool           `json:"proxyProtocol"`
+	Algorithm     JdNLBAlgorithm `json:"algorithm"`
+}
+
+type JdNLBListener struct {
+	Protocol                  string                `json:"protocol"`
+	ConnectionIdleTimeSeconds int                   `json:"connectionIdleTimeSeconds"`
+	Backend                   *JdNLBListenerBackend `json:"backend"`
+}
+
+type JdNLB struct {
+	Version          string           `json:"version"`
+	LoadBalancerId   string           `json:"loadBalancerId"`
+	LoadBalancerType string           `json:"loadBalancerType"`
+	Internal         bool             `json:"internal"`
+	Listeners        []*JdNLBListener `json:"listeners"`
+}
 
 const (
 	JdNLBVersion                  = "v1"
@@ -362,8 +397,8 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *nlbConfig {
 	isFixed := false
 	allocateLoadBalancerNodePorts := true
 	annotations := map[string]string{}
-	algo := string(v1.JdNLBAlgorithmRoundRobin)
-	idleTime := v1.JdNLBDefaultConnIdleTime
+	algo := string(JdNLBAlgorithmRoundRobin)
+	idleTime := JdNLBDefaultConnIdleTime
 	for _, c := range conf {
 		switch c.Name {
 		case NlbIdsConfigName:
@@ -496,21 +531,21 @@ func getNLBSpec(ports []corev1.ServicePort, lbId, algorithm string, connIdleTime
 	return string(bytes)
 }
 
-func _getNLBSpec(ports []corev1.ServicePort, lbId, algorithm string, connIdleTimeSeconds int) *v1.JdNLB {
-	var listeners = make([]*v1.JdNLBListener, len(ports))
+func _getNLBSpec(ports []corev1.ServicePort, lbId, algorithm string, connIdleTimeSeconds int) *JdNLB {
+	var listeners = make([]*JdNLBListener, len(ports))
 	for k, v := range ports {
-		listeners[k] = &v1.JdNLBListener{
+		listeners[k] = &JdNLBListener{
 			Protocol:                  strings.ToUpper(string(v.Protocol)),
 			ConnectionIdleTimeSeconds: connIdleTimeSeconds,
-			Backend: &v1.JdNLBListenerBackend{
-				Algorithm: v1.JdNLBAlgorithm(algorithm),
+			Backend: &JdNLBListenerBackend{
+				Algorithm: JdNLBAlgorithm(algorithm),
 			},
 		}
 	}
-	return &v1.JdNLB{
+	return &JdNLB{
 		Version:          JdNLBVersion,
 		LoadBalancerId:   lbId,
-		LoadBalancerType: v1.LbType_NLB,
+		LoadBalancerType: LbType_NLB,
 		Internal:         false,
 		Listeners:        listeners,
 	}
