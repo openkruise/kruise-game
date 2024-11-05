@@ -127,8 +127,8 @@ func initLbCache(svcList []corev1.Service, minPort, maxPort int32, blockPorts []
 		if lbId != "" && svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
 			// init cache for that lb
 			if newCache[lbId] == nil {
-				newCache[lbId] = make(portAllocated, maxPort-minPort)
-				for i := minPort; i < maxPort; i++ {
+				newCache[lbId] = make(portAllocated, maxPort-minPort+1)
+				for i := minPort; i <= maxPort; i++ {
 					newCache[lbId][i] = false
 				}
 			}
@@ -327,7 +327,7 @@ func (s *SlbPlugin) allocate(lbIds []string, num int, nsName string) (string, []
 	// find lb with adequate ports
 	for _, slbId := range lbIds {
 		sum := 0
-		for i := s.minPort; i < s.maxPort; i++ {
+		for i := s.minPort; i <= s.maxPort; i++ {
 			if !s.cache[slbId][i] {
 				sum++
 			}
@@ -346,8 +346,8 @@ func (s *SlbPlugin) allocate(lbIds []string, num int, nsName string) (string, []
 		var port int32
 		if s.cache[lbId] == nil {
 			// init cache for new lb
-			s.cache[lbId] = make(portAllocated, s.maxPort-s.minPort)
-			for i := s.minPort; i < s.maxPort; i++ {
+			s.cache[lbId] = make(portAllocated, s.maxPort-s.minPort+1)
+			for i := s.minPort; i <= s.maxPort; i++ {
 				s.cache[lbId][i] = false
 			}
 			// block ports

@@ -22,11 +22,11 @@ func (o AlibabaCloudOptions) Valid() bool {
 	// SLB valid
 	slbOptions := o.SLBOptions
 	for _, blockPort := range slbOptions.BlockPorts {
-		if blockPort >= slbOptions.MaxPort || blockPort < slbOptions.MinPort {
+		if blockPort >= slbOptions.MaxPort || blockPort <= slbOptions.MinPort {
 			return false
 		}
 	}
-	if int(slbOptions.MaxPort-slbOptions.MinPort)-len(slbOptions.BlockPorts) != 200 {
+	if int(slbOptions.MaxPort-slbOptions.MinPort)-len(slbOptions.BlockPorts) >= 200 {
 		return false
 	}
 	if slbOptions.MinPort <= 0 {
@@ -35,11 +35,11 @@ func (o AlibabaCloudOptions) Valid() bool {
 	// NLB valid
 	nlbOptions := o.NLBOptions
 	for _, blockPort := range nlbOptions.BlockPorts {
-		if blockPort >= nlbOptions.MaxPort || blockPort < nlbOptions.MinPort {
+		if blockPort >= nlbOptions.MaxPort || blockPort <= nlbOptions.MinPort {
 			return false
 		}
 	}
-	if int(nlbOptions.MaxPort-nlbOptions.MinPort)-len(nlbOptions.BlockPorts) != 500 {
+	if int(nlbOptions.MaxPort-nlbOptions.MinPort)-len(nlbOptions.BlockPorts) >= 500 {
 		return false
 	}
 	if nlbOptions.MinPort <= 0 {
