@@ -18,6 +18,7 @@ package manager
 
 import (
 	"context"
+	"github.com/openkruise/kruise-game/cloudprovider/jdcloud"
 
 	"github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
@@ -147,6 +148,16 @@ func NewProviderManager() (*ProviderManager, error) {
 			log.Errorf("Failed to initialize tencentcloud provider.because of %s", err.Error())
 		} else {
 			pm.RegisterCloudProvider(tcp, configs.TencentCloudOptions)
+		}
+	}
+
+	if configs.JdCloudOptions.Valid() && configs.JdCloudOptions.Enabled() {
+		// build and register tencent cloud  provider
+		tcp, err := jdcloud.NewJdcloudProvider()
+		if err != nil {
+			log.Errorf("Failed to initialize jdcloud provider.because of %s", err.Error())
+		} else {
+			pm.RegisterCloudProvider(tcp, configs.JdCloudOptions)
 		}
 	}
 
