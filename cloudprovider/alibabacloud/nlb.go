@@ -369,7 +369,7 @@ func (n *NlbPlugin) allocate(lbIds []string, num int, nsName string) (string, []
 	// find lb with adequate ports
 	for _, slbId := range lbIds {
 		sum := 0
-		for i := n.minPort; i < n.maxPort; i++ {
+		for i := n.minPort; i <= n.maxPort; i++ {
 			if !n.cache[slbId][i] {
 				sum++
 			}
@@ -388,8 +388,8 @@ func (n *NlbPlugin) allocate(lbIds []string, num int, nsName string) (string, []
 		var port int32
 		if n.cache[lbId] == nil {
 			// init cache for new lb
-			n.cache[lbId] = make(portAllocated, n.maxPort-n.minPort)
-			for i := n.minPort; i < n.maxPort; i++ {
+			n.cache[lbId] = make(portAllocated, n.maxPort-n.minPort+1)
+			for i := n.minPort; i <= n.maxPort; i++ {
 				n.cache[lbId][i] = false
 			}
 			// block ports
