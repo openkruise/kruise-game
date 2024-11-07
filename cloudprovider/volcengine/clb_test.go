@@ -143,17 +143,21 @@ func TestInitLbCache(t *testing.T) {
 		svcList     []corev1.Service
 		minPort     int32
 		maxPort     int32
+		blockPorts  []int32
 		cache       map[string]portAllocated
 		podAllocate map[string]string
 	}{
-		minPort: 512,
-		maxPort: 712,
+		minPort:    512,
+		maxPort:    712,
+		blockPorts: []int32{593},
 		cache: map[string]portAllocated{
 			"xxx-A": map[int32]bool{
 				666: true,
+				593: true,
 			},
 			"xxx-B": map[int32]bool{
 				555: true,
+				593: true,
 			},
 		},
 		podAllocate: map[string]string{
@@ -208,7 +212,7 @@ func TestInitLbCache(t *testing.T) {
 		},
 	}
 
-	actualCache, actualPodAllocate := initLbCache(test.svcList, test.minPort, test.maxPort)
+	actualCache, actualPodAllocate := initLbCache(test.svcList, test.minPort, test.maxPort, test.blockPorts)
 	for lb, pa := range test.cache {
 		for port, isAllocated := range pa {
 			if actualCache[lb][port] != isAllocated {

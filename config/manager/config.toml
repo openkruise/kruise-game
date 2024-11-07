@@ -18,8 +18,9 @@ block_ports = [1025, 1434, 1068]
 [volcengine]
 enable = true
 [volcengine.clb]
-max_port = 700
-min_port = 500
+max_port = 600
+min_port = 550
+block_ports = [593]
 
 [aws]
 enable = false
