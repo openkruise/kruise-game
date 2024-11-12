@@ -63,6 +63,7 @@ type portAllocated map[int32]bool
 type ClbPlugin struct {
 	maxPort     int32
 	minPort     int32
+	blockPorts  []int32
 	cache       map[string]portAllocated
 	podAllocate map[string]string
 	mutex       sync.RWMutex
@@ -94,6 +95,7 @@ func (c *ClbPlugin) Init(client client.Client, options cloudprovider.CloudProvid
 	}
 	c.minPort = clbOptions.CLBOptions.MinPort
 	c.maxPort = clbOptions.CLBOptions.MaxPort
+	c.blockPorts = clbOptions.CLBOptions.BlockPorts
 
 	svcList := &corev1.ServiceList{}
 	err := client.List(ctx, svcList)
@@ -101,11 +103,11 @@ func (c *ClbPlugin) Init(client client.Client, options cloudprovider.CloudProvid
 		return err
 	}
 
-	c.cache, c.podAllocate = initLbCache(svcList.Items, c.minPort, c.maxPort)
+	c.cache, c.podAllocate = initLbCache(svcList.Items, c.minPort, c.maxPort, c.blockPorts)
 	return nil
 }
 
-func initLbCache(svcList []corev1.Service, minPort, maxPort int32) (map[string]portAllocated, map[string]string) {
+func initLbCache(svcList []corev1.Service, minPort, maxPort int32, blockPorts []int32) (map[string]portAllocated, map[string]string) {
 	newCache := make(map[string]portAllocated)
 	newPodAllocate := make(map[string]string)
 	for _, svc := range svcList {
@@ -117,6 +119,12 @@ func initLbCache(svcList []corev1.Service, minPort, maxPort int32) (map[string]p
 					newCache[lbId][i] = false
 				}
 			}
+
+			// block ports
+			for _, blockPort := range blockPorts {
+				newCache[lbId][blockPort] = true
+			}
+
 			var ports []int32
 			for _, port := range getPorts(svc.Spec.Ports) {
 				if port <= maxPort && port >= minPort {
@@ -308,6 +316,11 @@ func (c *ClbPlugin) allocate(lbIds []string, num int, nsName string) (string, []
 			for i := c.minPort; i < c.maxPort; i++ {
 				c.cache[lbId][i] = false
 			}
+
+			// block ports
+			for _, blockPort := range c.blockPorts {
+				c.cache[lbId][blockPort] = true
+			}
 		}
 
 		for p, allocated := range c.cache[lbId] {
@@ -339,6 +352,10 @@ func (c *ClbPlugin) deAllocate(nsName string) {
 	ports := util.StringToInt32Slice(clbPorts[1], ",")
 	for _, port := range ports {
 		c.cache[lbId][port] = false
+	}
+	// block ports
+	for _, blockPort := range c.blockPorts {
+		c.cache[lbId][blockPort] = true
 	}
 
 	delete(c.podAllocate, nsName)
