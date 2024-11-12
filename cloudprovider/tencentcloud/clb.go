@@ -33,6 +33,7 @@ const (
 	MinPortConfigName       = "MinPort"
 	MaxPortConfigName       = "MaxPort"
 	OwnerPodKey             = "game.kruise.io/owner-pod"
+	TargetPortKey           = "game.kruise.io/target-port"
 )
 
 type portAllocated map[int32]bool
@@ -109,6 +110,29 @@ func (p *ClbPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Con
 	return pod, nil
 }
 
+func (p *ClbPlugin) deleteListener(ctx context.Context, c client.Client, lis *v1alpha1.DedicatedCLBListener) cperrors.PluginError {
+	err := c.Delete(ctx, lis)
+	if err != nil {
+		return cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+	}
+	if pm := p.cache[lis.Spec.LbId]; pm != nil {
+		pm[int32(lis.Spec.LbPort)] = false
+	}
+	var podName string
+	if targetPod := lis.Spec.TargetPod; targetPod != nil {
+		podName = targetPod.PodName
+	} else if lis.Labels != nil && lis.Labels[TargetPortKey] != "" && lis.Labels[OwnerPodKey] != "" {
+		podName = lis.Labels[OwnerPodKey]
+	} else {
+		return nil
+	}
+	target := fmt.Sprintf("%s/%d", lis.Spec.LbId, lis.Spec.LbPort)
+	p.podAllocate[podName] = slices.DeleteFunc(p.podAllocate[podName], func(el string) bool {
+		return el == target
+	})
+	return nil
+}
+
 func (p *ClbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
 	if pod.DeletionTimestamp != nil {
 		return pod, nil
@@ -159,20 +183,28 @@ func (p *ClbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 			return pod, nil
 		}
 
-		// delete dedicated clb listener if necessary (target pod not match)
 		targetPod := lis.Spec.TargetPod
-		if targetPod == nil || targetPod.PodName != pod.Name {
-			err := c.Delete(ctx, &lis)
-			if err != nil {
-				return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+		if targetPod != nil && targetPod.PodName == pod.Name {
+			port := portProtocol{
+				port:     int(targetPod.TargetPort),
+				protocol: lis.Spec.Protocol,
 			}
-			continue
+			lisMap[port] = lis
+		} else if targetPod == nil && (lis.Labels != nil && lis.Labels[TargetPortKey] != "") {
+			targetPort, err := strconv.Atoi(lis.Labels[TargetPortKey])
+			if err != nil {
+				log.Warningf("[%s] invalid dedicated clb listener target port annotation %s/%s: %s", ClbNetwork, lis.Namespace, lis.Name, err.Error())
+				continue
+			}
+			port := portProtocol{
+				port:     targetPort,
+				protocol: lis.Spec.Protocol,
+			}
+			// lower priority than targetPod is not nil
+			if _, exists := lisMap[port]; !exists {
+				lisMap[port] = lis
+			}
 		}
-		port := portProtocol{
-			port:     int(targetPod.TargetPort),
-			protocol: lis.Spec.Protocol,
-		}
-		lisMap[port] = lis
 	}
 
 	internalAddresses := make([]kruisev1alpha1.NetworkAddress, 0)
@@ -180,6 +212,9 @@ func (p *ClbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 
 	for _, port := range clbConf.targetPorts {
 		if lis, ok := lisMap[port]; !ok { // no dedicated clb listener, try to create one
+			if networkManager.GetNetworkDisabled() {
+				continue
+			}
 			// ensure not ready while creating the listener
 			networkStatus.CurrentNetworkState = kruisev1alpha1.NetworkNotReady
 			pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
@@ -197,67 +232,89 @@ func (p *ClbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 			}
 		} else { // already created dedicated clb listener bound to pod
 			delete(lisMap, port)
-			//  recreate dedicated clb listener if necessary (config changed)
-			if !slices.Contains(clbConf.lbIds, lis.Spec.LbId) || lis.Spec.LbPort > int64(p.maxPort) || lis.Spec.LbPort < int64(p.minPort) || lis.Spec.Protocol != port.protocol || lis.Spec.TargetPod.TargetPort != int64(port.port) {
-				// ensure not ready while recreating the listener
-				networkStatus.CurrentNetworkState = kruisev1alpha1.NetworkNotReady
-				pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
-				if err != nil {
-					return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
-				}
-
-				// delete old listener
-				err := c.Delete(ctx, &lis)
-				if err != nil {
-					return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
-				}
-
-				// allocate and create new listener bound to pod
-				newLis, err := p.consLis(clbConf, pod, port, gss.Name)
-				if err != nil {
-					return pod, cperrors.ToPluginError(err, cperrors.InternalError)
-				}
-				err = c.Create(ctx, newLis)
-				if err != nil {
-					return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
-				}
-			} else { // dedicated clb listener is desired, check status
-				if lis.Status.State == v1alpha1.DedicatedCLBListenerStateBound && lis.Status.Address != "" { // network ready
-					ss := strings.Split(lis.Status.Address, ":")
-					if len(ss) != 2 {
-						return pod, cperrors.NewPluginError(cperrors.InternalError, fmt.Sprintf("invalid dedicated clb listener address %s", lis.Status.Address))
-					}
-					lbPort, err := strconv.Atoi(ss[1])
+			if networkManager.GetNetworkDisabled() { // disable network
+				// deregister pod if networkDisabled is true
+				if lis.Spec.TargetPod != nil {
+					lis.Spec.TargetPod = nil
+					err = c.Update(ctx, &lis)
 					if err != nil {
-						return pod, cperrors.NewPluginError(cperrors.InternalError, fmt.Sprintf("invalid dedicated clb listener port %s", ss[1]))
+						return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
 					}
-					instrIPort := intstr.FromInt(int(port.port))
-					instrEPort := intstr.FromInt(lbPort)
-					internalAddresses = append(internalAddresses, kruisev1alpha1.NetworkAddress{
-						IP: pod.Status.PodIP,
-						Ports: []kruisev1alpha1.NetworkPort{
-							{
-								Name:     instrIPort.String(),
-								Port:     &instrIPort,
-								Protocol: corev1.Protocol(port.protocol),
-							},
-						},
-					})
-					externalAddresses = append(externalAddresses, kruisev1alpha1.NetworkAddress{
-						IP: ss[0],
-						Ports: []kruisev1alpha1.NetworkPort{
-							{
-								Name:     instrIPort.String(),
-								Port:     &instrEPort,
-								Protocol: corev1.Protocol(port.protocol),
-							},
-						},
-					})
-				} else { // network not ready
-					networkStatus.CurrentNetworkState = kruisev1alpha1.NetworkNotReady
-					pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+				}
+			} else { // enable network
+				if lis.Spec.TargetPod == nil { // ensure target pod is bound to dedicated clb listener
+					lis.Spec.TargetPod = &v1alpha1.TargetPod{
+						PodName:    pod.Name,
+						TargetPort: int64(port.port),
+					}
+					err = c.Update(ctx, &lis)
 					if err != nil {
-						return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
+						return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
+					}
+				} else {
+					//  recreate dedicated clb listener if necessary (config changed)
+					if !slices.Contains(clbConf.lbIds, lis.Spec.LbId) || lis.Spec.LbPort > int64(p.maxPort) || lis.Spec.LbPort < int64(p.minPort) || lis.Spec.Protocol != port.protocol || lis.Spec.TargetPod.TargetPort != int64(port.port) {
+						// ensure not ready while recreating the listener
+						networkStatus.CurrentNetworkState = kruisev1alpha1.NetworkNotReady
+						pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+						if err != nil {
+							return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
+						}
+
+						// delete old listener
+						err := p.deleteListener(ctx, c, &lis)
+						if err != nil {
+							return pod, err
+						}
+
+						// allocate and create new listener bound to pod
+						if newLis, err := p.consLis(clbConf, pod, port, gss.Name); err != nil {
+							return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+						} else {
+							err := c.Create(ctx, newLis)
+							if err != nil {
+								return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+							}
+						}
+					} else { // dedicated clb listener is desired, check status
+						if lis.Status.State == v1alpha1.DedicatedCLBListenerStateBound && lis.Status.Address != "" { // network ready
+							ss := strings.Split(lis.Status.Address, ":")
+							if len(ss) != 2 {
+								return pod, cperrors.NewPluginError(cperrors.InternalError, fmt.Sprintf("invalid dedicated clb listener address %s", lis.Status.Address))
+							}
+							lbPort, err := strconv.Atoi(ss[1])
+							if err != nil {
+								return pod, cperrors.NewPluginError(cperrors.InternalError, fmt.Sprintf("invalid dedicated clb listener port %s", ss[1]))
+							}
+							instrIPort := intstr.FromInt(int(port.port))
+							instrEPort := intstr.FromInt(lbPort)
+							internalAddresses = append(internalAddresses, kruisev1alpha1.NetworkAddress{
+								IP: pod.Status.PodIP,
+								Ports: []kruisev1alpha1.NetworkPort{
+									{
+										Name:     instrIPort.String(),
+										Port:     &instrIPort,
+										Protocol: corev1.Protocol(port.protocol),
+									},
+								},
+							})
+							externalAddresses = append(externalAddresses, kruisev1alpha1.NetworkAddress{
+								IP: ss[0],
+								Ports: []kruisev1alpha1.NetworkPort{
+									{
+										Name:     instrIPort.String(),
+										Port:     &instrEPort,
+										Protocol: corev1.Protocol(port.protocol),
+									},
+								},
+							})
+						} else { // network not ready
+							networkStatus.CurrentNetworkState = kruisev1alpha1.NetworkNotReady
+							pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+							if err != nil {
+								return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
+							}
+						}
 					}
 				}
 			}
@@ -266,9 +323,9 @@ func (p *ClbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 
 	// other dedicated clb listener is not used, delete it
 	for _, lis := range lisMap {
-		err := c.Delete(ctx, &lis)
+		err := p.deleteListener(ctx, c, &lis)
 		if err != nil {
-			return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+			return pod, err
 		}
 	}
 
@@ -304,7 +361,8 @@ func (p *ClbPlugin) consLis(clbConf *clbConfig, pod *corev1.Pod, port portProtoc
 			GenerateName: pod.Name + "-",
 			Namespace:    pod.Namespace,
 			Labels: map[string]string{
-				OwnerPodKey:                          pod.Name,
+				OwnerPodKey:                          pod.Name,                // used to select pod related dedicated clb listener
+				TargetPortKey:                        strconv.Itoa(port.port), // used to recover clb pod binding when networkDisabled set from true to false
 				kruisev1alpha1.GameServerOwnerGssKey: gssName,
 			},
 			OwnerReferences: []metav1.OwnerReference{

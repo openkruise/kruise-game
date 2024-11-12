@@ -985,10 +985,9 @@ TencentCloud
 
 #### Plugin description
 
-
 - TencentCloud-CLB enables game servers to be accessed from the Internet by using Cloud Load Balancer (CLB) of Tencent Cloud. CLB is a type of Server Load Balancer (CLB). TencentCloud-CLB uses different ports for different game servers. The CLB instance only forwards traffic, but does not implement load balancing.
-The [tke-extend-network-controller](https://github.com/tkestack/tke-extend-network-controller) network plugin needs to be installed (can be installed through the TKE application market).
-- This network plugin does not support network isolation.
+- The [tke-extend-network-controller](https://github.com/tkestack/tke-extend-network-controller) network plugin needs to be installed (can be installed through the TKE application market).
+- This network plugin supports network isolation.
 
 #### Network parameters
 
