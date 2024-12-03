@@ -77,10 +77,14 @@ type NlbPlugin struct {
 }
 
 type nlbConfig struct {
-	lbIds                       []string
-	targetPorts                 []int
-	protocols                   []corev1.Protocol
-	isFixed                     bool
+	lbIds       []string
+	targetPorts []int
+	protocols   []corev1.Protocol
+	isFixed     bool
+	*nlbHealthConfig
+}
+
+type nlbHealthConfig struct {
 	lBHealthCheckFlag           string
 	lBHealthCheckType           string
 	lBHealthCheckConnectPort    string
@@ -442,16 +446,7 @@ func parseNlbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*nlbConfig, 
 	ports := make([]int, 0)
 	protocols := make([]corev1.Protocol, 0)
 	isFixed := false
-	lBHealthCheckFlag := "on"
-	lBHealthCheckType := "tcp"
-	lBHealthCheckConnectPort := "0"
-	lBHealthCheckConnectTimeout := "5"
-	lBHealthCheckInterval := "10"
-	lBUnhealthyThreshold := "2"
-	lBHealthyThreshold := "2"
-	lBHealthCheckUri := ""
-	lBHealthCheckDomain := ""
-	lBHealthCheckMethod := ""
+
 	for _, c := range conf {
 		switch c.Name {
 		case NlbIdsConfigName:
@@ -480,6 +475,37 @@ func parseNlbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*nlbConfig, 
 				continue
 			}
 			isFixed = v
+		}
+	}
+
+	nlbHealthConfig, err := parseNlbHealthConfig(conf)
+	if err != nil {
+		return nil, err
+	}
+
+	return &nlbConfig{
+		lbIds:           lbIds,
+		protocols:       protocols,
+		targetPorts:     ports,
+		isFixed:         isFixed,
+		nlbHealthConfig: nlbHealthConfig,
+	}, nil
+}
+
+func parseNlbHealthConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*nlbHealthConfig, error) {
+	lBHealthCheckFlag := "on"
+	lBHealthCheckType := "tcp"
+	lBHealthCheckConnectPort := "0"
+	lBHealthCheckConnectTimeout := "5"
+	lBHealthCheckInterval := "10"
+	lBUnhealthyThreshold := "2"
+	lBHealthyThreshold := "2"
+	lBHealthCheckUri := ""
+	lBHealthCheckDomain := ""
+	lBHealthCheckMethod := ""
+
+	for _, c := range conf {
+		switch c.Name {
 		case LBHealthCheckFlagConfigName:
 			flag := strings.ToLower(c.Value)
 			if flag != "on" && flag != "off" {
@@ -555,11 +581,8 @@ func parseNlbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*nlbConfig, 
 			lBHealthCheckMethod = method
 		}
 	}
-	return &nlbConfig{
-		lbIds:                       lbIds,
-		protocols:                   protocols,
-		targetPorts:                 ports,
-		isFixed:                     isFixed,
+
+	return &nlbHealthConfig{
 		lBHealthCheckFlag:           lBHealthCheckFlag,
 		lBHealthCheckType:           lBHealthCheckType,
 		lBHealthCheckConnectPort:    lBHealthCheckConnectPort,
