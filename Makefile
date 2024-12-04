@@ -1,6 +1,10 @@
 
 # Image URL to use all building/pushing images targets
 IMG ?= kruise-game-manager:test
+IMAGE_PLATFORMS ?= linux_amd64 linux_arm64
+# Convert to linux/arm64,linux/amd64
+$(eval BUILDX_PLATFORMS = $(shell echo "${IMAGE_PLATFORMS}" | sed "s# #,#;s#_#/#g"))
+
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.24.1
 
@@ -76,6 +80,14 @@ docker-build: ## Build docker images with the manager.
 .PHONY: docker-push
 docker-push: ## Push docker images with the manager.
 	docker push ${IMG}
+
+.PHONY: docker-build-multiarch
+docker-build-multiarch: ## Build multiarch docker images with the manager.
+	docker buildx build --platform "${BUILDX_PLATFORMS}" -t ${IMG} .
+
+.PHONY: docker-push-multiarch
+docker-push-multiarch: ## Push multiarch docker images with the manager.
+	docker buildx build --push --sbom=false --provenance=false --platform "${BUILDX_PLATFORMS}" -t ${IMG} .
 
 ##@ Deployment
 
