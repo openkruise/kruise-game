@@ -50,6 +50,8 @@ const (
 
 	// service label defined by OKG
 	ServiceBelongNetworkTypeKey = "game.kruise.io/network-type"
+
+	ProtocolTCPUDP corev1.Protocol = "TCPUDP"
 )
 
 type MultiNlbsPlugin struct {
@@ -352,12 +354,27 @@ func (m *MultiNlbsPlugin) consSvc(conf *multiNLBsConfig, pod *corev1.Pod, lbName
 
 	svcPorts := make([]corev1.ServicePort, 0)
 	for i := 0; i < len(podLbsPorts.ports); i++ {
-		svcPorts = append(svcPorts, corev1.ServicePort{
-			Name:       strconv.Itoa(podLbsPorts.targetPort[i]) + "-" + strings.ToLower(string(podLbsPorts.protocols[i])),
-			Port:       podLbsPorts.ports[i],
-			TargetPort: intstr.FromInt(podLbsPorts.targetPort[i]),
-			Protocol:   podLbsPorts.protocols[i],
-		})
+		if podLbsPorts.protocols[i] == ProtocolTCPUDP {
+			svcPorts = append(svcPorts, corev1.ServicePort{
+				Name:       strconv.Itoa(podLbsPorts.targetPort[i]) + "-" + strings.ToLower(string(corev1.ProtocolTCP)),
+				Port:       podLbsPorts.ports[i],
+				TargetPort: intstr.FromInt(podLbsPorts.targetPort[i]),
+				Protocol:   corev1.ProtocolTCP,
+			})
+			svcPorts = append(svcPorts, corev1.ServicePort{
+				Name:       strconv.Itoa(podLbsPorts.targetPort[i]) + "-" + strings.ToLower(string(corev1.ProtocolUDP)),
+				Port:       podLbsPorts.ports[i],
+				TargetPort: intstr.FromInt(podLbsPorts.targetPort[i]),
+				Protocol:   corev1.ProtocolUDP,
+			})
+		} else {
+			svcPorts = append(svcPorts, corev1.ServicePort{
+				Name:       strconv.Itoa(podLbsPorts.targetPort[i]) + "-" + strings.ToLower(string(podLbsPorts.protocols[i])),
+				Port:       podLbsPorts.ports[i],
+				TargetPort: intstr.FromInt(podLbsPorts.targetPort[i]),
+				Protocol:   podLbsPorts.protocols[i],
+			})
+		}
 	}
 
 	loadBalancerClass := "alibabacloud.com/nlb"
