@@ -15,6 +15,7 @@ import (
 
 const (
 	NoneGameServerMinNumberKey = "minAvailable"
+	NoneGameServerMaxNumberKey = "maxAvailable"
 )
 
 type ExternalScaler struct {
@@ -99,7 +100,7 @@ func (e *ExternalScaler) GetMetrics(ctx context.Context, metricRequest *GetMetri
 		}, nil
 	}
 
-	//  scale up those GameServers with WaitToBeDeleted opsState
+	//  scale down those GameServers with WaitToBeDeleted opsState
 	isWaitToDelete, _ := labels.NewRequirement(gamekruiseiov1alpha1.GameServerOpsStateKey, selection.Equals, []string{string(gamekruiseiov1alpha1.WaitToDelete)})
 	notDeleting, _ := labels.NewRequirement(gamekruiseiov1alpha1.GameServerStateKey, selection.NotEquals, []string{string(gamekruiseiov1alpha1.Deleting)})
 	podList = &corev1.PodList{}
@@ -118,12 +119,24 @@ func (e *ExternalScaler) GetMetrics(ctx context.Context, metricRequest *GetMetri
 
 	desireReplicas := int(*gss.Spec.Replicas)
 	numWaitToBeDeleted := len(podList.Items)
+	if numWaitToBeDeleted != 0 {
+		desireReplicas = desireReplicas - numWaitToBeDeleted
+	} else {
+		// scale down when number of GameServers with None opsState more than maxAvailable defined by user
+		maxNum, err := strconv.ParseInt(metricRequest.ScaledObjectRef.GetScalerMetadata()[NoneGameServerMaxNumberKey], 10, 32)
+		if err != nil {
+			klog.Errorf("maxAvailable should be integer type, err: %s", err.Error())
+		}
+		if err == nil && noneNum > int(maxNum) {
+			desireReplicas = (desireReplicas) + int(maxNum) - (noneNum)
+		}
+	}
 
-	klog.Infof("GameServerSet %s/%s desire replicas is %d", ns, name, desireReplicas-numWaitToBeDeleted)
+	klog.Infof("GameServerSet %s/%s desire replicas is %d", ns, name, desireReplicas)
 	return &GetMetricsResponse{
 		MetricValues: []*MetricValue{{
 			MetricName:  "gssReplicas",
-			MetricValue: int64(desireReplicas - numWaitToBeDeleted),
+			MetricValue: int64(desireReplicas),
 		}},
 	}, nil
 }
