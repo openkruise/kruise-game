@@ -1,5 +1,22 @@
 # Change Log
 
+## v0.10.0
+> Change log since v0.9.0
+
+### Features & Enhancements
+- Feat: add tencent cloud provider and clb plugin. https://github.com/openkruise/kruise-game/pull/179
+- Enhance: update kruise-api to v1.7.1 https://github.com/openkruise/kruise-game/pull/173
+- Enhance: add block ports config for AlibabaCloud LB network models. https://github.com/openkruise/kruise-game/pull/175
+- Enhance: add block port in volc engine. https://github.com/openkruise/kruise-game/pull/182
+- Feat: add jdcloud provider and the nlb&eip plugin. https://github.com/openkruise/kruise-game/pull/180
+- Enhance: support network isolation for tencentcloud clb plugin. https://github.com/openkruise/kruise-game/pull/183
+- Feat: add maxAvailable param for external scaler. https://github.com/openkruise/kruise-game/pull/190
+- Feat: add new networkType named AlibabaCloud-Multi-NLBs. https://github.com/openkruise/kruise-game/pull/187
+
+### Bug Fixes
+- Reconstruct the logic of GameServers scaling. https://github.com/openkruise/kruise-game/pull/171
+- Semantic fixes for network port ranges. https://github.com/openkruise/kruise-game/pull/181
+
 ## v0.9.0
 > Change log since v0.8.0
 
