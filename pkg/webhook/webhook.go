@@ -85,6 +85,8 @@ func init() {
 // +kubebuilder:rbac:groups=elbv2.k8s.aws,resources=targetgroupbindings,verbs=create;get;list;patch;update;watch
 // +kubebuilder:rbac:groups=elbv2.services.k8s.aws,resources=listeners,verbs=create;get;list;patch;update;watch
 // +kubebuilder:rbac:groups=elbv2.services.k8s.aws,resources=targetgroups,verbs=create;get;list;patch;update;watch
+// +kubebuilder:rbac:groups=networking.cloud.tencent.com,resources=dedicatedclblisteners,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.cloud.tencent.com,resources=dedicatedclblisteners/status,verbs=get
 
 type Webhook struct {
 	mgr manager.Manager
@@ -135,7 +137,6 @@ func (ws *Webhook) Initialize(cfg *rest.Config) error {
 	}
 
 	clientSet, err := clientset.NewForConfig(cfg)
-
 	if err != nil {
 		return err
 	}

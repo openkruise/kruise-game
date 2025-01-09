@@ -34,3 +34,8 @@ enable = false
 max_port = 700
 min_port = 500
 
+[tencentcloud]
+enable = true
+[tencentcloud.clb]
+min_port = 700
+max_port = 750
