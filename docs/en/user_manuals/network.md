@@ -430,6 +430,12 @@ Fixed
 - Value: false or true.
 - Configuration change supported or not: yes.
 
+ExternalTrafficPolicyType
+
+- Meaning: LB 是否只转发给本地实例。若是Local， 创建Local类型Service, 配合cloud-manager只配置对应Node，可以保留客户端源IP地址
+- Value: : Local/Cluster Default value is Cluster
+- Configuration change supported or not: not. It maybe related to "IP/Port mapping relationship Fixed", recommend not to change
+
 AllowNotReadyContainers
 
 - Meaning: the container names that are allowed not ready when inplace updating, when traffic will not be cut.
