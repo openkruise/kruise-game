@@ -41,15 +41,16 @@ import (
 )
 
 const (
-	SlbNetwork              = "AlibabaCloud-SLB"
-	AliasSLB                = "LB-Network"
-	SlbIdsConfigName        = "SlbIds"
-	PortProtocolsConfigName = "PortProtocols"
-	SlbListenerOverrideKey  = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-force-override-listeners"
-	SlbIdAnnotationKey      = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-id"
-	SlbIdLabelKey           = "service.k8s.alibaba/loadbalancer-id"
-	SvcSelectorKey          = "statefulset.kubernetes.io/pod-name"
-	SlbConfigHashKey        = "game.kruise.io/network-config-hash"
+	SlbNetwork                          = "AlibabaCloud-SLB"
+	AliasSLB                            = "LB-Network"
+	SlbIdsConfigName                    = "SlbIds"
+	PortProtocolsConfigName             = "PortProtocols"
+	ExternalTrafficPolicyTypeConfigName = "ExternalTrafficPolicyType"
+	SlbListenerOverrideKey              = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-force-override-listeners"
+	SlbIdAnnotationKey                  = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-id"
+	SlbIdLabelKey                       = "service.k8s.alibaba/loadbalancer-id"
+	SvcSelectorKey                      = "statefulset.kubernetes.io/pod-name"
+	SlbConfigHashKey                    = "game.kruise.io/network-config-hash"
 )
 
 const (
@@ -79,6 +80,7 @@ type slbConfig struct {
 	protocols   []corev1.Protocol
 	isFixed     bool
 
+	externalTrafficPolicyType   corev1.ServiceExternalTrafficPolicyType
 	lBHealthCheckSwitch         string
 	lBHealthCheckProtocolPort   string
 	lBHealthCheckFlag           string
@@ -408,6 +410,7 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*slbConfig, e
 	protocols := make([]corev1.Protocol, 0)
 	isFixed := false
 
+	externalTrafficPolicy := corev1.ServiceExternalTrafficPolicyTypeCluster
 	lBHealthCheckSwitch := "on"
 	lBHealthCheckProtocolPort := ""
 	lBHealthCheckFlag := "off"
@@ -447,6 +450,10 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*slbConfig, e
 				continue
 			}
 			isFixed = v
+		case ExternalTrafficPolicyTypeConfigName:
+			if strings.EqualFold(c.Value, string(corev1.ServiceExternalTrafficPolicyTypeLocal)) {
+				externalTrafficPolicy = corev1.ServiceExternalTrafficPolicyTypeLocal
+			}
 		case LBHealthCheckSwitchConfigName:
 			checkSwitch := strings.ToLower(c.Value)
 			if checkSwitch != "on" && checkSwitch != "off" {
@@ -529,6 +536,7 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*slbConfig, e
 		protocols:                   protocols,
 		targetPorts:                 ports,
 		isFixed:                     isFixed,
+		externalTrafficPolicyType:   externalTrafficPolicy,
 		lBHealthCheckSwitch:         lBHealthCheckSwitch,
 		lBHealthCheckFlag:           lBHealthCheckFlag,
 		lBHealthCheckType:           lBHealthCheckType,
@@ -598,8 +606,6 @@ func (s *SlbPlugin) consSvc(sc *slbConfig, pod *corev1.Pod, c client.Client, ctx
 		}
 	}
 
-	log.Info("abc")
-
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pod.GetName(),
@@ -609,6 +615,7 @@ func (s *SlbPlugin) consSvc(sc *slbConfig, pod *corev1.Pod, c client.Client, ctx
 		},
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeLoadBalancer,
+			// ExternalTrafficPolicy: sc.externalTrafficPolicyType,
 			Selector: map[string]string{
 				SvcSelectorKey: pod.GetName(),
 			},

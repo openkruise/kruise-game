@@ -17,13 +17,14 @@ limitations under the License.
 package alibabacloud
 
 import (
+	"reflect"
+	"sync"
+	"testing"
+
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"reflect"
-	"sync"
-	"testing"
 )
 
 func TestAllocateDeAllocate(t *testing.T) {
@@ -136,6 +137,7 @@ func TestParseLbConfig(t *testing.T) {
 				lbIds:                       []string{"xxx-A"},
 				targetPorts:                 []int{80},
 				protocols:                   []corev1.Protocol{corev1.ProtocolTCP},
+				externalTrafficPolicyType:   corev1.ServiceExternalTrafficPolicyTypeCluster,
 				isFixed:                     false,
 				lBHealthCheckSwitch:         "off",
 				lBHealthCheckFlag:           "off",
@@ -164,11 +166,16 @@ func TestParseLbConfig(t *testing.T) {
 					Name:  FixedConfigName,
 					Value: "true",
 				},
+				{
+					Name:  ExternalTrafficPolicyTypeConfigName,
+					Value: "Local",
+				},
 			},
 			slbConfig: &slbConfig{
 				lbIds:                       []string{"xxx-A", "xxx-B"},
 				targetPorts:                 []int{81, 82, 83},
 				protocols:                   []corev1.Protocol{corev1.ProtocolUDP, corev1.ProtocolTCP, corev1.ProtocolTCP},
+				externalTrafficPolicyType:   corev1.ServiceExternalTrafficPolicyTypeLocal,
 				isFixed:                     true,
 				lBHealthCheckSwitch:         "on",
 				lBHealthCheckFlag:           "off",
