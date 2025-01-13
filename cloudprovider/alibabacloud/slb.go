@@ -614,8 +614,8 @@ func (s *SlbPlugin) consSvc(sc *slbConfig, pod *corev1.Pod, c client.Client, ctx
 			OwnerReferences: getSvcOwnerReference(c, ctx, pod, sc.isFixed),
 		},
 		Spec: corev1.ServiceSpec{
-			Type: corev1.ServiceTypeLoadBalancer,
-			// ExternalTrafficPolicy: sc.externalTrafficPolicyType,
+			Type:                  corev1.ServiceTypeLoadBalancer,
+			ExternalTrafficPolicy: sc.externalTrafficPolicyType,
 			Selector: map[string]string{
 				SvcSelectorKey: pod.GetName(),
 			},
