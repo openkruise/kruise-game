@@ -598,6 +598,8 @@ func (s *SlbPlugin) consSvc(sc *slbConfig, pod *corev1.Pod, c client.Client, ctx
 		}
 	}
 
+	log.Info("abc")
+
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pod.GetName(),
