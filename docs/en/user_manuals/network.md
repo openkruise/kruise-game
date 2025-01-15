@@ -432,7 +432,7 @@ Fixed
 
 ExternalTrafficPolicyType
 
-- Meaning: LB 是否只转发给本地实例。若是Local， 创建Local类型Service, 配合cloud-manager只配置对应Node，可以保留客户端源IP地址
+- Meaning: Service LB forward type, if Local， Service LB just forward traffice to local node Pod, we can keep source IP without SNAT
 - Value: : Local/Cluster Default value is Cluster
 - Configuration change supported or not: not. It maybe related to "IP/Port mapping relationship Fixed", recommend not to change
 
