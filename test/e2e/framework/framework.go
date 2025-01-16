@@ -3,6 +3,10 @@ package framework
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	kruisegameclientset "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
 	"github.com/openkruise/kruise-game/pkg/util"
@@ -15,9 +19,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
-	"strconv"
-	"strings"
-	"time"
 )
 
 type Framework struct {
@@ -338,7 +339,7 @@ func (f *Framework) WaitForPodDeleted(podName string) error {
 }
 
 func (f *Framework) ExpectGsCorrect(gsName, opsState, dp, up string) error {
-	return wait.PollImmediate(5*time.Second, 3*time.Minute,
+	return wait.PollImmediate(5*time.Second, 5*time.Minute,
 		func() (done bool, err error) {
 			gs, err := f.client.GetGameServer(gsName)
 			if err != nil {

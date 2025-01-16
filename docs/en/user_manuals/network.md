@@ -430,6 +430,12 @@ Fixed
 - Value: false or true.
 - Configuration change supported or not: yes.
 
+ExternalTrafficPolicyType
+
+- Meaning: Service LB forward type, if Local， Service LB just forward traffice to local node Pod, we can keep source IP without SNAT
+- Value: : Local/Cluster Default value is Cluster
+- Configuration change supported or not: not. It maybe related to "IP/Port mapping relationship Fixed", recommend not to change
+
 AllowNotReadyContainers
 
 - Meaning: the container names that are allowed not ready when inplace updating, when traffic will not be cut.
