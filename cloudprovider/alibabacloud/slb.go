@@ -578,7 +578,7 @@ func (s *SlbPlugin) consSvc(sc *slbConfig, pod *corev1.Pod, c client.Client, ctx
 	svcPorts := make([]corev1.ServicePort, 0)
 	for i := 0; i < len(sc.targetPorts); i++ {
 		svcPorts = append(svcPorts, corev1.ServicePort{
-			Name:       strconv.Itoa(sc.targetPorts[i]),
+			Name:       fmt.Sprintf("%s-%s", strconv.Itoa(sc.targetPorts[i]), sc.protocols[i]),
 			Port:       ports[i],
 			Protocol:   sc.protocols[i],
 			TargetPort: intstr.FromInt(sc.targetPorts[i]),
