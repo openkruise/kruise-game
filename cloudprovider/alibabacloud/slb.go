@@ -144,8 +144,11 @@ func initLbCache(svcList []corev1.Service, minPort, maxPort int32, blockPorts []
 			var ports []int32
 			for _, port := range getPorts(svc.Spec.Ports) {
 				if port <= maxPort && port >= minPort {
-					newCache[lbId][port] = true
-					ports = append(ports, port)
+					value, ok := newCache[lbId][port]
+					if !ok || !value {
+						newCache[lbId][port] = true
+						ports = append(ports, port)
+					}
 				}
 			}
 			if len(ports) != 0 {
