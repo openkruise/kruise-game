@@ -577,12 +577,29 @@ func (s *SlbPlugin) consSvc(sc *slbConfig, pod *corev1.Pod, c client.Client, ctx
 
 	svcPorts := make([]corev1.ServicePort, 0)
 	for i := 0; i < len(sc.targetPorts); i++ {
-		svcPorts = append(svcPorts, corev1.ServicePort{
-			Name:       fmt.Sprintf("%s-%s", strconv.Itoa(sc.targetPorts[i]), sc.protocols[i]),
-			Port:       ports[i],
-			Protocol:   sc.protocols[i],
-			TargetPort: intstr.FromInt(sc.targetPorts[i]),
-		})
+		if sc.protocols[i] == ProtocolTCPUDP {
+			svcPorts = append(svcPorts, corev1.ServicePort{
+				Name:       fmt.Sprintf("%s-%s", strconv.Itoa(sc.targetPorts[i]), corev1.ProtocolTCP),
+				Port:       ports[i],
+				Protocol:   corev1.ProtocolTCP,
+				TargetPort: intstr.FromInt(sc.targetPorts[i]),
+			})
+
+			svcPorts = append(svcPorts, corev1.ServicePort{
+				Name:       fmt.Sprintf("%s-%s", strconv.Itoa(sc.targetPorts[i]), corev1.ProtocolUDP),
+				Port:       ports[i],
+				Protocol:   corev1.ProtocolUDP,
+				TargetPort: intstr.FromInt(sc.targetPorts[i]),
+			})
+
+		} else {
+			svcPorts = append(svcPorts, corev1.ServicePort{
+				Name:       fmt.Sprintf("%s-%s", strconv.Itoa(sc.targetPorts[i]), sc.protocols[i]),
+				Port:       ports[i],
+				Protocol:   sc.protocols[i],
+				TargetPort: intstr.FromInt(sc.targetPorts[i]),
+			})
+		}
 	}
 
 	svcAnnotations := map[string]string{
