@@ -153,7 +153,6 @@ func initLbCache(svcList []corev1.Service, minPort, maxPort int32, blockPorts []
 			}
 			if len(ports) != 0 {
 				newPodAllocate[svc.GetNamespace()+"/"+svc.GetName()] = lbId + ":" + util.Int32SliceToString(ports, ",")
-				log.Infof("svc %s/%s allocate slb %s ports %v", svc.Namespace, svc.Name, lbId, ports)
 			}
 		}
 	}
