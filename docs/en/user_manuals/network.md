@@ -421,7 +421,7 @@ SlbIds
 PortProtocols
 
 - Meaning: the ports in the pod to be exposed and the protocols. You can specify multiple ports and protocols.
-- Value: in the format of port1/protocol1,port2/protocol2,... The protocol names must be in uppercase letters.
+- Value: in the format of port1/protocol1,port2/protocol2,...  (same protocol port should like 8000/TCPUDP) The protocol names must be in uppercase letters.
 - Configuration change supported or not: yes.
 
 Fixed
