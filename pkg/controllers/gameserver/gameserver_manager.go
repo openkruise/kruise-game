@@ -110,6 +110,7 @@ func (manager GameServerManager) SyncGsToPod() error {
 	}
 	if string(gs.Spec.OpsState) != podGsOpsState {
 		newLabels[gameKruiseV1alpha1.GameServerOpsStateKey] = string(gs.Spec.OpsState)
+		newAnnotations[gameKruiseV1alpha1.GameServerOpsStateLastChangedTime] = time.Now().Format(TimeFormat)
 		if podGsOpsState != "" {
 			eventType := corev1.EventTypeNormal
 			if gs.Spec.OpsState == gameKruiseV1alpha1.Maintaining {
