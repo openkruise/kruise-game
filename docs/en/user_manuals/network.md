@@ -1102,7 +1102,7 @@ HwCloud
 
 ElbIds
 
-- Meaning: the ELB instance ID. You can fill in multiple ids.
+- Meaning: the ELB instance ID. You can fill in multiple ids. （at least one）
 - Value: in the format of elbId-0,elbId-1,... An example value can be "lb-9zeo7prq1m25ctpfrw1m7,lb-bp1qz7h50yd3w58h2f8je"
 - Configuration change supported or not: yes. You can add new elbIds at the end. However, it is recommended not to change existing elbId that is in use.
 
@@ -1206,7 +1206,6 @@ ElbResponseTimeout
 - Meaning: Specifies the response timeout for the listener
 - Format: 1 to 300 default not set, use lb default value
 - Whether to support changes: Yes
-
 
 #### Plugin configuration
 ```
