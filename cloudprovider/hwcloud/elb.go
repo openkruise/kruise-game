@@ -147,24 +147,15 @@ type elbConfig struct {
 	isFixed     bool
 
 	elbClass                 string
-	elbAvailableZone         string
 	elbConnLimit             int32
-	elbSubnet                string
-	elbEip                   string
-	elbEipKeep               bool
-	elbEipAutoCreateOption   string
 	elbLbAlgorithm           string
 	elbSessionAffinityFlag   string
 	elbSessionAffinityOption string
 	elbTransparentClientIP   bool
 	elbXForwardedHost        bool
-	elbTlsRef                string
 	elbIdleTimeout           int32
 	elbRequestTimeout        int32
 	elbResponseTimeout       int32
-	elbEnableCrossVPC        bool
-	elbL4FlavorID            string
-	elbL7FlavorID            string
 
 	externalTrafficPolicyType corev1.ServiceExternalTrafficPolicyType
 	publishNotReadyAddresses  bool
@@ -497,24 +488,15 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*elbConfig, e
 	publishNotReadyAddresses := false
 
 	elbClass := ElbClassDedicated
-	elbAvailableZone := ""
 	elbConnLimit := int32(-1)
-	elbSubnet := ""
-	elbEip := ""
-	elbEipKeep := false
-	elbEipAutoCreateOption := ""
 	elbLbAlgorithm := ElbLbAlgorithmRoundRobin
 	elbSessionAffinityFlag := "off"
 	elbSessionAffinityOption := ""
 	elbTransparentClientIP := false
 	elbXForwardedHost := false
-	elbTlsRef := ""
 	elbIdleTimeout := int32(-1)
 	elbRequestTimeout := int32(-1)
 	elbResponseTimeout := int32(-1)
-	elbEnableCrossVPC := false
-	elbL4FlavorID := ""
-	elbL7FlavorID := ""
 
 	lBHealthCheckSwitch := "on"
 	LBHealthCHeckOptionConfig := ""
@@ -526,6 +508,10 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*elbConfig, e
 				if slbId != "" {
 					lbIds = append(lbIds, slbId)
 				}
+			}
+
+			if len(lbIds) <= 0 {
+				return nil, fmt.Errorf("no elb id found, must specify at least one elb id")
 			}
 		case PortProtocolsConfigName:
 			for _, pp := range strings.Split(c.Value, ",") {
@@ -561,8 +547,6 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*elbConfig, e
 			if strings.EqualFold(c.Value, string(ElbClassShared)) {
 				elbClass = ElbClassShared
 			}
-		case ElbAvailableZoneAnnotationConfigName:
-			elbAvailableZone = c.Value
 
 		case ElbConnLimitConfigName:
 			v, err := strconv.Atoi(c.Value)
@@ -571,25 +555,6 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*elbConfig, e
 				continue
 			}
 			elbConnLimit = int32(v)
-		case ElbSubnetConfigName:
-			elbSubnet = c.Value
-		case ElbEipConfigName:
-			elbEip = c.Value
-		case ElbEipKeepConfigName:
-			v, err := strconv.ParseBool(c.Value)
-			if err != nil {
-				_ = fmt.Errorf("ignore invalid elb eip keep value: %s", c.Value)
-				continue
-			}
-			elbEipKeep = v
-
-		case ElbEipAutoCreateOptionConfigName:
-			if json.Valid([]byte(c.Value)) {
-				LBHealthCHeckOptionConfig = c.Value
-			} else {
-				return nil, fmt.Errorf("invalid elb eip auto create option value: %s", c.Value)
-			}
-			elbEipAutoCreateOption = c.Value
 		case ElbLbAlgorithmConfigName:
 			if strings.EqualFold(c.Value, ElbLbAlgorithmRoundRobin) {
 				elbLbAlgorithm = ElbLbAlgorithmRoundRobin
@@ -627,8 +592,6 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*elbConfig, e
 				continue
 			}
 			elbXForwardedHost = v
-		case ElbTlsRefConfigName:
-			elbTlsRef = c.Value
 		case ElbIdleTimeoutConfigName:
 			v, err := strconv.Atoi(c.Value)
 			if err != nil {
@@ -666,20 +629,6 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*elbConfig, e
 				_ = fmt.Errorf("ignore invalid elb response timeout value: %s", c.Value)
 				continue
 			}
-		case ElbEnableCrossVPCConfigName:
-			v, err := strconv.ParseBool(c.Value)
-			if err != nil {
-				_ = fmt.Errorf("ignore invalid elb enable cross vpc value: %s", c.Value)
-				continue
-			}
-			// only allow set to true
-			if v {
-				elbEnableCrossVPC = v
-			}
-		case ElbL4FlavorIDConfigName:
-			elbL4FlavorID = c.Value
-		case ElbL7FlavorIDConfigName:
-			elbL7FlavorID = c.Value
 		case LBHealthCheckSwitchConfigName:
 			checkSwitch := strings.ToLower(c.Value)
 			if checkSwitch != "on" && checkSwitch != "off" {
@@ -702,24 +651,15 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*elbConfig, e
 		externalTrafficPolicyType: externalTrafficPolicy,
 		publishNotReadyAddresses:  publishNotReadyAddresses,
 		elbClass:                  elbClass,
-		elbAvailableZone:          elbAvailableZone,
 		elbConnLimit:              elbConnLimit,
-		elbSubnet:                 elbSubnet,
-		elbEip:                    elbEip,
-		elbEipKeep:                elbEipKeep,
-		elbEipAutoCreateOption:    elbEipAutoCreateOption,
 		elbLbAlgorithm:            elbLbAlgorithm,
 		elbSessionAffinityFlag:    elbSessionAffinityFlag,
 		elbSessionAffinityOption:  elbSessionAffinityOption,
 		elbTransparentClientIP:    elbTransparentClientIP,
 		elbXForwardedHost:         elbXForwardedHost,
-		elbTlsRef:                 elbTlsRef,
 		elbIdleTimeout:            elbIdleTimeout,
 		elbRequestTimeout:         elbRequestTimeout,
 		elbResponseTimeout:        elbResponseTimeout,
-		elbEnableCrossVPC:         elbEnableCrossVPC,
-		elbL4FlavorID:             elbL4FlavorID,
-		elbL7FlavorID:             elbL7FlavorID,
 		lBHealthCheckSwitch:       lBHealthCheckSwitch,
 		lBHealtchCheckOption:      LBHealthCHeckOptionConfig,
 	}, nil
@@ -780,9 +720,6 @@ func (s *ElbPlugin) consSvc(sc *elbConfig, pod *corev1.Pod, c client.Client, ctx
 		ElbIdAnnotationKey:                    lbId,
 		ElbConfigHashKey:                      util.GetHash(sc),
 		ElbClassAnnotationKey:                 sc.elbClass,
-		ElbSubnetAnnotationKey:                sc.elbSubnet,
-		ElbEipKeepAnnotationKey:               strconv.FormatBool(sc.elbEipKeep),
-		ElbEipAutoCreateOptionAnnotationKey:   sc.elbEipAutoCreateOption,
 		ElbLbAlgorithmAnnotationKey:           sc.elbLbAlgorithm,
 		ElbSessionAffinityFlagAnnotationKey:   sc.elbSessionAffinityFlag,
 		ElbSessionAffinityOptionAnnotationKey: sc.elbSessionAffinityOption,
@@ -791,35 +728,9 @@ func (s *ElbPlugin) consSvc(sc *elbConfig, pod *corev1.Pod, c client.Client, ctx
 		LBHealthCheckSwitchAnnotationKey:      sc.lBHealthCheckSwitch,
 	}
 
-	if lbId == "" {
-		svcAnnotations[ElbEipAnnotationKey] = sc.elbEip
-	}
-
 	if sc.elbClass == ElbClassDedicated {
-		svcAnnotations[ElbEnableCrossVPCAnnotationKey] = strconv.FormatBool(sc.elbEnableCrossVPC)
-
-		if sc.elbL4FlavorID != "" {
-			svcAnnotations[ElbL4FlavorIDAnnotationKey] = sc.elbL4FlavorID
-		}
-
-		if sc.elbL7FlavorID != "" {
-			svcAnnotations[ElbL7FlavorIDAnnotationKey] = sc.elbL7FlavorID
-		}
-
 	} else {
 		svcAnnotations[ElbConnLimitAnnotationKey] = strconv.Itoa(int(sc.elbConnLimit))
-	}
-
-	if sc.elbAvailableZone != "" {
-		svcAnnotations[ElbAvailableZoneAnnotationKey] = sc.elbAvailableZone
-	}
-
-	if sc.elbSubnet != "" {
-		svcAnnotations[ElbSubnetAnnotationKey] = sc.elbSubnet
-	}
-
-	if sc.elbTlsRef != "" {
-		svcAnnotations[ElbTlsRefAnnotationKey] = sc.elbTlsRef
 	}
 
 	if sc.elbIdleTimeout != -1 {
