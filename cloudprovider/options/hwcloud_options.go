@@ -2,7 +2,7 @@ package options
 
 type HwCloudOptions struct {
 	Enable     bool       `toml:"enable"`
-	ELBOptions SLBOptions `toml:"elb"`
+	ELBOptions ELBOptions `toml:"elb"`
 }
 
 type ELBOptions struct {
