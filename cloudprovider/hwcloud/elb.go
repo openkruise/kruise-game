@@ -788,6 +788,7 @@ func (s *ElbPlugin) consSvc(sc *elbConfig, pod *corev1.Pod, c client.Client, ctx
 		ElbSessionAffinityOptionAnnotationKey: sc.elbSessionAffinityOption,
 		ElbTransparentClientIPAnnotationKey:   strconv.FormatBool(sc.elbTransparentClientIP),
 		ElbXForwardedHostAnnotationKey:        strconv.FormatBool(sc.elbXForwardedHost),
+		LBHealthCheckSwitchAnnotationKey:      sc.lBHealthCheckSwitch,
 	}
 
 	if lbId == "" {
@@ -834,7 +835,6 @@ func (s *ElbPlugin) consSvc(sc *elbConfig, pod *corev1.Pod, c client.Client, ctx
 	}
 
 	if sc.lBHealthCheckSwitch == "on" {
-		svcAnnotations[LBHealthCheckSwitchAnnotationKey] = sc.lBHealthCheckSwitch
 		svcAnnotations[LBHealthCheckOptionAnnotationKey] = sc.lBHealtchCheckOption
 	}
 
