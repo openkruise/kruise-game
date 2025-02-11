@@ -40,6 +40,6 @@ func (ap *Provider) registerPlugin(plugin cloudprovider.Plugin) {
 	ap.plugins[name] = plugin
 }
 
-func NewAlibabaCloudProvider() (cloudprovider.CloudProvider, error) {
+func NewHwCloudProvider() (cloudprovider.CloudProvider, error) {
 	return hwCloudProvider, nil
 }

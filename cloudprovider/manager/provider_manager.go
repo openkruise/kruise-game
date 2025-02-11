@@ -18,6 +18,8 @@ package manager
 
 import (
 	"context"
+
+	"github.com/openkruise/kruise-game/cloudprovider/hwcloud"
 	"github.com/openkruise/kruise-game/cloudprovider/jdcloud"
 
 	"github.com/openkruise/kruise-game/apis/v1alpha1"
@@ -158,6 +160,16 @@ func NewProviderManager() (*ProviderManager, error) {
 			log.Errorf("Failed to initialize jdcloud provider.because of %s", err.Error())
 		} else {
 			pm.RegisterCloudProvider(tcp, configs.JdCloudOptions)
+		}
+	}
+
+	if configs.HwCloudOptions.Valid() && configs.HwCloudOptions.Enabled() {
+		// build and register hw cloud  provider
+		hp, err := hwcloud.NewHwCloudProvider()
+		if err != nil {
+			log.Errorf("Failed to initialize jdcloud provider.because of %s", err.Error())
+		} else {
+			pm.RegisterCloudProvider(hp, configs.JdCloudOptions)
 		}
 	}
 

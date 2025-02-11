@@ -49,6 +49,7 @@ type CloudProviderConfig struct {
 	AmazonsWebServicesOptions CloudProviderOptions
 	TencentCloudOptions       CloudProviderOptions
 	JdCloudOptions            CloudProviderOptions
+	HwCloudOptions            CloudProviderOptions
 }
 
 type tomlConfigs struct {
@@ -58,6 +59,7 @@ type tomlConfigs struct {
 	AmazonsWebServices options.AmazonsWebServicesOptions `toml:"aws"`
 	TencentCloud       options.TencentCloudOptions       `toml:"tencentcloud"`
 	JdCloud            options.JdCloudOptions            `toml:"jdcloud"`
+	HwCloud            options.HwCloudOptions            `toml:"hwcloud"`
 }
 
 func (cf *ConfigFile) Parse() *CloudProviderConfig {
@@ -73,6 +75,7 @@ func (cf *ConfigFile) Parse() *CloudProviderConfig {
 		AmazonsWebServicesOptions: config.AmazonsWebServices,
 		TencentCloudOptions:       config.TencentCloud,
 		JdCloudOptions:            config.JdCloud,
+		HwCloudOptions:            config.HwCloud,
 	}
 }
 
