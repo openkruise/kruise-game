@@ -163,6 +163,10 @@ func NewProviderManager() (*ProviderManager, error) {
 		}
 	}
 
+	log.Infof("HwCloudOptions: %+v", configs.HwCloudOptions)
+	log.Infof("HwCloudOptions.Valid(): %v", configs.HwCloudOptions.Valid())
+	log.Infof("HwCloudOptions.Enabled(): %v", configs.HwCloudOptions.Enabled())
+
 	if configs.HwCloudOptions.Valid() && configs.HwCloudOptions.Enabled() {
 		// build and register hw cloud  provider
 		hp, err := hwcloud.NewHwCloudProvider()
