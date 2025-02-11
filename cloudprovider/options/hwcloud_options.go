@@ -18,7 +18,7 @@ func (o HwCloudOptions) Valid() bool {
 			return false
 		}
 	}
-	if int(elbOptions.MaxPort-elbOptions.MinPort)-len(elbOptions.BlockPorts) >= 200 {
+	if int(elbOptions.MaxPort-elbOptions.MinPort)-len(elbOptions.BlockPorts) > 200 {
 		return false
 	}
 	if elbOptions.MinPort <= 0 {
