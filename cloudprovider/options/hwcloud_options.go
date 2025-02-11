@@ -12,17 +12,16 @@ type ELBOptions struct {
 }
 
 func (o HwCloudOptions) Valid() bool {
-	// SLB valid
-	slbOptions := o.ELBOptions
-	for _, blockPort := range slbOptions.BlockPorts {
-		if blockPort >= slbOptions.MaxPort || blockPort <= slbOptions.MinPort {
+	elbOptions := o.ELBOptions
+	for _, blockPort := range elbOptions.BlockPorts {
+		if blockPort >= elbOptions.MaxPort || blockPort <= elbOptions.MinPort {
 			return false
 		}
 	}
-	if int(slbOptions.MaxPort-slbOptions.MinPort)-len(slbOptions.BlockPorts) >= 200 {
+	if int(elbOptions.MaxPort-elbOptions.MinPort)-len(elbOptions.BlockPorts) >= 200 {
 		return false
 	}
-	if slbOptions.MinPort <= 0 {
+	if elbOptions.MinPort <= 0 {
 		return false
 	}
 	return true

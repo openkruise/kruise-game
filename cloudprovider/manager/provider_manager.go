@@ -167,9 +167,9 @@ func NewProviderManager() (*ProviderManager, error) {
 		// build and register hw cloud  provider
 		hp, err := hwcloud.NewHwCloudProvider()
 		if err != nil {
-			log.Errorf("Failed to initialize jdcloud provider.because of %s", err.Error())
+			log.Errorf("Failed to initialize hwcloud provider.because of %s", err.Error())
 		} else {
-			pm.RegisterCloudProvider(hp, configs.JdCloudOptions)
+			pm.RegisterCloudProvider(hp, configs.HwCloudOptions)
 		}
 	}
 
