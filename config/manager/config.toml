@@ -15,6 +15,13 @@ max_port = 1502
 min_port = 1000
 block_ports = [1025, 1434, 1068]
 
+[hwcloud]
+enable = true
+[hwcloud.elb]
+max_port = 700
+min_port = 500
+block_ports = []
+
 [volcengine]
 enable = true
 [volcengine.clb]
