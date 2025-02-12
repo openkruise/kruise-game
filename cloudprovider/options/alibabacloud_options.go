@@ -26,7 +26,7 @@ func (o AlibabaCloudOptions) Valid() bool {
 			return false
 		}
 	}
-	if int(slbOptions.MaxPort-slbOptions.MinPort)-len(slbOptions.BlockPorts) >= 200 {
+	if int(slbOptions.MaxPort-slbOptions.MinPort)-len(slbOptions.BlockPorts) > 200 {
 		return false
 	}
 	if slbOptions.MinPort <= 0 {
