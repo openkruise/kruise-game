@@ -166,6 +166,26 @@ func (m *MultiNlbsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx con
 		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 	}
 
+	for _, lbId := range conf.idList[0] {
+		// get svc
+		lbName := conf.lbNames[lbId]
+		svc := &corev1.Service{}
+		err = c.Get(ctx, types.NamespacedName{
+			Name:      pod.GetName() + "-" + strings.ToLower(lbName),
+			Namespace: pod.GetNamespace(),
+		}, svc)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				service, err := m.consSvc(conf, pod, lbName, c, ctx)
+				if err != nil {
+					return pod, cperrors.ToPluginError(err, cperrors.ParameterError)
+				}
+				return pod, cperrors.ToPluginError(c.Create(ctx, service), cperrors.ApiCallError)
+			}
+			return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+		}
+	}
+
 	endPoints := ""
 	for i, lbId := range conf.idList[0] {
 		// get svc
