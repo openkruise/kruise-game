@@ -18,6 +18,10 @@ package gameserverset
 
 import (
 	"context"
+	"sort"
+	"strconv"
+	"sync"
+
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -26,14 +30,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sort"
-	"strconv"
-	"sync"
 
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
@@ -99,10 +101,13 @@ func (manager *GameServerSetManager) GetReplicasAfterKilling() *int32 {
 func (manager *GameServerSetManager) IsNeedToScale() bool {
 	gss := manager.gameServerSet
 	asts := manager.asts
+	specReserveIds := util.GetReserveOrdinalIntSet(asts.Spec.ReserveOrdinals)
 
 	// no need to scale
 	return !(*gss.Spec.Replicas == *asts.Spec.Replicas &&
-		util.IsSliceEqual(util.StringToIntSlice(gss.GetAnnotations()[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ","), gss.Spec.ReserveGameServerIds))
+		util.StringToOrdinalIntSet(
+			gss.GetAnnotations()[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ",",
+		).Equal(specReserveIds))
 }
 
 func (manager *GameServerSetManager) GameServerScale() error {
@@ -120,9 +125,11 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	currentReplicas := len(podList)
 	expectedReplicas := int(*gss.Spec.Replicas)
 	as := gss.GetAnnotations()
-	reserveIds := util.StringToIntSlice(as[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ",")
-	notExistIds := util.GetSliceInANotInB(asts.Spec.ReserveOrdinals, reserveIds)
-	gssReserveIds := gss.Spec.ReserveGameServerIds
+	specReserveIds := util.GetReserveOrdinalIntSet(asts.Spec.ReserveOrdinals)
+	reserveIds := util.GetReserveOrdinalIntSet(
+		util.StringToIntStrSlice(as[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ","))
+	notExistIds := util.GetSetInANotInB(specReserveIds, reserveIds)
+	gssReserveIds := util.GetReserveOrdinalIntSet(gss.Spec.ReserveGameServerIds)
 
 	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas; With newExplicit: %v; oldExplicit: %v; oldImplicit: %v",
 		gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas, gssReserveIds, reserveIds, notExistIds)
@@ -131,13 +138,13 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	newManageIds, newReserveIds := computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, podList)
 
 	if gss.Spec.GameServerTemplate.ReclaimPolicy == gameKruiseV1alpha1.DeleteGameServerReclaimPolicy {
-		err := SyncGameServer(gss, c, newManageIds, util.GetIndexListFromPodList(podList))
+		err := SyncGameServer(gss, c, newManageIds, util.GetIndexSetFromPodList(podList))
 		if err != nil {
 			return err
 		}
 	}
 
-	asts.Spec.ReserveOrdinals = newReserveIds
+	asts.Spec.ReserveOrdinals = util.OrdinalSetToIntStrSlice(newReserveIds)
 	asts.Spec.Replicas = gss.Spec.Replicas
 	asts.Spec.ScaleStrategy = &kruiseV1beta1.StatefulSetScaleStrategy{
 		MaxUnavailable: gss.Spec.ScaleStrategy.MaxUnavailable,
@@ -152,7 +159,7 @@ func (manager *GameServerSetManager) GameServerScale() error {
 		gssReserveIds = newReserveIds
 	}
 	gssAnnotations := make(map[string]string)
-	gssAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] = util.IntSliceToString(gssReserveIds, ",")
+	gssAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] = util.OrdinalSetToString(gssReserveIds, ",")
 	patchGss := map[string]interface{}{"spec": map[string]interface{}{"reserveGameServerIds": gssReserveIds}, "metadata": map[string]map[string]string{"annotations": gssAnnotations}}
 	patchGssBytes, _ := json.Marshal(patchGss)
 	err = c.Patch(ctx, gss, client.RawPatch(types.MergePatchType, patchGssBytes))
@@ -169,23 +176,23 @@ func (manager *GameServerSetManager) GameServerScale() error {
 // notExistIds is the implicit id list.
 // gssReserveIds is the newest explicit id list.
 // pods is the pods that managed by gss now.
-func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedReplicas int, pods []corev1.Pod) ([]int, []int) {
+func computeToScaleGs(gssReserveIds, reserveIds, notExistIds sets.Set[int], expectedReplicas int, pods []corev1.Pod) (sets.Set[int], sets.Set[int]) {
 	// 1. Get newest implicit list & explicit.
-	newAddExplicit := util.GetSliceInANotInB(gssReserveIds, reserveIds)
-	newDeleteExplicit := util.GetSliceInANotInB(reserveIds, gssReserveIds)
-	newImplicit := util.GetSliceInANotInB(notExistIds, newAddExplicit)
-	newImplicit = append(newImplicit, newDeleteExplicit...)
+	newAddExplicit := util.GetSetInANotInB(gssReserveIds, reserveIds)
+	newDeleteExplicit := util.GetSetInANotInB(reserveIds, gssReserveIds)
+	newImplicit := util.GetSetInANotInB(notExistIds, newAddExplicit)
+	newImplicit = newImplicit.Union(newDeleteExplicit)
 	newExplicit := gssReserveIds
 
 	// 2. Remove the pods ids is in newExplicit.
-	var workloadManageIds []int
+	var workloadManageIds = sets.New[int]()
 	var newPods []corev1.Pod
 	for _, pod := range pods {
 		index := util.GetIndexFromGsName(pod.Name)
-		if util.IsNumInList(index, newExplicit) {
+		if newExplicit.Has(index) {
 			continue
 		}
-		workloadManageIds = append(workloadManageIds, index)
+		workloadManageIds.Insert(index)
 		newPods = append(newPods, pod)
 	}
 
@@ -197,38 +204,38 @@ func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedRepl
 		num := 0
 		var toAdd []int
 		for i := 0; num < expectedReplicas-existReplicas; i++ {
-			if util.IsNumInList(i, workloadManageIds) || util.IsNumInList(i, newExplicit) {
+			if workloadManageIds.Has(i) || newExplicit.Has(i) {
 				continue
 			}
-			if util.IsNumInList(i, newImplicit) {
-				newImplicit = util.GetSliceInANotInB(newImplicit, []int{i})
+			if newImplicit.Has(i) {
+				newImplicit.Delete(i)
 			}
 			toAdd = append(toAdd, i)
 			num++
 		}
-		workloadManageIds = append(workloadManageIds, toAdd...)
+		workloadManageIds.Insert(toAdd...)
 	} else if existReplicas > expectedReplicas {
 		// Delete pods.
 		sortedGs := util.DeleteSequenceGs(newPods)
 		sort.Sort(sortedGs)
-		toDelete := util.GetIndexListFromPodList(sortedGs[:existReplicas-expectedReplicas])
-		workloadManageIds = util.GetSliceInANotInB(workloadManageIds, toDelete)
-		newImplicit = append(newImplicit, toDelete...)
+		toDelete := util.GetIndexSetFromPodList(sortedGs[:existReplicas-expectedReplicas])
+		workloadManageIds = util.GetSetInANotInB(workloadManageIds, toDelete)
+		newImplicit = newImplicit.Union(toDelete)
 	}
 
-	return workloadManageIds, append(newImplicit, newExplicit...)
+	return workloadManageIds, newImplicit.Union(newExplicit)
 }
 
-func SyncGameServer(gss *gameKruiseV1alpha1.GameServerSet, c client.Client, newManageIds, oldManageIds []int) error {
+func SyncGameServer(gss *gameKruiseV1alpha1.GameServerSet, c client.Client, newManageIds, oldManageIds sets.Set[int]) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	addIds := util.GetSliceInANotInB(newManageIds, oldManageIds)
-	deleteIds := util.GetSliceInANotInB(oldManageIds, newManageIds)
+	addIds := util.GetSetInANotInB(newManageIds, oldManageIds)
+	deleteIds := util.GetSetInANotInB(oldManageIds, newManageIds)
 
 	errch := make(chan error, len(addIds)+len(deleteIds))
 	var wg sync.WaitGroup
-	for _, gsId := range append(addIds, deleteIds...) {
+	for _, gsId := range addIds.Union(deleteIds).UnsortedList() {
 		wg.Add(1)
 		id := gsId
 		go func(ctx context.Context) {
@@ -249,7 +256,7 @@ func SyncGameServer(gss *gameKruiseV1alpha1.GameServerSet, c client.Client, newM
 				return
 			}
 
-			if util.IsNumInList(id, addIds) && gs.GetLabels()[gameKruiseV1alpha1.GameServerDeletingKey] == "true" {
+			if addIds.Has(id) && gs.GetLabels()[gameKruiseV1alpha1.GameServerDeletingKey] == "true" {
 				gsLabels := make(map[string]string)
 				gsLabels[gameKruiseV1alpha1.GameServerDeletingKey] = "false"
 				patchGs := map[string]interface{}{"metadata": map[string]map[string]string{"labels": gsLabels}}
@@ -266,7 +273,7 @@ func SyncGameServer(gss *gameKruiseV1alpha1.GameServerSet, c client.Client, newM
 				klog.Infof("GameServer %s/%s DeletingKey turn into false", gss.Namespace, gsName)
 			}
 
-			if util.IsNumInList(id, deleteIds) && gs.GetLabels()[gameKruiseV1alpha1.GameServerDeletingKey] != "true" {
+			if deleteIds.Has(id) && gs.GetLabels()[gameKruiseV1alpha1.GameServerDeletingKey] != "true" {
 				gsLabels := make(map[string]string)
 				gsLabels[gameKruiseV1alpha1.GameServerDeletingKey] = "true"
 				patchGs := map[string]interface{}{"metadata": map[string]map[string]string{"labels": gsLabels}}
