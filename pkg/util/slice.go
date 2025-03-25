@@ -21,6 +21,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 func IsNumInList(num int, list []int) bool {
@@ -87,6 +89,29 @@ func StringToIntSlice(str string, delimiter string) []int {
 			continue
 		}
 		retSlice = append(retSlice, val)
+	}
+	return retSlice
+}
+
+func StringToIntStrSlice(str string, delimiter string) []intstr.IntOrString {
+	if str == "" || delimiter == "" {
+		return nil
+	}
+	strList := strings.Split(str, delimiter)
+	if len(strList) == 0 {
+		return nil
+	}
+	var retSlice []intstr.IntOrString
+	for _, item := range strList {
+		if item == "" {
+			continue
+		}
+		val, err := strconv.Atoi(item)
+		if err != nil {
+			retSlice = append(retSlice, intstr.FromString(strings.TrimSpace(item)))
+		} else {
+			retSlice = append(retSlice, intstr.FromInt(val))
+		}
 	}
 	return retSlice
 }
