@@ -36,6 +36,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -48,6 +49,7 @@ const (
 	AllocateLoadBalancerNodePorts = "AllocateLoadBalancerNodePorts"
 	ClbAnnotations                = "Annotations"
 	ClbConfigHashKey              = "game.kruise.io/network-config-hash"
+	PodCreateTimestampKey         = "game.kruise.io/pod-create-timestamp"
 	ClbIdAnnotationKey            = "service.beta.kubernetes.io/volcengine-loadbalancer-id"
 	ClbAddressTypeKey             = "service.beta.kubernetes.io/volcengine-loadbalancer-address-type"
 	ClbAddressTypePublic          = "PUBLIC"
@@ -162,6 +164,10 @@ func (c *ClbPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx cont
 			return pod, cperrors.ToPluginError(client.Create(ctx, c.consSvc(config, pod, client, ctx)), cperrors.ApiCallError)
 		}
 		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+	}
+
+	if !config.isFixed && pod.CreationTimestamp.Format(time.RFC3339) != svc.GetAnnotations()[PodCreateTimestampKey] {
+		return pod, cperrors.NewPluginError(cperrors.InternalError, fmt.Sprintf("old svc is not deleted, pod createtimestamp is not equal to svc anno, pod: %s, svc: %s", pod.CreationTimestamp.Format(time.RFC3339), svc.GetAnnotations()[PodCreateTimestampKey]))
 	}
 
 	// update svc
@@ -448,6 +454,9 @@ func (c *ClbPlugin) consSvc(config *clbConfig, pod *corev1.Pod, client client.Cl
 		ClbAddressTypeKey:  ClbAddressTypePublic,
 		ClbIdAnnotationKey: lbId,
 		ClbConfigHashKey:   util.GetHash(config),
+	}
+	if !config.isFixed {
+		annotations[PodCreateTimestampKey] = pod.CreationTimestamp.Format(time.RFC3339)
 	}
 	for key, value := range config.annotations {
 		annotations[key] = value
