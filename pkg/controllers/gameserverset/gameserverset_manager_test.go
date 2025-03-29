@@ -9,19 +9,21 @@ import (
 	appspub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
+	"github.com/openkruise/kruise-game/pkg/util"
 	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	"github.com/openkruise/kruise-game/pkg/util"
 )
 
 var (
@@ -37,19 +39,19 @@ func init() {
 
 func TestComputeToScaleGs(t *testing.T) {
 	tests := []struct {
-		newGssReserveIds []int
-		oldGssreserveIds []int
-		notExistIds      []int
+		newGssReserveIds sets.Set[int]
+		oldGssreserveIds sets.Set[int]
+		notExistIds      sets.Set[int]
 		expectedReplicas int
 		pods             []corev1.Pod
-		newReserveIds    []int
-		newManageIds     []int
+		newReserveIds    sets.Set[int]
+		newManageIds     sets.Set[int]
 	}{
 		// case 0
 		{
-			newGssReserveIds: []int{2, 3, 4},
-			oldGssreserveIds: []int{2, 3},
-			notExistIds:      []int{5},
+			newGssReserveIds: sets.New(2, 3, 4),
+			oldGssreserveIds: sets.New(2, 3),
+			notExistIds:      sets.New(5),
 			expectedReplicas: 3,
 			pods: []corev1.Pod{
 				{
@@ -89,14 +91,14 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newReserveIds: []int{2, 3, 4, 5},
-			newManageIds:  []int{0, 1, 6},
+			newReserveIds: sets.New(2, 3, 4, 5),
+			newManageIds:  sets.New(0, 1, 6),
 		},
 		// case 1
 		{
-			newGssReserveIds: []int{0, 2, 3},
-			oldGssreserveIds: []int{0, 4, 5},
-			notExistIds:      []int{},
+			newGssReserveIds: sets.New(0, 2, 3),
+			oldGssreserveIds: sets.New(0, 4, 5),
+			notExistIds:      sets.New[int](),
 			expectedReplicas: 3,
 			pods: []corev1.Pod{
 				{
@@ -145,14 +147,14 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newReserveIds: []int{0, 2, 3, 4, 5},
-			newManageIds:  []int{1, 6, 7},
+			newReserveIds: sets.New(0, 2, 3, 4, 5),
+			newManageIds:  sets.New(1, 6, 7),
 		},
 		// case 2
 		{
-			newGssReserveIds: []int{0},
-			oldGssreserveIds: []int{0, 4, 5},
-			notExistIds:      []int{},
+			newGssReserveIds: sets.New(0),
+			oldGssreserveIds: sets.New(0, 4, 5),
+			notExistIds:      sets.New[int](),
 			expectedReplicas: 1,
 			pods: []corev1.Pod{
 				{
@@ -201,14 +203,14 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newReserveIds: []int{0, 2, 3, 4, 5, 6, 7},
-			newManageIds:  []int{1},
+			newReserveIds: sets.New(0, 2, 3, 4, 5, 6, 7),
+			newManageIds:  sets.New(1),
 		},
 		// case 3
 		{
-			newGssReserveIds: []int{0, 2, 3},
-			oldGssreserveIds: []int{0, 4, 5},
-			notExistIds:      []int{},
+			newGssReserveIds: sets.New(0, 2, 3),
+			oldGssreserveIds: sets.New(0, 4, 5),
+			notExistIds:      sets.New[int](),
 			expectedReplicas: 4,
 			pods: []corev1.Pod{
 				{
@@ -257,14 +259,14 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newReserveIds: []int{0, 2, 3, 5},
-			newManageIds:  []int{1, 4, 6, 7},
+			newReserveIds: sets.New(0, 2, 3, 5),
+			newManageIds:  sets.New(1, 4, 6, 7),
 		},
 		// case 4
 		{
-			newGssReserveIds: []int{0, 3, 5},
-			oldGssreserveIds: []int{0, 3, 5},
-			notExistIds:      []int{},
+			newGssReserveIds: sets.New(0, 3, 5),
+			oldGssreserveIds: sets.New(0, 3, 5),
+			notExistIds:      sets.New[int](),
 			expectedReplicas: 1,
 			pods: []corev1.Pod{
 				{
@@ -304,14 +306,14 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newReserveIds: []int{0, 3, 5, 2, 4, 6},
-			newManageIds:  []int{1},
+			newReserveIds: sets.New(0, 3, 5, 2, 4, 6),
+			newManageIds:  sets.New(1),
 		},
 		// case 5
 		{
-			newGssReserveIds: []int{1, 2},
-			oldGssreserveIds: []int{},
-			notExistIds:      []int{1, 2},
+			newGssReserveIds: sets.New(1, 2),
+			oldGssreserveIds: sets.New(0, 3),
+			notExistIds:      sets.New(1, 2),
 			expectedReplicas: 2,
 			pods: []corev1.Pod{
 				{
@@ -333,44 +335,44 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newReserveIds: []int{1, 2},
-			newManageIds:  []int{0, 3},
+			newReserveIds: sets.New(1, 2),
+			newManageIds:  sets.New(0, 3),
 		},
 		// case 6
 		{
-			newGssReserveIds: []int{},
-			oldGssreserveIds: []int{},
-			notExistIds:      []int{},
+			newGssReserveIds: sets.New[int](),
+			oldGssreserveIds: sets.New[int](),
+			notExistIds:      sets.New[int](),
 			expectedReplicas: 3,
 			pods:             []corev1.Pod{},
-			newReserveIds:    []int{},
-			newManageIds:     []int{0, 1, 2},
+			newReserveIds:    sets.New[int](),
+			newManageIds:     sets.New(0, 1, 2),
 		},
 		// case 7
 		{
-			newGssReserveIds: []int{1, 2},
-			oldGssreserveIds: []int{},
-			notExistIds:      []int{},
+			newGssReserveIds: sets.New(1, 2),
+			oldGssreserveIds: sets.New[int](),
+			notExistIds:      sets.New[int](),
 			expectedReplicas: 3,
 			pods:             []corev1.Pod{},
-			newReserveIds:    []int{1, 2},
-			newManageIds:     []int{0, 3, 4},
+			newReserveIds:    sets.New(1, 2),
+			newManageIds:     sets.New(0, 3, 4),
 		},
 		// case 8
 		{
-			newGssReserveIds: []int{0},
-			oldGssreserveIds: []int{},
-			notExistIds:      []int{0},
+			newGssReserveIds: sets.New(0),
+			oldGssreserveIds: sets.New[int](),
+			notExistIds:      sets.New(0),
 			expectedReplicas: 1,
 			pods:             []corev1.Pod{},
-			newReserveIds:    []int{0},
-			newManageIds:     []int{1},
+			newReserveIds:    sets.New(0),
+			newManageIds:     sets.New(1),
 		},
 		// case 9
 		{
-			newGssReserveIds: []int{},
-			oldGssreserveIds: []int{1},
-			notExistIds:      []int{},
+			newGssReserveIds: sets.New[int](),
+			oldGssreserveIds: sets.New(1),
+			notExistIds:      sets.New[int](),
 			expectedReplicas: 2,
 			pods: []corev1.Pod{
 				{
@@ -392,14 +394,14 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newReserveIds: []int{1},
-			newManageIds:  []int{0, 2},
+			newReserveIds: sets.New(1),
+			newManageIds:  sets.New(0, 2),
 		},
 		// case 10
 		{
-			newGssReserveIds: []int{0},
-			oldGssreserveIds: []int{},
-			notExistIds:      []int{2, 3, 4},
+			newGssReserveIds: sets.New(0),
+			oldGssreserveIds: sets.New[int](),
+			notExistIds:      sets.New(2, 3, 4),
 			expectedReplicas: 4,
 			pods: []corev1.Pod{
 				{
@@ -412,18 +414,18 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newReserveIds: []int{0},
-			newManageIds:  []int{1, 2, 3, 4},
+			newReserveIds: sets.New(0),
+			newManageIds:  sets.New(1, 2, 3, 4),
 		},
 	}
 
 	for i, test := range tests {
 		t.Logf("case %d : newGssReserveIds: %v ; oldGssreserveIds: %v ; notExistIds: %v ; expectedReplicas: %d; pods: %v", i, test.newGssReserveIds, test.oldGssreserveIds, test.notExistIds, test.expectedReplicas, test.pods)
 		newManageIds, newReserveIds := computeToScaleGs(test.newGssReserveIds, test.oldGssreserveIds, test.notExistIds, test.expectedReplicas, test.pods)
-		if !util.IsSliceEqual(newReserveIds, test.newReserveIds) {
+		if !newReserveIds.Equal(test.newReserveIds) {
 			t.Errorf("case %d: expect newNotExistIds %v but got %v", i, test.newReserveIds, newReserveIds)
 		}
-		if !util.IsSliceEqual(newManageIds, test.newManageIds) {
+		if !newManageIds.Equal(test.newManageIds) {
 			t.Errorf("case %d: expect newManageIds %v but got %v", i, test.newManageIds, newManageIds)
 		}
 		t.Logf("case %d : newManageIds: %v ; newReserveIds: %v", i, newManageIds, newReserveIds)
@@ -459,7 +461,7 @@ func TestIsNeedToScale(t *testing.T) {
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
 					Replicas:             ptr.To[int32](5),
-					ReserveGameServerIds: []int{1, 5},
+					ReserveGameServerIds: []intstr.IntOrString{intstr.FromInt(1), intstr.FromInt(5)},
 				},
 			},
 			asts: &kruiseV1beta1.StatefulSet{
@@ -492,7 +494,7 @@ func TestGameServerScale(t *testing.T) {
 		gss            *gameKruiseV1alpha1.GameServerSet
 		asts           *kruiseV1beta1.StatefulSet
 		podList        []corev1.Pod
-		astsReserveIds []int
+		astsReserveIds sets.Set[int]
 		gssReserveIds  string
 	}{
 		// case0: scale down without reserveIds
@@ -505,7 +507,7 @@ func TestGameServerScale(t *testing.T) {
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
 					Replicas:             ptr.To[int32](3),
-					ReserveGameServerIds: []int{1},
+					ReserveGameServerIds: []intstr.IntOrString{intstr.FromInt(1)},
 				},
 			},
 			asts: &kruiseV1beta1.StatefulSet{
@@ -515,7 +517,7 @@ func TestGameServerScale(t *testing.T) {
 				},
 				Spec: kruiseV1beta1.StatefulSetSpec{
 					Replicas:        ptr.To[int32](4),
-					ReserveOrdinals: []int{1},
+					ReserveOrdinals: []intstr.IntOrString{intstr.FromInt(1)},
 				},
 				Status: kruiseV1beta1.StatefulSetStatus{
 					Replicas: int32(4),
@@ -559,7 +561,7 @@ func TestGameServerScale(t *testing.T) {
 					},
 				},
 			},
-			astsReserveIds: []int{1, 2},
+			astsReserveIds: sets.New(1, 2),
 			gssReserveIds:  "1",
 		},
 		// case1: scale down with reserveIds
@@ -572,7 +574,7 @@ func TestGameServerScale(t *testing.T) {
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
 					Replicas:             ptr.To[int32](3),
-					ReserveGameServerIds: []int{1, 0},
+					ReserveGameServerIds: []intstr.IntOrString{intstr.FromInt(1), intstr.FromInt(0)},
 				},
 			},
 			asts: &kruiseV1beta1.StatefulSet{
@@ -582,7 +584,7 @@ func TestGameServerScale(t *testing.T) {
 				},
 				Spec: kruiseV1beta1.StatefulSetSpec{
 					Replicas:        ptr.To[int32](4),
-					ReserveOrdinals: []int{1},
+					ReserveOrdinals: []intstr.IntOrString{intstr.FromInt(1)},
 				},
 				Status: kruiseV1beta1.StatefulSetStatus{
 					Replicas: int32(4),
@@ -626,7 +628,7 @@ func TestGameServerScale(t *testing.T) {
 					},
 				},
 			},
-			astsReserveIds: []int{1, 0},
+			astsReserveIds: sets.New(1, 0),
 			gssReserveIds:  "1,0",
 		},
 		// case2: scale up with reserveIds
@@ -639,7 +641,7 @@ func TestGameServerScale(t *testing.T) {
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
 					Replicas:             ptr.To[int32](5),
-					ReserveGameServerIds: []int{},
+					ReserveGameServerIds: []intstr.IntOrString{},
 				},
 			},
 			asts: &kruiseV1beta1.StatefulSet{
@@ -649,7 +651,7 @@ func TestGameServerScale(t *testing.T) {
 				},
 				Spec: kruiseV1beta1.StatefulSetSpec{
 					Replicas:        ptr.To[int32](4),
-					ReserveOrdinals: []int{1},
+					ReserveOrdinals: []intstr.IntOrString{intstr.FromInt(1)},
 				},
 				Status: kruiseV1beta1.StatefulSetStatus{
 					Replicas: int32(4),
@@ -706,7 +708,7 @@ func TestGameServerScale(t *testing.T) {
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
 					Replicas:             ptr.To[int32](5),
-					ReserveGameServerIds: []int{},
+					ReserveGameServerIds: []intstr.IntOrString{},
 				},
 			},
 			asts: &kruiseV1beta1.StatefulSet{
@@ -716,7 +718,7 @@ func TestGameServerScale(t *testing.T) {
 				},
 				Spec: kruiseV1beta1.StatefulSetSpec{
 					Replicas:        ptr.To[int32](3),
-					ReserveOrdinals: []int{1, 3},
+					ReserveOrdinals: []intstr.IntOrString{intstr.FromInt(1), intstr.FromInt(3)},
 				},
 				Status: kruiseV1beta1.StatefulSetStatus{
 					Replicas: int32(3),
@@ -778,7 +780,7 @@ func TestGameServerScale(t *testing.T) {
 		}, updateAsts); err != nil {
 			t.Error(err)
 		}
-		if !util.IsSliceEqual(updateAsts.Spec.ReserveOrdinals, test.astsReserveIds) {
+		if !util.GetReserveOrdinalIntSet(updateAsts.Spec.ReserveOrdinals).Equal(test.astsReserveIds) {
 			t.Errorf("expect asts ReserveOrdinals %v but got %v", test.astsReserveIds, updateAsts.Spec.ReserveOrdinals)
 		}
 
@@ -799,8 +801,8 @@ func TestSyncGameServer(t *testing.T) {
 	tests := []struct {
 		gss           *gameKruiseV1alpha1.GameServerSet
 		gsList        []*gameKruiseV1alpha1.GameServer
-		newManageIds  []int
-		oldManageIds  []int
+		newManageIds  sets.Set[int]
+		oldManageIds  sets.Set[int]
 		IdsLabelTure  []int
 		IdsLabelFalse []int
 	}{
@@ -850,8 +852,8 @@ func TestSyncGameServer(t *testing.T) {
 					},
 				},
 			},
-			oldManageIds:  []int{0, 2, 3, 4},
-			newManageIds:  []int{0, 1},
+			oldManageIds:  sets.New(0, 2, 3, 4),
+			newManageIds:  sets.New(0, 1),
 			IdsLabelTure:  []int{2, 3, 4},
 			IdsLabelFalse: []int{},
 		},
@@ -865,8 +867,8 @@ func TestSyncGameServer(t *testing.T) {
 				},
 			},
 			gsList:        []*gameKruiseV1alpha1.GameServer{},
-			oldManageIds:  []int{},
-			newManageIds:  []int{0, 1, 3},
+			oldManageIds:  sets.New[int](),
+			newManageIds:  sets.New(0, 1, 3),
 			IdsLabelTure:  []int{},
 			IdsLabelFalse: []int{},
 		},
@@ -891,8 +893,8 @@ func TestSyncGameServer(t *testing.T) {
 					},
 				},
 			},
-			oldManageIds:  []int{},
-			newManageIds:  []int{0},
+			oldManageIds:  sets.New[int](),
+			newManageIds:  sets.New(0),
 			IdsLabelTure:  []int{},
 			IdsLabelFalse: []int{0},
 		},
