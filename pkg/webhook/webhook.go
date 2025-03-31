@@ -20,7 +20,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -102,13 +101,9 @@ func NewWebhookServer(mgr manager.Manager, cpm *manager2.ProviderManager) *Webho
 
 func (ws *Webhook) SetupWithManager(mgr manager.Manager) *Webhook {
 	server := mgr.GetWebhookServer()
-	server.Host = "0.0.0.0"
-	server.Port = webhookPort
-	server.CertDir = webhookCertDir
-	decoder, err := admission.NewDecoder(runtime.NewScheme())
-	if err != nil {
-		log.Fatalln(err)
-	}
+	decoder := admission.NewDecoder(runtime.NewScheme())
+
+	// Register the webhook server
 	recorder := mgr.GetEventRecorderFor("kruise-game-webhook")
 	server.Register(mutatePodPath, &webhook.Admission{Handler: NewPodMutatingHandler(mgr.GetClient(), decoder, ws.cpm, recorder)})
 	server.Register(validateGssPath, &webhook.Admission{Handler: &GssValidaatingHandler{Client: mgr.GetClient(), decoder: decoder, CloudProviderManager: ws.cpm}})
@@ -290,4 +285,12 @@ func getMutatingWebhookConf(dnsName string, caBundle []byte) []admissionregistra
 			},
 		},
 	}
+}
+
+func GetPort() int {
+	return webhookPort
+}
+
+func GetCertDir() string {
+	return webhookCertDir
 }

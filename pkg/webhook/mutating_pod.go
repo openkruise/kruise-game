@@ -20,6 +20,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"time"
+
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider/errors"
 	"github.com/openkruise/kruise-game/cloudprovider/manager"
@@ -30,10 +33,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
-	"net/http"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
-	"time"
 )
 
 const (
@@ -48,7 +49,7 @@ type patchResult struct {
 
 type PodMutatingHandler struct {
 	Client               client.Client
-	decoder              *admission.Decoder
+	decoder              admission.Decoder
 	CloudProviderManager *manager.ProviderManager
 	eventRecorder        record.EventRecorder
 }
@@ -117,7 +118,7 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 	}
 }
 
-func getPodFromRequest(req admission.Request, decoder *admission.Decoder) (*corev1.Pod, error) {
+func getPodFromRequest(req admission.Request, decoder admission.Decoder) (*corev1.Pod, error) {
 	pod := &corev1.Pod{}
 	if req.Operation == admissionv1.Delete {
 		err := decoder.DecodeRaw(req.OldObject, pod)
@@ -141,7 +142,7 @@ func getAdmissionResponse(req admission.Request, result patchResult) admission.R
 	return admission.PatchResponseFromRaw(req.Object.Raw, marshaledPod)
 }
 
-func NewPodMutatingHandler(client client.Client, decoder *admission.Decoder, cpm *manager.ProviderManager, recorder record.EventRecorder) *PodMutatingHandler {
+func NewPodMutatingHandler(client client.Client, decoder admission.Decoder, cpm *manager.ProviderManager, recorder record.EventRecorder) *PodMutatingHandler {
 	return &PodMutatingHandler{
 		Client:               client,
 		decoder:              decoder,

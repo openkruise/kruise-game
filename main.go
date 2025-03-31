@@ -36,6 +36,7 @@ import (
 	"k8s.io/client-go/rest"
 	elbv2api "sigs.k8s.io/aws-load-balancer-controller/apis/elbv2/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
@@ -49,8 +50,10 @@ import (
 	controller "github.com/openkruise/kruise-game/pkg/controllers"
 	"github.com/openkruise/kruise-game/pkg/externalscaler"
 	"github.com/openkruise/kruise-game/pkg/metrics"
-	utilclient "github.com/openkruise/kruise-game/pkg/util/client"
+	"github.com/openkruise/kruise-game/pkg/util/client"
 	"github.com/openkruise/kruise-game/pkg/webhook"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	ctrlwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -120,9 +123,10 @@ func main() {
 	restConfig := ctrl.GetConfigOrDie()
 	setRestConfig(restConfig)
 	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
-		Scheme:                 scheme,
-		MetricsBindAddress:     metricsAddr,
-		Port:                   9443,
+		Scheme: scheme,
+		Metrics: metricsserver.Options{
+			BindAddress: metricsAddr,
+		},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "game-kruise-manager",
@@ -137,9 +141,16 @@ func main() {
 		// if you are doing or is intended to do any operation such as perform cleanups
 		// after the manager stops then its usage might be unsafe.
 		// LeaderElectionReleaseOnCancel: true,
-		Namespace:  namespace,
-		SyncPeriod: syncPeriod,
-		NewClient:  utilclient.NewClient,
+		Cache: cache.Options{
+			SyncPeriod:        syncPeriod,
+			DefaultNamespaces: getCacheNamespacesFromFlag(namespace),
+		},
+		WebhookServer: ctrlwebhook.NewServer(ctrlwebhook.Options{
+			Host:    "0.0.0.0",
+			Port:    webhook.GetPort(),
+			CertDir: webhook.GetCertDir(),
+		}),
+		NewCache: client.NewCache,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start kruise-game-manager")
@@ -224,5 +235,14 @@ func setRestConfig(c *rest.Config) {
 	}
 	if apiServerBurstQPSFlag > 0 {
 		c.Burst = apiServerBurstQPSFlag
+	}
+}
+
+func getCacheNamespacesFromFlag(ns string) map[string]cache.Config {
+	if ns == "" {
+		return nil
+	}
+	return map[string]cache.Config{
+		ns: {},
 	}
 }

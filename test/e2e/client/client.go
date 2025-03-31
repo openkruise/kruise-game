@@ -49,8 +49,8 @@ func (client *Client) CreateNamespace() error {
 }
 
 func (client *Client) DeleteNamespace() error {
-	return wait.PollImmediate(5*time.Second, 3*time.Minute,
-		func() (done bool, err error) {
+	return wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
 			err = client.kubeClint.CoreV1().Namespaces().Delete(context.TODO(), Namespace, metav1.DeleteOptions{})
 			if err != nil {
 				if apierrors.IsNotFound(err) {
@@ -103,8 +103,8 @@ func (client *Client) UpdateGameServerSet(gss *gameKruiseV1alpha1.GameServerSet)
 }
 
 func (client *Client) DeleteGameServerSet() error {
-	return wait.PollImmediate(3*time.Second, time.Minute, func() (done bool, err error) {
-		err = client.kruisegameClient.GameV1alpha1().GameServerSets(Namespace).Delete(context.TODO(), GameServerSet, metav1.DeleteOptions{})
+	return wait.PollUntilContextTimeout(context.TODO(), 3*time.Second, time.Minute, true, func(ctx context.Context) (done bool, err error) {
+		err = client.kruisegameClient.GameV1alpha1().GameServerSets(Namespace).Delete(ctx, GameServerSet, metav1.DeleteOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				return true, nil
