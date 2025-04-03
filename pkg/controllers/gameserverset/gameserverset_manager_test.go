@@ -1011,6 +1011,7 @@ func TestNumberToKill(t *testing.T) {
 						Name:              "xxx-2",
 						Namespace:         "xxx",
 						DeletionTimestamp: &now,
+						Finalizers:        []string{"test"},
 					},
 				},
 				{
@@ -1052,6 +1053,7 @@ func TestNumberToKill(t *testing.T) {
 						Name:              "xxx-2",
 						Namespace:         "xxx",
 						DeletionTimestamp: &now,
+						Finalizers:        []string{"test"},
 					},
 				},
 				{
@@ -1093,6 +1095,7 @@ func TestNumberToKill(t *testing.T) {
 						Name:              "xxx-2",
 						Namespace:         "xxx",
 						DeletionTimestamp: &now,
+						Finalizers:        []string{"test"},
 					},
 				},
 				{

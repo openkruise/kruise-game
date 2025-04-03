@@ -76,17 +76,17 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		return err
 	}
 
-	if err = c.Watch(&source.Kind{Type: &gamekruiseiov1alpha1.GameServerSet{}}, &handler.EnqueueRequestForObject{}); err != nil {
+	if err = c.Watch(source.Kind(mgr.GetCache(), &gamekruiseiov1alpha1.GameServerSet{}, &handler.TypedEnqueueRequestForObject[*gamekruiseiov1alpha1.GameServerSet]{})); err != nil {
 		klog.Error(err)
 		return err
 	}
 
-	if err = watchPod(c); err != nil {
+	if err = watchPod(mgr, c); err != nil {
 		klog.Error(err)
 		return err
 	}
 
-	if err = watchWorkloads(c); err != nil {
+	if err = watchWorkloads(mgr, c); err != nil {
 		klog.Error(err)
 		return err
 	}
@@ -95,11 +95,10 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 }
 
 // watch pod
-func watchPod(c controller.Controller) (err error) {
-
-	if err := c.Watch(&source.Kind{Type: &corev1.Pod{}}, &handler.Funcs{
-		CreateFunc: func(createEvent event.CreateEvent, limitingInterface workqueue.RateLimitingInterface) {
-			pod := createEvent.Object.(*corev1.Pod)
+func watchPod(mgr manager.Manager, c controller.Controller) (err error) {
+	if err := c.Watch(source.Kind(mgr.GetCache(), &corev1.Pod{}, &handler.TypedFuncs[*corev1.Pod]{
+		CreateFunc: func(ctx context.Context, createEvent event.TypedCreateEvent[*corev1.Pod], limitingInterface workqueue.RateLimitingInterface) {
+			pod := createEvent.Object
 			if gssName, exist := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; exist {
 				limitingInterface.Add(reconcile.Request{NamespacedName: types.NamespacedName{
 					Name:      gssName,
@@ -107,8 +106,8 @@ func watchPod(c controller.Controller) (err error) {
 				}})
 			}
 		},
-		UpdateFunc: func(updateEvent event.UpdateEvent, limitingInterface workqueue.RateLimitingInterface) {
-			pod := updateEvent.ObjectNew.(*corev1.Pod)
+		UpdateFunc: func(ctx context.Context, updateEvent event.TypedUpdateEvent[*corev1.Pod], limitingInterface workqueue.RateLimitingInterface) {
+			pod := updateEvent.ObjectNew
 			if gssName, exist := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; exist {
 				limitingInterface.Add(reconcile.Request{NamespacedName: types.NamespacedName{
 					Name:      gssName,
@@ -116,8 +115,8 @@ func watchPod(c controller.Controller) (err error) {
 				}})
 			}
 		},
-		DeleteFunc: func(deleteEvent event.DeleteEvent, limitingInterface workqueue.RateLimitingInterface) {
-			pod := deleteEvent.Object.(*corev1.Pod)
+		DeleteFunc: func(ctx context.Context, deleteEvent event.TypedDeleteEvent[*corev1.Pod], limitingInterface workqueue.RateLimitingInterface) {
+			pod := deleteEvent.Object
 			if gssName, exist := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; exist {
 				limitingInterface.Add(reconcile.Request{NamespacedName: types.NamespacedName{
 					Name:      gssName,
@@ -125,18 +124,20 @@ func watchPod(c controller.Controller) (err error) {
 				}})
 			}
 		},
-	}); err != nil {
+	})); err != nil {
 		return err
 	}
 	return nil
 }
 
 // watch workloads
-func watchWorkloads(c controller.Controller) (err error) {
-	if err := c.Watch(&source.Kind{Type: &kruiseV1beta1.StatefulSet{}}, &handler.EnqueueRequestForOwner{
-		IsController: true,
-		OwnerType:    &gamekruiseiov1alpha1.GameServerSet{},
-	}); err != nil {
+func watchWorkloads(mgr manager.Manager, c controller.Controller) (err error) {
+	if err := c.Watch(source.Kind(mgr.GetCache(), &kruiseV1beta1.StatefulSet{}, handler.TypedEnqueueRequestForOwner[*kruiseV1beta1.StatefulSet](
+		mgr.GetScheme(),
+		mgr.GetRESTMapper(),
+		&gamekruiseiov1alpha1.GameServerSet{},
+		handler.OnlyControllerOwner(),
+	))); err != nil {
 		return err
 	}
 	return nil
@@ -265,7 +266,12 @@ func (r *GameServerSetReconciler) SetupWithManager(mgr ctrl.Manager) (c controll
 }
 
 func (r *GameServerSetReconciler) initAsts(gss *gamekruiseiov1alpha1.GameServerSet) error {
-	asts := &kruiseV1beta1.StatefulSet{}
+	asts := &kruiseV1beta1.StatefulSet{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "StatefulSet",
+			APIVersion: "apps.kruise.io/v1beta1",
+		},
+	}
 	asts.Namespace = gss.GetNamespace()
 	asts.Name = gss.GetName()
 

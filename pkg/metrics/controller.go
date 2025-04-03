@@ -19,12 +19,13 @@ package metrics
 import (
 	"context"
 	"errors"
+	"sync"
+
 	gamekruisev1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	kruisegamevisions "github.com/openkruise/kruise-game/pkg/client/informers/externalversions"
 	kruisegamelister "github.com/openkruise/kruise-game/pkg/client/listers/apis/v1alpha1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
-	"sync"
 )
 
 type Controller struct {
@@ -56,18 +57,22 @@ func NewController(kruisegameInformerFactory kruisegamevisions.SharedInformerFac
 		gameServerOpsStateLastChange: make(map[string]float64),
 	}
 
-	gsInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	if _, err := gsInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    c.recordGsWhenAdd,
 		UpdateFunc: c.recordGsWhenUpdate,
 		DeleteFunc: c.recordGsWhenDelete,
-	})
+	}); err != nil {
+		return nil, err
+	}
 
-	gssInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	if _, err := gssInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		UpdateFunc: func(oldObj, newObj interface{}) {
 			c.recordGssWhenChange(newObj)
 		},
 		DeleteFunc: c.recordGssWhenDelete,
-	})
+	}); err != nil {
+		return nil, err
+	}
 
 	return c, nil
 }

@@ -78,15 +78,17 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		klog.Error(err)
 		return err
 	}
-	if err = c.Watch(&source.Kind{Type: &gamekruiseiov1alpha1.GameServer{}}, &handler.EnqueueRequestForObject{}); err != nil {
+	if err = c.Watch(source.Kind(mgr.GetCache(),
+		&gamekruiseiov1alpha1.GameServer{},
+		&handler.TypedEnqueueRequestForObject[*gamekruiseiov1alpha1.GameServer]{})); err != nil {
 		klog.Error(err)
 		return err
 	}
-	if err = watchPod(c); err != nil {
+	if err = watchPod(mgr, c); err != nil {
 		klog.Error(err)
 		return err
 	}
-	if err = watchNode(c, mgr.GetClient()); err != nil {
+	if err = watchNode(mgr, c); err != nil {
 		klog.Error(err)
 		return err
 	}
@@ -101,10 +103,10 @@ type GameServerReconciler struct {
 	recorder record.EventRecorder
 }
 
-func watchPod(c controller.Controller) error {
-	if err := c.Watch(&source.Kind{Type: &corev1.Pod{}}, &handler.Funcs{
-		CreateFunc: func(createEvent event.CreateEvent, limitingInterface workqueue.RateLimitingInterface) {
-			pod := createEvent.Object.(*corev1.Pod)
+func watchPod(mgr manager.Manager, c controller.Controller) error {
+	if err := c.Watch(source.Kind(mgr.GetCache(), &corev1.Pod{}, &handler.TypedFuncs[*corev1.Pod]{
+		CreateFunc: func(ctx context.Context, createEvent event.TypedCreateEvent[*corev1.Pod], limitingInterface workqueue.RateLimitingInterface) {
+			pod := createEvent.Object
 			if _, exist := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; exist {
 				limitingInterface.Add(reconcile.Request{NamespacedName: types.NamespacedName{
 					Name:      pod.GetName(),
@@ -112,8 +114,8 @@ func watchPod(c controller.Controller) error {
 				}})
 			}
 		},
-		UpdateFunc: func(updateEvent event.UpdateEvent, limitingInterface workqueue.RateLimitingInterface) {
-			newPod := updateEvent.ObjectNew.(*corev1.Pod)
+		UpdateFunc: func(ctx context.Context, updateEvent event.TypedUpdateEvent[*corev1.Pod], limitingInterface workqueue.RateLimitingInterface) {
+			newPod := updateEvent.ObjectNew
 			if _, exist := newPod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; exist {
 				limitingInterface.Add(reconcile.Request{NamespacedName: types.NamespacedName{
 					Name:      newPod.GetName(),
@@ -121,8 +123,8 @@ func watchPod(c controller.Controller) error {
 				}})
 			}
 		},
-		DeleteFunc: func(deleteEvent event.DeleteEvent, limitingInterface workqueue.RateLimitingInterface) {
-			pod := deleteEvent.Object.(*corev1.Pod)
+		DeleteFunc: func(ctx context.Context, deleteEvent event.TypedDeleteEvent[*corev1.Pod], limitingInterface workqueue.RateLimitingInterface) {
+			pod := deleteEvent.Object
 			if _, exist := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; exist {
 				limitingInterface.Add(reconcile.Request{
 					NamespacedName: types.NamespacedName{
@@ -132,17 +134,20 @@ func watchPod(c controller.Controller) error {
 				})
 			}
 		},
-	}); err != nil {
+	})); err != nil {
 		return err
 	}
 	return nil
 }
 
-func watchNode(c controller.Controller, cli client.Client) error {
-	if err := c.Watch(&source.Kind{Type: &corev1.Node{}}, &handler.Funcs{
-		UpdateFunc: func(updateEvent event.UpdateEvent, limitingInterface workqueue.RateLimitingInterface) {
-			nodeNew := updateEvent.ObjectNew.(*corev1.Node)
-			nodeOld := updateEvent.ObjectOld.(*corev1.Node)
+func watchNode(mgr manager.Manager, c controller.Controller) error {
+	cli := mgr.GetClient()
+
+	// watch node condition change
+	if err := c.Watch(source.Kind(mgr.GetCache(), &corev1.Node{}, &handler.TypedFuncs[*corev1.Node]{
+		UpdateFunc: func(ctx context.Context, updateEvent event.TypedUpdateEvent[*corev1.Node], limitingInterface workqueue.RateLimitingInterface) {
+			nodeNew := updateEvent.ObjectNew
+			nodeOld := updateEvent.ObjectOld
 			if reflect.DeepEqual(nodeNew.Status.Conditions, nodeOld.Status.Conditions) {
 				return
 			}
@@ -166,7 +171,7 @@ func watchNode(c controller.Controller, cli client.Client) error {
 				})
 			}
 		},
-	}); err != nil {
+	})); err != nil {
 		return err
 	}
 	return nil

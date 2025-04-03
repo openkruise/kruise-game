@@ -1,4 +1,4 @@
-name: E2E-1.26
+name: E2E-1.30
 
 on:
   push:
@@ -11,8 +11,8 @@ on:
 env:
   # Common versions
   GO_VERSION: '1.22'
-  KIND_VERSION: 'v0.18.0'
-  KIND_IMAGE: 'kindest/node:v1.26.4'
+  KIND_VERSION: 'v0.22.0'
+  KIND_IMAGE: 'kindest/node:v1.30.8'
   KIND_CLUSTER_NAME: 'ci-testing'
 
 jobs:
@@ -28,7 +28,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: Setup Kind Cluster
-        uses: helm/kind-action@v1.3.0
+        uses: helm/kind-action@v1.12.0
         with:
           node_image: ${{ env.KIND_IMAGE }}
           cluster_name: ${{ env.KIND_CLUSTER_NAME }}
@@ -46,7 +46,7 @@ jobs:
           make helm
           helm repo add openkruise https://openkruise.github.io/charts/
           helm repo update
-          helm install kruise openkruise/kruise --version 1.5.0
+          helm install kruise openkruise/kruise --version 1.7.3
           for ((i=1;i<10;i++));
           do
             set +e

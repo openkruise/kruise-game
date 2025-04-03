@@ -2,6 +2,9 @@ package gameserverset
 
 import (
 	"context"
+	"reflect"
+	"testing"
+
 	appspub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
@@ -11,10 +14,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
-	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"testing"
 )
 
 func TestInitAsts(t *testing.T) {

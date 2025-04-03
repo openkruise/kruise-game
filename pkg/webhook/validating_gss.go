@@ -19,18 +19,19 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"net/http"
+
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider/manager"
 	"github.com/openkruise/kruise-game/pkg/util"
 	admissionv1 "k8s.io/api/admission/v1"
-	"net/http"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 type GssValidaatingHandler struct {
 	Client               client.Client
-	decoder              *admission.Decoder
+	decoder              admission.Decoder
 	CloudProviderManager *manager.ProviderManager
 }
 

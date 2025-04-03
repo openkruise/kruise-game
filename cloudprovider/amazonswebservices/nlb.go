@@ -43,6 +43,7 @@ import (
 	provideroptions "github.com/openkruise/kruise-game/cloudprovider/options"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
 	"github.com/openkruise/kruise-game/pkg/util"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
 
 const (
@@ -127,8 +128,10 @@ func watchTargetGroup(ctx context.Context) error {
 	utilruntime.Must(ackv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(elbv2api.AddToScheme(scheme))
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		MetricsBindAddress: "0",
-		Scheme:             scheme,
+		Metrics: metricsserver.Options{
+			BindAddress: "0",
+		},
+		Scheme: scheme,
 	})
 	if err != nil {
 		return err
@@ -138,14 +141,16 @@ func watchTargetGroup(ctx context.Context) error {
 		return fmt.Errorf("failed to get informer: %v", err)
 	}
 
-	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			handleTargetGroupEvent(ctx, mgr.GetClient(), obj)
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
 			handleTargetGroupEvent(ctx, mgr.GetClient(), newObj)
 		},
-	})
+	}); err != nil {
+		return fmt.Errorf("failed to add event handler: %v", err)
+	}
 
 	log.Info("Start to watch TargetGroups successfully")
 	return mgr.Start(ctx)

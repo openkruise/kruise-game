@@ -5,5 +5,3 @@ nodes:
   - role: worker
   - role: worker
   - role: worker
-featureGates:
-  EphemeralContainers: true

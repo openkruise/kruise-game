@@ -2,7 +2,6 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  creationTimestamp: null
   name: manager-role
 rules:
 - apiGroups:
@@ -13,19 +12,49 @@ rules:
   - create
   - patch
 - apiGroups:
-  - admissionregistration.k8s.io
+  - ""
   resources:
-  - mutatingwebhookconfigurations
+  - nodes
+  - persistentvolumeclaims
+  - persistentvolumes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - nodes/status
+  - persistentvolumeclaims/status
+  - persistentvolumes/status
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - services
   verbs:
   - create
+  - delete
   - get
   - list
   - patch
   - update
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - pods/status
+  - services/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - admissionregistration.k8s.io
   resources:
+  - mutatingwebhookconfigurations
   - validatingwebhookconfigurations
   verbs:
   - create
@@ -38,19 +67,6 @@ rules:
   - alibabacloud.com
   resources:
   - poddnats
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - alibabacloud.com
-  resources:
-  - poddnats/status
-  verbs:
-  - get
-- apiGroups:
-  - alibabacloud.com
-  resources:
   - podeips
   verbs:
   - get
@@ -59,6 +75,7 @@ rules:
 - apiGroups:
   - alibabacloud.com
   resources:
+  - poddnats/status
   - podeips/status
   verbs:
   - get
@@ -76,17 +93,6 @@ rules:
   - apps.kruise.io
   resources:
   - podprobemarkers
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - apps.kruise.io
-  resources:
   - statefulsets
   verbs:
   - create
@@ -100,88 +106,6 @@ rules:
   - apps.kruise.io
   resources:
   - statefulsets/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - ""
-  resources:
-  - nodes
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - nodes/status
-  verbs:
-  - get
-- apiGroups:
-  - ""
-  resources:
-  - persistentvolumeclaims
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - persistentvolumeclaims/status
-  verbs:
-  - get
-- apiGroups:
-  - ""
-  resources:
-  - persistentvolumes
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - persistentvolumes/status
-  verbs:
-  - get
-- apiGroups:
-  - ""
-  resources:
-  - pods
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - pods/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - ""
-  resources:
-  - services
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - services/status
   verbs:
   - get
   - patch
@@ -201,16 +125,6 @@ rules:
   - elbv2.services.k8s.aws
   resources:
   - listeners
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - elbv2.services.k8s.aws
-  resources:
   - targetgroups
   verbs:
   - create
@@ -223,31 +137,6 @@ rules:
   - game.kruise.io
   resources:
   - gameservers
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - game.kruise.io
-  resources:
-  - gameservers/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - game.kruise.io
-  resources:
-  - gameservers/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - game.kruise.io
-  resources:
   - gameserversets
   verbs:
   - create
@@ -260,12 +149,14 @@ rules:
 - apiGroups:
   - game.kruise.io
   resources:
+  - gameservers/finalizers
   - gameserversets/finalizers
   verbs:
   - update
 - apiGroups:
   - game.kruise.io
   resources:
+  - gameservers/status
   - gameserversets/status
   verbs:
   - get
