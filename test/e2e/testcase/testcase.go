@@ -1,6 +1,8 @@
 package testcase
 
 import (
+	"time"
+
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/gomega"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
@@ -35,6 +37,9 @@ func RunTestCases(f *framework.Framework) {
 			// scale down when setting WaitToDelete
 			_, err = f.MarkGameServerOpsState(gss.GetName()+"-2", string(gameKruiseV1alpha1.WaitToDelete))
 			gomega.Expect(err).To(gomega.BeNil())
+
+			// sleep for a while to wait the status update
+			time.Sleep(5 * time.Second)
 
 			err = f.WaitForGsOpsStateUpdate(gss.GetName()+"-2", string(gameKruiseV1alpha1.WaitToDelete))
 			gomega.Expect(err).To(gomega.BeNil())
@@ -104,6 +109,9 @@ func RunTestCases(f *framework.Framework) {
 			_, err = f.ChangeGameServerDeletionPriority(gss.GetName()+"-1", "100")
 			gomega.Expect(err).To(gomega.BeNil())
 
+			// sleep for a while to wait the status update
+			time.Sleep(5 * time.Second)
+
 			err = f.WaitForGsDeletionPriorityUpdated(gss.GetName()+"-1", "100")
 			gomega.Expect(err).To(gomega.BeNil())
 
@@ -125,6 +133,9 @@ func RunTestCases(f *framework.Framework) {
 
 			_, err = f.ChangeGameServerDeletionPriority(gss.GetName()+"-1", "100")
 			gomega.Expect(err).To(gomega.BeNil())
+
+			// sleep for a while to wait the status update
+			time.Sleep(5 * time.Second)
 
 			err = f.WaitForGsDeletionPriorityUpdated(gss.GetName()+"-1", "100")
 			gomega.Expect(err).To(gomega.BeNil())
