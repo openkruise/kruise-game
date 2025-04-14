@@ -166,7 +166,13 @@ func (m *MultiNlbsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx con
 		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 	}
 
-	for _, lbId := range conf.idList[0] {
+	podNsName := pod.GetNamespace() + "/" + pod.GetName()
+	podLbsPorts, err := m.allocate(conf, podNsName)
+	if err != nil {
+		return pod, cperrors.ToPluginError(err, cperrors.ParameterError)
+	}
+
+	for _, lbId := range conf.idList[podLbsPorts.index] {
 		// get svc
 		lbName := conf.lbNames[lbId]
 		svc := &corev1.Service{}
@@ -176,7 +182,7 @@ func (m *MultiNlbsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx con
 		}, svc)
 		if err != nil {
 			if errors.IsNotFound(err) {
-				service, err := m.consSvc(conf, pod, lbName, c, ctx)
+				service, err := m.consSvc(podLbsPorts, conf, pod, lbName, c, ctx)
 				if err != nil {
 					return pod, cperrors.ToPluginError(err, cperrors.ParameterError)
 				}
@@ -187,7 +193,7 @@ func (m *MultiNlbsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx con
 	}
 
 	endPoints := ""
-	for i, lbId := range conf.idList[0] {
+	for i, lbId := range conf.idList[podLbsPorts.index] {
 		// get svc
 		lbName := conf.lbNames[lbId]
 		svc := &corev1.Service{}
@@ -197,7 +203,7 @@ func (m *MultiNlbsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx con
 		}, svc)
 		if err != nil {
 			if errors.IsNotFound(err) {
-				service, err := m.consSvc(conf, pod, lbName, c, ctx)
+				service, err := m.consSvc(podLbsPorts, conf, pod, lbName, c, ctx)
 				if err != nil {
 					return pod, cperrors.ToPluginError(err, cperrors.ParameterError)
 				}
@@ -219,7 +225,7 @@ func (m *MultiNlbsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx con
 			if err != nil {
 				return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
 			}
-			service, err := m.consSvc(conf, pod, lbName, c, ctx)
+			service, err := m.consSvc(podLbsPorts, conf, pod, lbName, c, ctx)
 			if err != nil {
 				return pod, cperrors.ToPluginError(err, cperrors.ParameterError)
 			}
@@ -357,13 +363,7 @@ type multiNLBsConfig struct {
 	*nlbHealthConfig
 }
 
-func (m *MultiNlbsPlugin) consSvc(conf *multiNLBsConfig, pod *corev1.Pod, lbName string, c client.Client, ctx context.Context) (*corev1.Service, error) {
-	podNsName := pod.GetNamespace() + "/" + pod.GetName()
-	podLbsPorts, err := m.allocate(conf, podNsName)
-	if err != nil {
-		return nil, err
-	}
-
+func (m *MultiNlbsPlugin) consSvc(podLbsPorts *lbsPorts, conf *multiNLBsConfig, pod *corev1.Pod, lbName string, c client.Client, ctx context.Context) (*corev1.Service, error) {
 	var selectId string
 	for _, lbId := range podLbsPorts.lbIds {
 		if conf.lbNames[lbId] == lbName {
@@ -488,6 +488,9 @@ func (m *MultiNlbsPlugin) allocate(conf *multiNLBsConfig, nsName string) (*lbsPo
 
 	if index == -1 {
 		return nil, fmt.Errorf("no available ports found")
+	}
+	if index >= len(conf.idList) {
+		return nil, fmt.Errorf("NlbIdNames configuration have not synced")
 	}
 	for _, port := range ports {
 		m.cache[index][port-m.minPort] = true
