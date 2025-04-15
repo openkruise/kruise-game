@@ -18,7 +18,7 @@ package gameserverset
 
 import (
 	"context"
-
+	kruisev1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
@@ -77,6 +78,17 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	}
 
 	if err = c.Watch(source.Kind(mgr.GetCache(), &gamekruiseiov1alpha1.GameServerSet{}, &handler.TypedEnqueueRequestForObject[*gamekruiseiov1alpha1.GameServerSet]{})); err != nil {
+		klog.Error(err)
+		return err
+	}
+
+	if err = c.Watch(source.Kind(mgr.GetCache(), &kruisev1alpha1.PodProbeMarker{}, &handler.TypedEnqueueRequestForObject[*kruisev1alpha1.PodProbeMarker]{}, predicate.TypedFuncs[*kruisev1alpha1.PodProbeMarker]{
+		UpdateFunc: func(e event.TypedUpdateEvent[*kruisev1alpha1.PodProbeMarker]) bool {
+			oldScS := e.ObjectOld
+			newScS := e.ObjectNew
+			return oldScS.Status.ObservedGeneration != newScS.Status.ObservedGeneration
+		},
+	})); err != nil {
 		klog.Error(err)
 		return err
 	}
@@ -178,6 +190,16 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return reconcile.Result{}, err
 	}
 
+	gsm := NewGameServerSetManager(gss, r.Client, r.recorder)
+	// The serverless scenario PodProbeMarker takes effect during the Webhook phase, so need to create the PodProbeMarker in advance.
+	err, done := gsm.SyncPodProbeMarker()
+	if err != nil {
+		klog.Errorf("GameServerSet %s failed to synchronize PodProbeMarker in %s,because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
+		return reconcile.Result{}, err
+	} else if !done {
+		return reconcile.Result{}, nil
+	}
+
 	// get advanced statefulset
 	asts := &kruiseV1beta1.StatefulSet{}
 	err = r.Get(ctx, namespacedName, asts)
@@ -207,7 +229,7 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return reconcile.Result{}, err
 	}
 
-	gsm := NewGameServerSetManager(gss, asts, podList.Items, r.Client, r.recorder)
+	gsm.SyncStsAndPodList(asts, podList.Items)
 
 	// kill game servers
 	newReplicas := gsm.GetReplicasAfterKilling()
@@ -240,12 +262,6 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		r.recorder.Event(gss, corev1.EventTypeNormal, UpdateWorkloadReason, "updated Advanced StatefulSet")
 		return reconcile.Result{}, nil
-	}
-
-	err = gsm.SyncPodProbeMarker()
-	if err != nil {
-		klog.Errorf("GameServerSet %s failed to synchronize PodProbeMarker in %s,because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
-		return reconcile.Result{}, err
 	}
 
 	// sync GameServerSet Status
