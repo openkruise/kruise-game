@@ -13,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -115,7 +116,7 @@ func TestInitAsts(t *testing.T) {
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
 					Replicas:             ptr.To[int32](4),
-					ReserveGameServerIds: []int{0},
+					ReserveGameServerIds: []intstr.IntOrString{intstr.FromInt(0)},
 					UpdateStrategy: gameKruiseV1alpha1.UpdateStrategy{
 						Type:          apps.RollingUpdateStatefulSetStrategyType,
 						RollingUpdate: &gameKruiseV1alpha1.RollingUpdateStatefulSetStrategy{},
@@ -144,7 +145,7 @@ func TestInitAsts(t *testing.T) {
 				},
 				Spec: kruiseV1beta1.StatefulSetSpec{
 					Replicas:            ptr.To[int32](4),
-					ReserveOrdinals:     []int{0},
+					ReserveOrdinals:     []intstr.IntOrString{intstr.FromInt(0)},
 					PodManagementPolicy: apps.ParallelPodManagement,
 					ServiceName:         "case1",
 					Selector: &metav1.LabelSelector{

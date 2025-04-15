@@ -605,7 +605,10 @@ spec:
                 type: integer
               reserveGameServerIds:
                 items:
-                  type: integer
+                  anyOf:
+                  - type: integer
+                  - type: string
+                  x-kubernetes-int-or-string: true
                 type: array
               scaleStrategy:
                 properties:

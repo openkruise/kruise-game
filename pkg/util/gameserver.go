@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -95,6 +96,10 @@ func GetIndexListFromPodList(podList []corev1.Pod) []int {
 		indexList = append(indexList, GetIndexFromGsName(podList[i].GetName()))
 	}
 	return indexList
+}
+
+func GetIndexSetFromPodList(podList []corev1.Pod) sets.Set[int] {
+	return sets.New[int](GetIndexListFromPodList(podList)...)
 }
 
 func GetIndexListFromGsList(gsList []gameKruiseV1alpha1.GameServer) []int {

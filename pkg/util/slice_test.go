@@ -16,7 +16,11 @@ limitations under the License.
 
 package util
 
-import "testing"
+import (
+	"testing"
+
+	"k8s.io/apimachinery/pkg/util/intstr"
+)
 
 func TestIsNumInList(t *testing.T) {
 	tests := []struct {
@@ -329,5 +333,112 @@ func TestIsHasNegativeNum(t *testing.T) {
 		if expect != actual {
 			t.Errorf("expect %v but got %v", expect, actual)
 		}
+	}
+}
+
+func TestStringToIntStrSlice(t *testing.T) {
+	tests := []struct {
+		name      string
+		str       string
+		delimiter string
+		result    []intstr.IntOrString
+	}{
+		{
+			name:      "mixed int and string values",
+			str:       "4,test,1",
+			delimiter: ",",
+			result: []intstr.IntOrString{
+				intstr.FromInt(4),
+				intstr.FromString("test"),
+				intstr.FromInt(1),
+			},
+		},
+		{
+			name:      "only int values",
+			str:       "4,5,1",
+			delimiter: ",",
+			result: []intstr.IntOrString{
+				intstr.FromInt(4),
+				intstr.FromInt(5),
+				intstr.FromInt(1),
+			},
+		},
+		{
+			name:      "only string values",
+			str:       "a,b,c",
+			delimiter: ",",
+			result: []intstr.IntOrString{
+				intstr.FromString("a"),
+				intstr.FromString("b"),
+				intstr.FromString("c"),
+			},
+		},
+		{
+			name:      "empty string",
+			str:       "",
+			delimiter: ",",
+			result:    nil,
+		},
+		{
+			name:      "empty delimiter",
+			str:       "1,2,3",
+			delimiter: "",
+			result:    nil,
+		},
+		{
+			name:      "empty parts",
+			str:       "1,,3",
+			delimiter: ",",
+			result: []intstr.IntOrString{
+				intstr.FromInt(1),
+				intstr.FromInt(3),
+			},
+		},
+		{
+			name:      "different delimiter",
+			str:       "1:test:3",
+			delimiter: ":",
+			result: []intstr.IntOrString{
+				intstr.FromInt(1),
+				intstr.FromString("test"),
+				intstr.FromInt(3),
+			},
+		},
+		{
+			name:      "reversed ids slice",
+			str:       "1,2-5,6,7-10",
+			delimiter: ",",
+			result: []intstr.IntOrString{
+				intstr.FromInt(1),
+				intstr.FromString("2-5"),
+				intstr.FromInt(6),
+				intstr.FromString("7-10"),
+			},
+		},
+		{
+			name:      "has space in the string",
+			str:       "1, 2-3, 4",
+			delimiter: ",",
+			result: []intstr.IntOrString{
+				intstr.FromInt(1),
+				intstr.FromString("2-3"),
+				intstr.FromInt(4),
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual := StringToIntStrSlice(test.str, test.delimiter)
+			if len(actual) != len(test.result) {
+				t.Errorf("expect length %v but got %v", len(test.result), len(actual))
+				return
+			}
+			for i := range len(actual) {
+				if test.result[i].String() != actual[i].String() {
+					t.Errorf("index %d: expect %v but got %v", i, test.result[i], actual[i])
+				}
+			}
+		})
 	}
 }

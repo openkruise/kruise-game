@@ -110,8 +110,8 @@ github.com/onsi/gomega v1.7.1/go.mod h1:XdKZgCCFLUoM/7CFJVPcG8C1xQ1AJ0vpAezJrB7J
 github.com/onsi/gomega v1.10.1/go.mod h1:iN09h71vgCQne3DLsj+A5owkum+a2tYe+TOCB1ybHNo=
 github.com/onsi/gomega v1.32.0 h1:JRYU78fJ1LPxlckP6Txi/EYqJvjtMrDC04/MM5XRHPk=
 github.com/onsi/gomega v1.32.0/go.mod h1:a4x4gW6Pz2yK1MAmvluYme5lvYTn61afQ2ETw/8n4Lg=
-github.com/openkruise/kruise-api v1.7.1 h1:pF+tPHWY1SS0X7sXTOIHZ5sNb5h5MBy1D7h6bJI5yW8=
-github.com/openkruise/kruise-api v1.7.1/go.mod h1:ZD94u+GSQGtKrDfFhMVpQhzjr7g7UlXhYfRoNp/EhJs=
+github.com/openkruise/kruise-api v1.8.0 h1:DoUb873uuf2Bhoajim+9tb/X0eFpwIxRydc4Awfeeiw=
+github.com/openkruise/kruise-api v1.8.0/go.mod h1:XRpoTk7VFgh9r5HRUZurwhiC3cpCf5BX8X4beZLcIfA=
 github.com/pkg/diff v0.0.0-20210226163009-20ebb0f2a09e/go.mod h1:pJLUxLENpZxwdsKMEsNbx1VGcRFpLqf3715MtcvvzbA=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=

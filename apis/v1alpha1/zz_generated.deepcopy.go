@@ -189,7 +189,7 @@ func (in *GameServerSetSpec) DeepCopyInto(out *GameServerSetSpec) {
 	in.GameServerTemplate.DeepCopyInto(&out.GameServerTemplate)
 	if in.ReserveGameServerIds != nil {
 		in, out := &in.ReserveGameServerIds, &out.ReserveGameServerIds
-		*out = make([]int, len(*in))
+		*out = make([]intstr.IntOrString, len(*in))
 		copy(*out, *in)
 	}
 	if in.ServiceQualities != nil {

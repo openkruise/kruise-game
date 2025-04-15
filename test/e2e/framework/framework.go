@@ -124,7 +124,7 @@ func (f *Framework) DeployGssWithServiceQualities() (*gamekruiseiov1alpha1.GameS
 	return f.client.CreateGameServerSet(gss)
 }
 
-func (f *Framework) GameServerScale(gss *gamekruiseiov1alpha1.GameServerSet, desireNum int, reserveGsId *int) (*gamekruiseiov1alpha1.GameServerSet, error) {
+func (f *Framework) GameServerScale(gss *gamekruiseiov1alpha1.GameServerSet, desireNum int, reserveGsId *intstr.IntOrString) (*gamekruiseiov1alpha1.GameServerSet, error) {
 	// TODO: change patch type
 	newReserves := gss.Spec.ReserveGameServerIds
 	if reserveGsId != nil {

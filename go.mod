@@ -2,6 +2,8 @@ module github.com/openkruise/kruise-game
 
 go 1.22.0
 
+toolchain go1.22.12
+
 require (
 	github.com/BurntSushi/toml v1.2.1
 	github.com/aws-controllers-k8s/elbv2-controller v0.0.9
@@ -9,8 +11,9 @@ require (
 	github.com/kr/pretty v0.3.1
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/gomega v1.32.0
-	github.com/openkruise/kruise-api v1.7.1
+	github.com/openkruise/kruise-api v1.8.0
 	github.com/prometheus/client_golang v1.18.0
+	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e
 	google.golang.org/grpc v1.58.3
 	google.golang.org/protobuf v1.33.0
 	k8s.io/api v0.30.10
@@ -62,7 +65,6 @@ require (
 	github.com/spf13/pflag v1.0.5 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.26.0 // indirect
-	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e // indirect
 	golang.org/x/mod v0.17.0 // indirect
 	golang.org/x/net v0.24.0 // indirect
 	golang.org/x/oauth2 v0.17.0 // indirect
