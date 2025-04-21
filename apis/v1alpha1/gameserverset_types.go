@@ -50,14 +50,14 @@ type GameServerSetSpec struct {
 	Replicas *int32 `json:"replicas"`
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
-	GameServerTemplate   GameServerTemplate `json:"gameServerTemplate,omitempty"`
-	ServiceName          string             `json:"serviceName,omitempty"`
-	ReserveGameServerIds []int              `json:"reserveGameServerIds,omitempty"`
-	ServiceQualities     []ServiceQuality   `json:"serviceQualities,omitempty"`
-	UpdateStrategy       UpdateStrategy     `json:"updateStrategy,omitempty"`
-	ScaleStrategy        ScaleStrategy      `json:"scaleStrategy,omitempty"`
-	Network              *Network           `json:"network,omitempty"`
-	Lifecycle            *appspub.Lifecycle `json:"lifecycle,omitempty"`
+	GameServerTemplate   GameServerTemplate   `json:"gameServerTemplate,omitempty"`
+	ServiceName          string               `json:"serviceName,omitempty"`
+	ReserveGameServerIds []intstr.IntOrString `json:"reserveGameServerIds,omitempty"`
+	ServiceQualities     []ServiceQuality     `json:"serviceQualities,omitempty"`
+	UpdateStrategy       UpdateStrategy       `json:"updateStrategy,omitempty"`
+	ScaleStrategy        ScaleStrategy        `json:"scaleStrategy,omitempty"`
+	Network              *Network             `json:"network,omitempty"`
+	Lifecycle            *appspub.Lifecycle   `json:"lifecycle,omitempty"`
 }
 
 type GameServerTemplate struct {
