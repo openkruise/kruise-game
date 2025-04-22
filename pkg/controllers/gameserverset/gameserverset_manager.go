@@ -18,10 +18,6 @@ package gameserverset
 
 import (
 	"context"
-	"sort"
-	"strconv"
-	"sync"
-
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -36,6 +32,9 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sort"
+	"strconv"
+	"sync"
 
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
@@ -47,9 +46,18 @@ type Control interface {
 	SyncStatus() error
 	IsNeedToScale() bool
 	IsNeedToUpdateWorkload() bool
-	SyncPodProbeMarker() error
+	SyncPodProbeMarker() (error, bool)
 	GetReplicasAfterKilling() *int32
+	SyncStsAndPodList(asts *kruiseV1beta1.StatefulSet, gsList []corev1.Pod)
 }
+
+const (
+	DefaultTimeoutSeconds      = 5
+	DefaultInitialDelaySeconds = 10
+	DefaultPeriodSeconds       = 3
+	DefaultSuccessThreshold    = 1
+	DefaultFailureThreshold    = 3
+)
 
 const (
 	ScaleReason          = "Scale"
@@ -67,14 +75,17 @@ type GameServerSetManager struct {
 	eventRecorder record.EventRecorder
 }
 
-func NewGameServerSetManager(gss *gameKruiseV1alpha1.GameServerSet, asts *kruiseV1beta1.StatefulSet, gsList []corev1.Pod, c client.Client, recorder record.EventRecorder) Control {
+func NewGameServerSetManager(gss *gameKruiseV1alpha1.GameServerSet, c client.Client, recorder record.EventRecorder) Control {
 	return &GameServerSetManager{
 		gameServerSet: gss,
-		asts:          asts,
-		podList:       gsList,
 		client:        c,
 		eventRecorder: recorder,
 	}
+}
+
+func (manager *GameServerSetManager) SyncStsAndPodList(asts *kruiseV1beta1.StatefulSet, gsList []corev1.Pod) {
+	manager.asts = asts
+	manager.podList = gsList
 }
 
 func (manager *GameServerSetManager) GetReplicasAfterKilling() *int32 {
@@ -326,7 +337,7 @@ func (manager *GameServerSetManager) UpdateWorkload() error {
 	return retryErr
 }
 
-func (manager *GameServerSetManager) SyncPodProbeMarker() error {
+func (manager *GameServerSetManager) SyncPodProbeMarker() (error, bool) {
 	gss := manager.gameServerSet
 	sqs := gss.Spec.ServiceQualities
 	c := manager.client
@@ -341,27 +352,37 @@ func (manager *GameServerSetManager) SyncPodProbeMarker() error {
 	if err != nil {
 		if errors.IsNotFound(err) {
 			if sqs == nil {
-				return nil
+				return nil, true
 			}
 			// create ppm
 			manager.eventRecorder.Event(gss, corev1.EventTypeNormal, CreatePPMReason, "create PodProbeMarker")
-			return c.Create(ctx, createPpm(gss))
+			ppm = createPpm(gss)
+			klog.Infof("GameserverSet(%s/%s) create PodProbeMarker(%s)", gss.Namespace, gss.Name, ppm.Name)
+			return c.Create(ctx, ppm), false
 		}
-		return err
+		return err, false
 	}
 
 	// delete ppm
 	if sqs == nil {
-		return c.Delete(ctx, ppm)
+		klog.Infof("GameserverSet(%s/%s) ServiceQualities is empty, and delete PodProbeMarker", gss.Namespace, gss.Name)
+		return c.Delete(ctx, ppm), false
 	}
 
 	// update ppm
 	if util.GetHash(gss.Spec.ServiceQualities) != ppm.GetAnnotations()[gameKruiseV1alpha1.PpmHashKey] {
 		ppm.Spec.Probes = constructProbes(gss)
+		by, _ := json.Marshal(ppm.Spec.Probes)
 		manager.eventRecorder.Event(gss, corev1.EventTypeNormal, UpdatePPMReason, "update PodProbeMarker")
-		return c.Update(ctx, ppm)
+		klog.Infof("GameserverSet(%s/%s) update PodProbeMarker(%s) body(%s)", gss.Namespace, gss.Name, ppm.Name, string(by))
+		return c.Update(ctx, ppm), false
 	}
-	return nil
+	// Determine PodProbeMarker Status to ensure that PodProbeMarker resources have been processed by kruise-manager
+	if ppm.Generation != ppm.Status.ObservedGeneration {
+		klog.Infof("GameserverSet(%s/%s) PodProbeMarker(%s) status observedGeneration is inconsistent, and wait a moment", gss.Namespace, gss.Name, ppm.Name)
+		return nil, false
+	}
+	return nil, true
 }
 
 func constructProbes(gss *gameKruiseV1alpha1.GameServerSet) []kruiseV1alpha1.PodContainerProbe {
@@ -374,6 +395,21 @@ func constructProbes(gss *gameKruiseV1alpha1.GameServerSet) []kruiseV1alpha1.Pod
 				Probe: sq.Probe,
 			},
 			PodConditionType: util.AddPrefixGameKruise(sq.Name),
+		}
+		if probe.Probe.TimeoutSeconds == 0 {
+			probe.Probe.TimeoutSeconds = DefaultTimeoutSeconds
+		}
+		if probe.Probe.InitialDelaySeconds == 0 {
+			probe.Probe.InitialDelaySeconds = DefaultInitialDelaySeconds
+		}
+		if probe.Probe.PeriodSeconds == 0 {
+			probe.Probe.PeriodSeconds = DefaultPeriodSeconds
+		}
+		if probe.Probe.SuccessThreshold == 0 {
+			probe.Probe.SuccessThreshold = DefaultSuccessThreshold
+		}
+		if probe.Probe.FailureThreshold == 0 {
+			probe.Probe.FailureThreshold = DefaultFailureThreshold
 		}
 		probes = append(probes, probe)
 	}

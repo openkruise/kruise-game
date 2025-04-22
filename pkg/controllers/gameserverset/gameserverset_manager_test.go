@@ -1264,3 +1264,317 @@ func TestGameServerSetManager_UpdateWorkload(t *testing.T) {
 		}
 	}
 }
+
+func TestGameServerSetManager_SyncPodProbeMarker(t *testing.T) {
+	tests := []struct {
+		name         string
+		getGss       func() *gameKruiseV1alpha1.GameServerSet
+		getPPM       func() *kruiseV1alpha1.PodProbeMarker
+		newPPM       func() *kruiseV1alpha1.PodProbeMarker
+		expectedDone bool
+	}{
+		{
+			name: "first create PPM",
+			getGss: func() *gameKruiseV1alpha1.GameServerSet {
+				obj := &gameKruiseV1alpha1.GameServerSet{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "xxx",
+						Name:      "case0",
+					},
+					Spec: gameKruiseV1alpha1.GameServerSetSpec{
+						ServiceQualities: []gameKruiseV1alpha1.ServiceQuality{
+							{
+								Name:          "healthy",
+								ContainerName: "main",
+								Probe: corev1.Probe{
+									ProbeHandler: corev1.ProbeHandler{
+										Exec: &corev1.ExecAction{
+											Command: []string{"/bin/sh", "-c", "/healthy.sh"},
+										},
+									},
+								},
+							},
+						},
+					},
+				}
+				return obj
+			},
+			getPPM: func() *kruiseV1alpha1.PodProbeMarker {
+				return nil
+			},
+			newPPM: func() *kruiseV1alpha1.PodProbeMarker {
+				obj := &kruiseV1alpha1.PodProbeMarker{
+					Spec: kruiseV1alpha1.PodProbeMarkerSpec{
+						Selector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{
+								"game.kruise.io/owner-gss": "case0",
+							},
+						},
+						Probes: []kruiseV1alpha1.PodContainerProbe{
+							{
+								Name:             "healthy",
+								ContainerName:    "main",
+								PodConditionType: "game.kruise.io/healthy",
+								Probe: kruiseV1alpha1.ContainerProbeSpec{
+									Probe: corev1.Probe{
+										ProbeHandler: corev1.ProbeHandler{
+											Exec: &corev1.ExecAction{
+												Command: []string{"/bin/sh", "-c", "/healthy.sh"},
+											},
+										},
+										InitialDelaySeconds: DefaultInitialDelaySeconds,
+										TimeoutSeconds:      DefaultTimeoutSeconds,
+										PeriodSeconds:       DefaultPeriodSeconds,
+										SuccessThreshold:    DefaultSuccessThreshold,
+										FailureThreshold:    DefaultFailureThreshold,
+									},
+								},
+							},
+						},
+					},
+				}
+				return obj
+			},
+			expectedDone: false,
+		},
+		{
+			name: "second check PPM status, and false",
+			getGss: func() *gameKruiseV1alpha1.GameServerSet {
+				obj := &gameKruiseV1alpha1.GameServerSet{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "xxx",
+						Name:      "case0",
+					},
+					Spec: gameKruiseV1alpha1.GameServerSetSpec{
+						ServiceQualities: []gameKruiseV1alpha1.ServiceQuality{
+							{
+								Name:          "healthy",
+								ContainerName: "main",
+								Probe: corev1.Probe{
+									ProbeHandler: corev1.ProbeHandler{
+										Exec: &corev1.ExecAction{
+											Command: []string{"/bin/sh", "-c", "/healthy.sh"},
+										},
+									},
+								},
+							},
+						},
+					},
+				}
+				return obj
+			},
+			getPPM: func() *kruiseV1alpha1.PodProbeMarker {
+				obj := &kruiseV1alpha1.PodProbeMarker{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace:  "xxx",
+						Name:       "case0",
+						Generation: 1,
+						Annotations: map[string]string{
+							"game.kruise.io/ppm-hash": "3716291985",
+						},
+					},
+					Spec: kruiseV1alpha1.PodProbeMarkerSpec{
+						Selector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{
+								"game.kruise.io/owner-gss": "case0",
+							},
+						},
+						Probes: []kruiseV1alpha1.PodContainerProbe{
+							{
+								Name:             "healthy",
+								ContainerName:    "main",
+								PodConditionType: "game.kruise.io/healthy",
+								Probe: kruiseV1alpha1.ContainerProbeSpec{
+									Probe: corev1.Probe{
+										ProbeHandler: corev1.ProbeHandler{
+											Exec: &corev1.ExecAction{
+												Command: []string{"/bin/sh", "-c", "/healthy.sh"},
+											},
+										},
+										InitialDelaySeconds: DefaultInitialDelaySeconds,
+										TimeoutSeconds:      DefaultTimeoutSeconds,
+										PeriodSeconds:       DefaultPeriodSeconds,
+										SuccessThreshold:    DefaultSuccessThreshold,
+										FailureThreshold:    DefaultFailureThreshold,
+									},
+								},
+							},
+						},
+					},
+				}
+				return obj
+			},
+			newPPM: func() *kruiseV1alpha1.PodProbeMarker {
+				obj := &kruiseV1alpha1.PodProbeMarker{
+					Spec: kruiseV1alpha1.PodProbeMarkerSpec{
+						Selector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{
+								"game.kruise.io/owner-gss": "case0",
+							},
+						},
+						Probes: []kruiseV1alpha1.PodContainerProbe{
+							{
+								Name:             "healthy",
+								ContainerName:    "main",
+								PodConditionType: "game.kruise.io/healthy",
+								Probe: kruiseV1alpha1.ContainerProbeSpec{
+									Probe: corev1.Probe{
+										ProbeHandler: corev1.ProbeHandler{
+											Exec: &corev1.ExecAction{
+												Command: []string{"/bin/sh", "-c", "/healthy.sh"},
+											},
+										},
+										InitialDelaySeconds: DefaultInitialDelaySeconds,
+										TimeoutSeconds:      DefaultTimeoutSeconds,
+										PeriodSeconds:       DefaultPeriodSeconds,
+										SuccessThreshold:    DefaultSuccessThreshold,
+										FailureThreshold:    DefaultFailureThreshold,
+									},
+								},
+							},
+						},
+					},
+				}
+				return obj
+			},
+			expectedDone: false,
+		},
+		{
+			name: "third check PPM status, and true",
+			getGss: func() *gameKruiseV1alpha1.GameServerSet {
+				obj := &gameKruiseV1alpha1.GameServerSet{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "xxx",
+						Name:      "case0",
+					},
+					Spec: gameKruiseV1alpha1.GameServerSetSpec{
+						ServiceQualities: []gameKruiseV1alpha1.ServiceQuality{
+							{
+								Name:          "healthy",
+								ContainerName: "main",
+								Probe: corev1.Probe{
+									ProbeHandler: corev1.ProbeHandler{
+										Exec: &corev1.ExecAction{
+											Command: []string{"/bin/sh", "-c", "/healthy.sh"},
+										},
+									},
+								},
+							},
+						},
+					},
+				}
+				return obj
+			},
+			getPPM: func() *kruiseV1alpha1.PodProbeMarker {
+				obj := &kruiseV1alpha1.PodProbeMarker{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace:  "xxx",
+						Name:       "case0",
+						Generation: 1,
+						Annotations: map[string]string{
+							"game.kruise.io/ppm-hash": "3716291985",
+						},
+					},
+					Spec: kruiseV1alpha1.PodProbeMarkerSpec{
+						Selector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{
+								"game.kruise.io/owner-gss": "case0",
+							},
+						},
+						Probes: []kruiseV1alpha1.PodContainerProbe{
+							{
+								Name:             "healthy",
+								ContainerName:    "main",
+								PodConditionType: "game.kruise.io/healthy",
+								Probe: kruiseV1alpha1.ContainerProbeSpec{
+									Probe: corev1.Probe{
+										ProbeHandler: corev1.ProbeHandler{
+											Exec: &corev1.ExecAction{
+												Command: []string{"/bin/sh", "-c", "/healthy.sh"},
+											},
+										},
+										InitialDelaySeconds: DefaultInitialDelaySeconds,
+										TimeoutSeconds:      DefaultTimeoutSeconds,
+										PeriodSeconds:       DefaultPeriodSeconds,
+										SuccessThreshold:    DefaultSuccessThreshold,
+										FailureThreshold:    DefaultFailureThreshold,
+									},
+								},
+							},
+						},
+					},
+					Status: kruiseV1alpha1.PodProbeMarkerStatus{
+						ObservedGeneration: 1,
+					},
+				}
+				return obj
+			},
+			newPPM: func() *kruiseV1alpha1.PodProbeMarker {
+				obj := &kruiseV1alpha1.PodProbeMarker{
+					Spec: kruiseV1alpha1.PodProbeMarkerSpec{
+						Selector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{
+								"game.kruise.io/owner-gss": "case0",
+							},
+						},
+						Probes: []kruiseV1alpha1.PodContainerProbe{
+							{
+								Name:             "healthy",
+								ContainerName:    "main",
+								PodConditionType: "game.kruise.io/healthy",
+								Probe: kruiseV1alpha1.ContainerProbeSpec{
+									Probe: corev1.Probe{
+										ProbeHandler: corev1.ProbeHandler{
+											Exec: &corev1.ExecAction{
+												Command: []string{"/bin/sh", "-c", "/healthy.sh"},
+											},
+										},
+										InitialDelaySeconds: DefaultInitialDelaySeconds,
+										TimeoutSeconds:      DefaultTimeoutSeconds,
+										PeriodSeconds:       DefaultPeriodSeconds,
+										SuccessThreshold:    DefaultSuccessThreshold,
+										FailureThreshold:    DefaultFailureThreshold,
+									},
+								},
+							},
+						},
+					},
+				}
+				return obj
+			},
+			expectedDone: true,
+		},
+	}
+	recorder := record.NewFakeRecorder(100)
+	for _, test := range tests {
+		gss := test.getGss()
+		objs := []client.Object{gss}
+		ppm := test.getPPM()
+		if ppm != nil {
+			objs = append(objs, ppm)
+		}
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+		manager := &GameServerSetManager{
+			gameServerSet: gss,
+			client:        c,
+			eventRecorder: recorder,
+		}
+
+		err, done := manager.SyncPodProbeMarker()
+		if err != nil {
+			t.Errorf("SyncPodProbeMarker failed: %s", err.Error())
+		} else if done != test.expectedDone {
+			t.Errorf("expected(%v), but get(%v)", test.expectedDone, done)
+		}
+		newObj := &kruiseV1alpha1.PodProbeMarker{}
+		if err = manager.client.Get(context.TODO(), types.NamespacedName{
+			Namespace: gss.Namespace,
+			Name:      gss.Name,
+		}, newObj); err != nil {
+			t.Error(err)
+		}
+		if !reflect.DeepEqual(newObj.Spec, test.newPPM().Spec) {
+			t.Errorf("expect new asts spec %v but got %v", test.newPPM().Spec, newObj.Spec)
+		}
+	}
+}
