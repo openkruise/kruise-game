@@ -52,6 +52,8 @@ const (
 	ServiceBelongNetworkTypeKey = "game.kruise.io/network-type"
 
 	ProtocolTCPUDP corev1.Protocol = "TCPUDP"
+
+	PrefixReadyReadinessGate = "service.readiness.alibabacloud.com/"
 )
 
 type MultiNlbsPlugin struct {
@@ -146,7 +148,25 @@ func initMultiLBCache(svcList []corev1.Service, maxPort, minPort int32, blockPor
 	return podAllocate, cache
 }
 
-func (m *MultiNlbsPlugin) OnPodAdded(client client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
+func (m *MultiNlbsPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
+	networkManager := utils.NewNetworkManager(pod, c)
+	networkConfig := networkManager.GetNetworkConfig()
+	conf, err := parseMultiNLBsConfig(networkConfig)
+	if err != nil {
+		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+	}
+	var lbNames []string
+	for _, lbName := range conf.lbNames {
+		if !util.IsStringInList(lbName, lbNames) {
+			lbNames = append(lbNames, lbName)
+		}
+	}
+	for _, lbName := range lbNames {
+		pod.Spec.ReadinessGates = append(pod.Spec.ReadinessGates, corev1.PodReadinessGate{
+			ConditionType: corev1.PodConditionType(PrefixReadyReadinessGate + pod.GetName() + "-" + strings.ToLower(lbName)),
+		})
+	}
+
 	return pod, nil
 }
 
@@ -246,6 +266,12 @@ func (m *MultiNlbsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx con
 
 		// network not ready
 		if svc.Status.LoadBalancer.Ingress == nil {
+			networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
+			pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+			return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+		}
+		_, readyCondition := util.GetPodConditionFromList(pod.Status.Conditions, corev1.PodReady)
+		if readyCondition == nil || readyCondition.Status == corev1.ConditionFalse {
 			networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 			pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 			return pod, cperrors.ToPluginError(err, cperrors.InternalError)
