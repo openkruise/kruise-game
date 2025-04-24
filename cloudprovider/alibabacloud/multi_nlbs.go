@@ -355,11 +355,12 @@ func init() {
 }
 
 type multiNLBsConfig struct {
-	lbNames     map[string]string
-	idList      [][]string
-	targetPorts []int
-	protocols   []corev1.Protocol
-	isFixed     bool
+	lbNames               map[string]string
+	idList                [][]string
+	targetPorts           []int
+	protocols             []corev1.Protocol
+	isFixed               bool
+	externalTrafficPolicy corev1.ServiceExternalTrafficPolicyType
 	*nlbHealthConfig
 }
 
@@ -432,7 +433,7 @@ func (m *MultiNlbsPlugin) consSvc(podLbsPorts *lbsPorts, conf *multiNLBsConfig, 
 		},
 		Spec: corev1.ServiceSpec{
 			AllocateLoadBalancerNodePorts: ptr.To[bool](false),
-			ExternalTrafficPolicy:         corev1.ServiceExternalTrafficPolicyTypeLocal,
+			ExternalTrafficPolicy:         conf.externalTrafficPolicy,
 			Type:                          corev1.ServiceTypeLoadBalancer,
 			Selector: map[string]string{
 				SvcSelectorKey: pod.GetName(),
@@ -530,6 +531,7 @@ func parseMultiNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*multi
 	ports := make([]int, 0)
 	protocols := make([]corev1.Protocol, 0)
 	isFixed := false
+	externalTrafficPolicy := corev1.ServiceExternalTrafficPolicyTypeLocal
 
 	for _, c := range conf {
 		switch c.Name {
@@ -574,6 +576,10 @@ func parseMultiNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*multi
 				return nil, fmt.Errorf("invalid Fixed %s", c.Value)
 			}
 			isFixed = v
+		case ExternalTrafficPolicyTypeConfigName:
+			if strings.EqualFold(c.Value, string(corev1.ServiceExternalTrafficPolicyTypeCluster)) {
+				externalTrafficPolicy = corev1.ServiceExternalTrafficPolicyTypeCluster
+			}
 		}
 	}
 
@@ -600,11 +606,12 @@ func parseMultiNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*multi
 	}
 
 	return &multiNLBsConfig{
-		lbNames:         lbNames,
-		idList:          idList,
-		targetPorts:     ports,
-		protocols:       protocols,
-		isFixed:         isFixed,
-		nlbHealthConfig: nlbHealthConfig,
+		lbNames:               lbNames,
+		idList:                idList,
+		targetPorts:           ports,
+		protocols:             protocols,
+		isFixed:               isFixed,
+		externalTrafficPolicy: externalTrafficPolicy,
+		nlbHealthConfig:       nlbHealthConfig,
 	}, nil
 }
