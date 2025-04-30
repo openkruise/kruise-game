@@ -133,6 +133,7 @@ OpenKruiseGame supports the following network plugins:
 - AlibabaCloud-NATGW
 - AlibabaCloud-SLB
 - AlibabaCloud-SLB-SharedPort
+- Volcengine-EIP
 
 ---
 
@@ -1216,3 +1217,122 @@ max_port = 700
 min_port = 500
 block_ports = []
 ```
+
+---
+
+### Volcengine-EIP
+
+#### Plugin name
+
+`Volcengine-EIP`
+
+#### Cloud Provider
+
+Volcengine
+
+#### Plugin description
+
+- Allocates or binds a dedicated Elastic IP (EIP) from Volcengine for each GameServer. You can specify an existing EIP via annotation or `networkConf`, or let the system allocate a new EIP automatically.
+- The exposed public access port is consistent with the port listened to in the container. Security group policies need to be configured by the user.
+- Suitable for game server scenarios that require public network access.
+- Requires the `vpc-cni-controlplane` component to be installed in the cluster. For details, see [component documentation](https://www.volcengine.com/docs/6460/101015).
+
+#### Network parameters
+
+> For more parameters, refer to: https://www.volcengine.com/docs/6460/1152127
+
+name
+
+- EIP name. If not specified, the system will generate one automatically.
+- Whether to support changes: no.
+
+isp
+
+- EIP type.
+- Whether to support changes: no.
+
+projectName
+
+- Meaning: Project name to which the EIP belongs. Default is `default`.
+- Whether to support changes: no.
+
+bandwidth
+
+- Meaning: Peak bandwidth in Mbps. Optional.
+- Whether to support changes: no.
+
+bandwidthPackageId
+
+- Meaning: Shared bandwidth package ID to bind. Optional. If not set, EIP will not be bound to a shared bandwidth package.
+- Whether to support changes: no.
+
+billingType
+
+- Meaning: EIP billing type.
+- Value:
+  - 2: (default) Pay-by-bandwidth.
+  - 3: Pay-by-traffic.
+- Whether to support changes: no.
+
+description
+
+- Meaning: Description of the EIP resource.
+- Whether to support changes: no.
+
+#### Annotation parameters
+
+- `vke.volcengine.com/primary-eip-id`: Specify an existing EIP ID. The Pod will bind this EIP at startup.
+
+#### Plugin configuration
+
+None
+
+#### Example
+
+```yaml
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: eip-nginx
+  namespace: default
+spec:
+  replicas: 1
+  updateStrategy:
+    rollingUpdate:
+      podUpdatePolicy: InPlaceIfPossible
+  network:
+    networkType: Volcengine-EIP
+  gameServerTemplate:
+    spec:
+      containers:
+        - image: nginx
+          name: nginx
+```
+
+The network status of the generated GameServer is as follows:
+
+```yaml
+  networkStatus:
+    createTime: "2025-01-17T10:10:18Z"
+    currentNetworkState: Ready
+    desiredNetworkState: Ready
+    externalAddresses:
+    - ip: 106.xx.xx.xx
+    internalAddresses:
+    - ip: 192.168.1.51
+    lastTransitionTime: "2025-01-17T10:10:18Z"
+    networkType: Volcengine-EIP
+```
+
+Pod annotation example:
+
+```yaml
+metadata:
+  annotations:
+    vke.volcengine.com/primary-eip-id: eip-xxx
+    vke.volcengine.com/primary-eip-attributes: '{"bandwidth":3,"billingType":"2"}'
+```
+
+The EIP resource will be named `{pod namespace}/{pod name}` in the Volcengine console, corresponding one-to-one with each GameServer.
+
+---
