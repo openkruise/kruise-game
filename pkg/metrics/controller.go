@@ -87,8 +87,10 @@ func (c *Controller) recordGsWhenAdd(obj interface{}) {
 
 	state := string(gs.Status.CurrentState)
 	opsState := string(gs.Spec.OpsState)
+	gssName := gs.Labels["game.kruise.io/owner-gss"]
+
 	GameServersStateCount.WithLabelValues(state).Inc()
-	GameServersOpsStateCount.WithLabelValues(opsState).Inc()
+	GameServersOpsStateCount.WithLabelValues(opsState, gssName, gs.Namespace).Inc()
 
 	dp := 0
 	up := 0
@@ -117,13 +119,17 @@ func (c *Controller) recordGsWhenUpdate(oldObj, newObj interface{}) {
 	oldOpsState := string(oldGs.Spec.OpsState)
 	newState := string(newGs.Status.CurrentState)
 	newOpsState := string(newGs.Spec.OpsState)
+
+	oldGssName := oldGs.Labels["game.kruise.io/owner-gss"]
+	newGssName := newGs.Labels["game.kruise.io/owner-gss"]
+
 	if oldState != newState {
 		GameServersStateCount.WithLabelValues(newState).Inc()
 		GameServersStateCount.WithLabelValues(oldState).Dec()
 	}
-	if oldOpsState != newOpsState {
-		GameServersOpsStateCount.WithLabelValues(newOpsState).Inc()
-		GameServersOpsStateCount.WithLabelValues(oldOpsState).Dec()
+	if oldOpsState != newOpsState || oldGssName != newGssName {
+		GameServersOpsStateCount.WithLabelValues(newOpsState, newGssName, newGs.Namespace).Inc()
+		GameServersOpsStateCount.WithLabelValues(oldOpsState, oldGssName, oldGs.Namespace).Dec()
 	}
 
 	newDp := 0
@@ -146,9 +152,10 @@ func (c *Controller) recordGsWhenDelete(obj interface{}) {
 
 	state := string(gs.Status.CurrentState)
 	opsState := string(gs.Spec.OpsState)
+	gssName := gs.Labels["game.kruise.io/owner-gss"]
 
 	GameServersStateCount.WithLabelValues(state).Dec()
-	GameServersOpsStateCount.WithLabelValues(opsState).Dec()
+	GameServersOpsStateCount.WithLabelValues(opsState, gssName, gs.Namespace).Dec()
 	GameServerDeletionPriority.DeleteLabelValues(gs.Name, gs.Namespace)
 	GameServerUpdatePriority.DeleteLabelValues(gs.Name, gs.Namespace)
 }
