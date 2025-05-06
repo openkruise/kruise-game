@@ -120,16 +120,15 @@ func (c *Controller) recordGsWhenUpdate(oldObj, newObj interface{}) {
 	newState := string(newGs.Status.CurrentState)
 	newOpsState := string(newGs.Spec.OpsState)
 
-	oldGssName := oldGs.Labels["game.kruise.io/owner-gss"]
-	newGssName := newGs.Labels["game.kruise.io/owner-gss"]
+	gssName := newGs.Labels["game.kruise.io/owner-gss"]
 
 	if oldState != newState {
 		GameServersStateCount.WithLabelValues(newState).Inc()
 		GameServersStateCount.WithLabelValues(oldState).Dec()
 	}
-	if oldOpsState != newOpsState || oldGssName != newGssName {
-		GameServersOpsStateCount.WithLabelValues(newOpsState, newGssName, newGs.Namespace).Inc()
-		GameServersOpsStateCount.WithLabelValues(oldOpsState, oldGssName, oldGs.Namespace).Dec()
+	if oldOpsState != newOpsState {
+		GameServersOpsStateCount.WithLabelValues(newOpsState, gssName, newGs.Namespace).Inc()
+		GameServersOpsStateCount.WithLabelValues(oldOpsState, gssName, newGs.Namespace).Dec()
 	}
 
 	newDp := 0
