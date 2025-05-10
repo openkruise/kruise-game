@@ -3,14 +3,17 @@ package externalscaler
 import (
 	"context"
 	"fmt"
+	"math"
+	"strconv"
+
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strconv"
 )
 
 const (
@@ -75,7 +78,6 @@ func (e *ExternalScaler) GetMetrics(ctx context.Context, metricRequest *GetMetri
 	err = e.client.List(ctx, podList, &client.ListOptions{
 		Namespace: ns,
 		LabelSelector: labels.NewSelector().Add(
-			*isNone,
 			*isGssOwner,
 		),
 	})
@@ -84,12 +86,36 @@ func (e *ExternalScaler) GetMetrics(ctx context.Context, metricRequest *GetMetri
 		return nil, err
 	}
 
-	noneNum := len(podList.Items)
-	minNum, err := strconv.ParseInt(metricRequest.ScaledObjectRef.GetScalerMetadata()[NoneGameServerMinNumberKey], 10, 32)
-	if err != nil {
-		klog.Errorf("minAvailable should be integer type, err: %s", err.Error())
+	totalNum := len(podList.Items)
+	noneNum := 0
+	for _, pod := range podList.Items {
+		if isNone.Matches(labels.Set(pod.Labels)) {
+			noneNum++
+		}
 	}
-	if err == nil && noneNum < int(minNum) {
+
+	maxNumStr := metricRequest.ScaledObjectRef.GetScalerMetadata()[NoneGameServerMaxNumberKey]
+	var maxNumP *int
+	if maxNumStr != "" {
+		mn, err := strconv.ParseInt(maxNumStr, 10, 32)
+		if err != nil {
+			klog.Errorf("maxAvailable should be integer type, err: %s", err.Error())
+		} else {
+			maxNumP = ptr.To(int(mn))
+		}
+	}
+
+	minNum, err := handleMinNum(totalNum, noneNum, metricRequest.ScaledObjectRef.GetScalerMetadata()[NoneGameServerMinNumberKey])
+	if err != nil {
+		klog.Error(err)
+		return nil, err
+	}
+
+	if maxNumP != nil && minNum > *maxNumP {
+		minNum = *maxNumP
+	}
+
+	if noneNum < minNum {
 		desireReplicas := *gss.Spec.Replicas + int32(minNum) - int32(noneNum)
 		klog.Infof("GameServerSet %s/%s desire replicas is %d", ns, name, desireReplicas)
 		return &GetMetricsResponse{
@@ -123,12 +149,8 @@ func (e *ExternalScaler) GetMetrics(ctx context.Context, metricRequest *GetMetri
 		desireReplicas = desireReplicas - numWaitToBeDeleted
 	} else {
 		// scale down when number of GameServers with None opsState more than maxAvailable defined by user
-		maxNum, err := strconv.ParseInt(metricRequest.ScaledObjectRef.GetScalerMetadata()[NoneGameServerMaxNumberKey], 10, 32)
-		if err != nil {
-			klog.Errorf("maxAvailable should be integer type, err: %s", err.Error())
-		}
-		if err == nil && noneNum > int(maxNum) {
-			desireReplicas = (desireReplicas) + int(maxNum) - (noneNum)
+		if maxNumP != nil && noneNum > *maxNumP {
+			desireReplicas = (desireReplicas) + *maxNumP - (noneNum)
 		}
 	}
 
@@ -145,4 +167,40 @@ func NewExternalScaler(client client.Client) *ExternalScaler {
 	return &ExternalScaler{
 		client: client,
 	}
+}
+
+// handleMinNum calculate the expected min number of GameServers from the give minNumStr,
+// supported format:
+//   - integer: minNum >= 1,
+//     return the fixed min number of none opState GameServers.
+//   - float: 0 < minNum < 1,
+//     return the min number of none opState GameServers
+//     calculated by the percentage of the total number of GameServers after scaled.
+func handleMinNum(totalNum, noneNum int, minNumStr string) (int, error) {
+	if minNumStr == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseFloat(minNumStr, 32)
+	if err != nil {
+		return 0, err
+	}
+	switch {
+	case n > 0 && n < 1:
+		// for (noneNum + delta) / (totalNum + delta) >= n
+		// => delta >= (totalNum * n - noneNum) / (1 - n)
+		delta := (float64(totalNum)*n - float64(noneNum)) / (1 - n)
+		if delta <= 0 {
+			// no need to scale up
+			return 0, nil
+		}
+		// ceil the delta to avoid the float number
+		delta = math.Round(delta*100) / 100
+		minNum := int(math.Ceil(delta)) + noneNum
+		return minNum, nil
+	case n >= 1:
+		n = math.Ceil(n)
+		return int(n), nil
+	}
+
+	return 0, fmt.Errorf("invalid min number: must be greater than 0 or a valid percentage between 0 and 1")
 }
