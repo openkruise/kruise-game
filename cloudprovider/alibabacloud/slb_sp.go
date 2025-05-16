@@ -21,8 +21,10 @@ import (
 )
 
 const (
-	SlbSPNetwork  = "AlibabaCloud-SLB-SharedPort"
-	SvcSLBSPLabel = "game.kruise.io/AlibabaCloud-SLB-SharedPort"
+	SlbSPNetwork                     = "AlibabaCloud-SLB-SharedPort"
+	SvcSLBSPLabel                    = "game.kruise.io/AlibabaCloud-SLB-SharedPort"
+	ManagedServiceNamesConfigName    = "ManagedServiceNames"
+	ManagedServiceSelectorConfigName = "ManagedServiceSelector"
 )
 
 const (
@@ -43,9 +45,12 @@ type SlbSpPlugin struct {
 }
 
 type lbSpConfig struct {
-	lbIds     []string
-	ports     []int
-	protocols []corev1.Protocol
+	lbIds                       []string
+	ports                       []int
+	protocols                   []corev1.Protocol
+	managedServiceNames         []string
+	managedServiceSelectorKey   string
+	managedServiceSelectorValue string
 }
 
 func (s *SlbSpPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
@@ -112,6 +117,7 @@ func (s *SlbSpPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context
 	if networkManager.GetNetworkDisabled() && hasLabel {
 		newLabels := pod.GetLabels()
 		delete(newLabels, SlbIdLabelKey)
+		delete(newLabels, podNetConfig.managedServiceSelectorKey)
 		pod.Labels = newLabels
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
@@ -121,6 +127,7 @@ func (s *SlbSpPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context
 	// enable network
 	if !networkManager.GetNetworkDisabled() && !hasLabel {
 		pod.Labels[SlbIdLabelKey] = podSlbId
+		pod.Labels[podNetConfig.managedServiceSelectorKey] = podNetConfig.managedServiceSelectorValue
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
@@ -142,6 +149,26 @@ func (s *SlbSpPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context
 			err := c.Update(ctx, svc)
 			if err != nil {
 				return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
+			}
+		}
+		for _, svcName := range podNetConfig.managedServiceNames {
+			managedSvc := &corev1.Service{}
+			getErr := c.Get(ctx, types.NamespacedName{
+				Namespace: pod.GetNamespace(),
+				Name:      svcName,
+			}, managedSvc)
+			if getErr != nil {
+				return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
+			}
+			toUpDateManagedSvc, err := utils.AllowNotReadyContainers(c, ctx, pod, managedSvc, true)
+			if err != nil {
+				return pod, err
+			}
+			if toUpDateManagedSvc {
+				err := c.Update(ctx, managedSvc)
+				if err != nil {
+					return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
+				}
 			}
 		}
 	}
@@ -311,18 +338,29 @@ func parseLbSpConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *lbSpConfig 
 	var lbIds []string
 	var ports []int
 	var protocols []corev1.Protocol
+	var managedServiceNames []string
+	var managedServiceSelectorKey string
+	var managedServiceSelectorValue string
 	for _, c := range conf {
 		switch c.Name {
 		case SlbIdsConfigName:
 			lbIds = parseLbIds(c.Value)
 		case PortProtocolsConfigName:
 			ports, protocols = parsePortProtocols(c.Value)
+		case ManagedServiceNamesConfigName:
+			managedServiceNames = strings.Split(c.Value, ",")
+		case ManagedServiceSelectorConfigName:
+			managedServiceSelectorKey = strings.Split(c.Value, "=")[0]
+			managedServiceSelectorValue = strings.Split(c.Value, "=")[1]
 		}
 	}
 	return &lbSpConfig{
-		lbIds:     lbIds,
-		ports:     ports,
-		protocols: protocols,
+		lbIds:                       lbIds,
+		ports:                       ports,
+		protocols:                   protocols,
+		managedServiceNames:         managedServiceNames,
+		managedServiceSelectorKey:   managedServiceSelectorKey,
+		managedServiceSelectorValue: managedServiceSelectorValue,
 	}
 }
 
