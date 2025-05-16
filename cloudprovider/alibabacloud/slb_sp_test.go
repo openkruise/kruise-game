@@ -106,11 +106,22 @@ func TestParseLbSpConfig(t *testing.T) {
 					Name:  SlbIdsConfigName,
 					Value: "lb-xxa",
 				},
+				{
+					Name:  ManagedServiceNamesConfigName,
+					Value: "service-clusterIp",
+				},
+				{
+					Name:  ManagedServiceSelectorConfigName,
+					Value: "game=v1",
+				},
 			},
 			podNetConfig: &lbSpConfig{
-				lbIds:     []string{"lb-xxa"},
-				ports:     []int{80},
-				protocols: []corev1.Protocol{corev1.ProtocolTCP},
+				lbIds:                       []string{"lb-xxa"},
+				ports:                       []int{80},
+				protocols:                   []corev1.Protocol{corev1.ProtocolTCP},
+				managedServiceNames:         []string{"service-clusterIp"},
+				managedServiceSelectorKey:   "game",
+				managedServiceSelectorValue: "v1",
 			},
 		},
 	}
