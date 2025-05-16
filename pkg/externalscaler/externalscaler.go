@@ -44,7 +44,7 @@ func (e *ExternalScaler) IsActive(ctx context.Context, scaledObjectRef *ScaledOb
 	}
 	desireReplicas := currentReplicas - *numWaitToBeDeleted
 	return &IsActiveResponse{
-		Result: desireReplicas > 0,
+		Result: desireReplicas >= 0,
 	}, nil
 }
 
