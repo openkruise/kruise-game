@@ -197,7 +197,7 @@ func handleMinNum(totalNum, noneNum int, minNumStr string) (int, error) {
 		delta = math.Round(delta*100) / 100
 		minNum := int(math.Ceil(delta)) + noneNum
 		return minNum, nil
-	case n >= 1:
+	case n >= 1 || n == 0:
 		n = math.Ceil(n)
 		return int(n), nil
 	}
