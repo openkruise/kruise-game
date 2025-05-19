@@ -372,6 +372,7 @@ func (manager *GameServerSetManager) SyncPodProbeMarker() (error, bool) {
 	// update ppm
 	if util.GetHash(gss.Spec.ServiceQualities) != ppm.GetAnnotations()[gameKruiseV1alpha1.PpmHashKey] {
 		ppm.Spec.Probes = constructProbes(gss)
+		ppm.Annotations[gameKruiseV1alpha1.PpmHashKey] = util.GetHash(gss.Spec.ServiceQualities)
 		by, _ := json.Marshal(ppm.Spec.Probes)
 		manager.eventRecorder.Event(gss, corev1.EventTypeNormal, UpdatePPMReason, "update PodProbeMarker")
 		klog.Infof("GameserverSet(%s/%s) update PodProbeMarker(%s) body(%s)", gss.Namespace, gss.Name, ppm.Name, string(by))
