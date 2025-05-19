@@ -102,7 +102,7 @@ func TestHandleMinNum(t *testing.T) {
 			noneNum:   2,
 			minNumStr: "0",
 			wantMin:   0,
-			wantErr:   true,
+			wantErr:   false,
 		},
 		{
 			name:      "invalid n - negative",
