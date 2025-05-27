@@ -42,6 +42,7 @@ const (
 	//Its corresponding value format is as follows, containerName:port1/protocol1,port2/protocol2,... e.g. game-server:25565/TCP
 	//When no protocol is specified, TCP is used by default
 	ContainerPortsKey = "ContainerPorts"
+	PortSameAsHost    = "SameAsHost"
 )
 
 type HostPortPlugin struct {
@@ -103,6 +104,10 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 		if ports, ok := containerPortsMap[container.Name]; ok {
 			containerPorts := container.Ports
 			for i, port := range ports {
+				// -1 means same as host
+				if port == -1 {
+					port = hostPorts[numToAlloc-1]
+				}
 				containerPort := corev1.ContainerPort{
 					ContainerPort: port,
 					HostPort:      hostPorts[numToAlloc-1],
@@ -338,9 +343,15 @@ func parseConfig(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.Pod)
 				for _, portString := range strings.Split(cpSlice[1], ",") {
 					ppSlice := strings.Split(portString, "/")
 					// handle port
-					port, err := strconv.ParseInt(ppSlice[0], 10, 32)
-					if err != nil {
-						continue
+					var port int64
+					var err error
+					if ppSlice[0] == PortSameAsHost {
+						port = -1
+					} else {
+						port, err = strconv.ParseInt(ppSlice[0], 10, 32)
+						if err != nil {
+							continue
+						}
 					}
 					numToAlloc++
 					ports = append(ports, int32(port))
