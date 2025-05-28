@@ -4,6 +4,7 @@
 resources:
 - bases/game.kruise.io_gameserversets.yaml
 - bases/game.kruise.io_gameservers.yaml
+- bases/game.kruise.io_networkallocations.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patchesStrategicMerge:

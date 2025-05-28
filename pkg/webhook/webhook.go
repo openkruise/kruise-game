@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -117,9 +118,19 @@ func (ws *Webhook) Initialize(cfg *rest.Config) error {
 	var certWriter writer.CertWriter
 	var err error
 
-	certWriter, err = writer.NewFSCertWriter(writer.FSCertWriterOptions{Path: webhookCertDir})
+	clientSet, err := clientset.NewForConfig(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to constructs FSCertWriter: %v", err)
+		return err
+	}
+
+	secName := types.NamespacedName{Name: "webhook-server-cert", Namespace: webhookServiceNamespace}
+
+	certWriter, err = writer.NewSecretCertWriter(writer.SecretCertWriterOptions{
+		Clientset: clientSet,
+		Secret:    &secName,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to constructs SecretCertWriter: %v", err)
 	}
 
 	certs, _, err := certWriter.EnsureCert(dnsName)
@@ -129,11 +140,6 @@ func (ws *Webhook) Initialize(cfg *rest.Config) error {
 
 	if err := writer.WriteCertsToDir(webhookCertDir, certs); err != nil {
 		return fmt.Errorf("failed to write certs to dir: %v", err)
-	}
-
-	clientSet, err := clientset.NewForConfig(cfg)
-	if err != nil {
-		return err
 	}
 
 	if err := checkValidatingConfiguration(dnsName, clientSet, certs.CACert); err != nil {

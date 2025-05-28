@@ -18,15 +18,18 @@ package jdcloud
 
 import (
 	"context"
-	"k8s.io/utils/ptr"
 	"reflect"
 	"sync"
 	"testing"
 
+	"k8s.io/utils/ptr"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	runtime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
@@ -51,7 +54,12 @@ func TestAllocateDeAllocate(t *testing.T) {
 		num:    3,
 	}
 
-	lbId, ports := test.nlb.allocate(test.lbIds, test.num, test.podKey)
+	scheme := runtime.NewScheme()
+	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "xxx", Namespace: "xxx"}}
+	lbId, ports := test.nlb.allocate(context.TODO(), fakeClient, test.lbIds, test.num, test.podKey, pod)
 	if _, exist := test.nlb.podAllocate[test.podKey]; !exist {
 		t.Errorf("podAllocate[%s] is empty after allocated", test.podKey)
 	}
@@ -64,7 +72,7 @@ func TestAllocateDeAllocate(t *testing.T) {
 		}
 	}
 
-	test.nlb.deAllocate(test.podKey)
+	test.nlb.deAllocate(context.TODO(), fakeClient, test.podKey, pod.Namespace)
 	for _, port := range ports {
 		if test.nlb.cache[lbId][port] == true {
 			t.Errorf("deAllocate port %d failed", port)
