@@ -173,6 +173,10 @@ func (c *ClbPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx cont
 		}
 		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
+	if svc.OwnerReferences[0].Kind == "Pod" && svc.OwnerReferences[0].UID != pod.UID {
+		log.Infof("[%s] waitting old svc %s/%s deleted. old owner pod uid is %s, but now is %s", ClbNetwork, svc.Namespace, svc.Name, svc.OwnerReferences[0].UID, pod.UID)
+		return pod, nil
+	}
 
 	// update svc
 	if util.GetHash(config) != svc.GetAnnotations()[ClbConfigHashKey] {
