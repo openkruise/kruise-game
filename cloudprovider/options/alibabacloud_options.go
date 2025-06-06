@@ -39,9 +39,6 @@ func (o AlibabaCloudOptions) Valid() bool {
 			return false
 		}
 	}
-	if int(nlbOptions.MaxPort-nlbOptions.MinPort)-len(nlbOptions.BlockPorts) >= 1000 {
-		return false
-	}
 	if nlbOptions.MinPort <= 0 {
 		return false
 	}
