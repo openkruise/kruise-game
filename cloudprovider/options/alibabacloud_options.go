@@ -39,10 +39,7 @@ func (o AlibabaCloudOptions) Valid() bool {
 			return false
 		}
 	}
-	if nlbOptions.MinPort <= 0 {
-		return false
-	}
-	return true
+	return nlbOptions.MinPort > 0
 }
 
 func (o AlibabaCloudOptions) Enabled() bool {
