@@ -311,13 +311,13 @@ func (c *NlbPlugin) OnPodDeleted(client client.Client, pod *corev1.Pod, ctx cont
 	}
 
 	for _, podKey := range podKeys {
-		c.deAllocate(podKey)
+		c.deAllocate(ctx, client, podKey, pod.Namespace)
 	}
 
 	return nil
 }
 
-func (c *NlbPlugin) allocate(lbIds []string, num int, nsName string) (string, []int32) {
+func (c *NlbPlugin) allocate(ctx context.Context, cli client.Client, lbIds []string, num int, nsName string, pod *corev1.Pod) (string, []int32) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -360,10 +360,31 @@ func (c *NlbPlugin) allocate(lbIds []string, num int, nsName string) (string, []
 
 	c.podAllocate[nsName] = lbId + ":" + util.Int32SliceToString(ports, ",")
 	log.Infof("pod %s allocate nlb %s ports %v", nsName, lbId, ports)
+
+	for _, p := range ports {
+		alloc := &gamekruiseiov1alpha1.NetworkAllocation{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("%s-%s-%d", pod.Name, lbId, p),
+				Namespace: pod.Namespace,
+			},
+			Spec: gamekruiseiov1alpha1.NetworkAllocationSpec{
+				LbID:     lbId,
+				Port:     p,
+				Protocol: string(corev1.ProtocolTCP),
+				PodRef: corev1.ObjectReference{
+					Kind:      "Pod",
+					Namespace: pod.Namespace,
+					Name:      pod.Name,
+					UID:       pod.UID,
+				},
+			},
+		}
+		_ = cli.Create(ctx, alloc)
+	}
 	return lbId, ports
 }
 
-func (c *NlbPlugin) deAllocate(nsName string) {
+func (c *NlbPlugin) deAllocate(ctx context.Context, cli client.Client, nsName string, namespace string) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -377,6 +398,11 @@ func (c *NlbPlugin) deAllocate(nsName string) {
 	ports := util.StringToInt32Slice(nlbPorts[1], ",")
 	for _, port := range ports {
 		c.cache[lbId][port] = false
+		name := fmt.Sprintf("%s-%s-%d", strings.Split(nsName, "/")[1], lbId, port)
+		alloc := &gamekruiseiov1alpha1.NetworkAllocation{}
+		if err := cli.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, alloc); err == nil {
+			_ = cli.Delete(ctx, alloc)
+		}
 	}
 
 	delete(c.podAllocate, nsName)
@@ -481,7 +507,7 @@ func (c *NlbPlugin) consSvc(config *nlbConfig, pod *corev1.Pod, client client.Cl
 		lbId = nlbPorts[0]
 		ports = util.StringToInt32Slice(nlbPorts[1], ",")
 	} else {
-		lbId, ports = c.allocate(config.lbIds, len(config.targetPorts), podKey)
+		lbId, ports = c.allocate(ctx, client, config.lbIds, len(config.targetPorts), podKey, pod)
 	}
 
 	svcPorts := make([]corev1.ServicePort, 0)

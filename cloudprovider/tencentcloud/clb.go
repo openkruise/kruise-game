@@ -19,6 +19,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	log "k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
@@ -222,7 +223,7 @@ func (p *ClbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 				return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
 			}
 			// allocate and create new listener bound to pod
-			newLis, err := p.consLis(clbConf, pod, port, gss.Name)
+			newLis, err := p.consLis(ctx, c, clbConf, pod, port, gss.Name)
 			if err != nil {
 				return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 			}
@@ -268,7 +269,7 @@ func (p *ClbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 						}
 
 						// allocate and create new listener bound to pod
-						if newLis, err := p.consLis(clbConf, pod, port, gss.Name); err != nil {
+						if newLis, err := p.consLis(ctx, c, clbConf, pod, port, gss.Name); err != nil {
 							return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 						} else {
 							err := c.Create(ctx, newLis)
@@ -347,12 +348,12 @@ func (p *ClbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 }
 
 func (p *ClbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.Context) cperrors.PluginError {
-	p.deAllocate(pod.GetNamespace() + "/" + pod.GetName())
+	p.deAllocate(ctx, c, pod.GetNamespace()+"/"+pod.GetName(), pod.Namespace)
 	return nil
 }
 
-func (p *ClbPlugin) consLis(clbConf *clbConfig, pod *corev1.Pod, port portProtocol, gssName string) (*v1alpha1.DedicatedCLBListener, error) {
-	lbId, lbPort := p.allocate(clbConf.lbIds, pod.GetNamespace()+"/"+pod.GetName())
+func (p *ClbPlugin) consLis(ctx context.Context, c client.Client, clbConf *clbConfig, pod *corev1.Pod, port portProtocol, gssName string) (*v1alpha1.DedicatedCLBListener, error) {
+	lbId, lbPort := p.allocate(ctx, c, clbConf.lbIds, pod.GetNamespace()+"/"+pod.GetName(), pod)
 	if lbId == "" {
 		return nil, fmt.Errorf("there are no avaialable ports for %v", clbConf.lbIds)
 	}
@@ -431,7 +432,7 @@ func parseLbConfig(conf []kruisev1alpha1.NetworkConfParams) (*clbConfig, error) 
 	}, nil
 }
 
-func (p *ClbPlugin) allocate(lbIds []string, podKey string) (string, int32) {
+func (p *ClbPlugin) allocate(ctx context.Context, c client.Client, lbIds []string, podKey string, pod *corev1.Pod) (string, int32) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -459,11 +460,30 @@ func (p *ClbPlugin) allocate(lbIds []string, podKey string) (string, int32) {
 		p.cache[lbId][port] = true
 		p.podAllocate[podKey] = append(p.podAllocate[podKey], fmt.Sprintf("%s:%d", lbId, port))
 		log.Infof("pod %s allocate clb %s port %d", podKey, lbId, port)
+
+		alloc := &kruisev1alpha1.NetworkAllocation{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("%s-%s-%d", pod.Name, lbId, port),
+				Namespace: pod.Namespace,
+			},
+			Spec: kruisev1alpha1.NetworkAllocationSpec{
+				LbID:     lbId,
+				Port:     port,
+				Protocol: string(corev1.ProtocolTCP),
+				PodRef: corev1.ObjectReference{
+					Kind:      "Pod",
+					Namespace: pod.Namespace,
+					Name:      pod.Name,
+					UID:       pod.UID,
+				},
+			},
+		}
+		_ = c.Create(ctx, alloc)
 	}
 	return lbId, port
 }
 
-func (p *ClbPlugin) deAllocate(podKey string) {
+func (p *ClbPlugin) deAllocate(ctx context.Context, c client.Client, podKey, namespace string) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -486,6 +506,11 @@ func (p *ClbPlugin) deAllocate(podKey string) {
 		}
 		p.cache[lbId][int32(lbPort)] = false
 		log.Infof("pod %s deallocate clb %s ports %d", podKey, lbId, lbPort)
+		name := fmt.Sprintf("%s-%s-%d", strings.Split(podKey, "/")[1], lbId, lbPort)
+		alloc := &kruisev1alpha1.NetworkAllocation{}
+		if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, alloc); err == nil {
+			_ = c.Delete(ctx, alloc)
+		}
 	}
 	delete(p.podAllocate, podKey)
 }

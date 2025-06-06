@@ -1,13 +1,17 @@
 package tencentcloud
 
 import (
+	"context"
 	"reflect"
 	"sync"
 	"testing"
 
 	kruisev1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider/tencentcloud/apis/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	runtime "k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestAllocateDeAllocate(t *testing.T) {
@@ -27,7 +31,12 @@ func TestAllocateDeAllocate(t *testing.T) {
 		podKey: "xxx/xxx",
 	}
 
-	lbId, port := test.clb.allocate(test.lbIds, test.podKey)
+	scheme := runtime.NewScheme()
+	_ = kruisev1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "xxx", Namespace: "xxx"}}
+	lbId, port := test.clb.allocate(context.TODO(), fakeClient, test.lbIds, test.podKey, pod)
 	if _, exist := test.clb.podAllocate[test.podKey]; !exist {
 		t.Errorf("podAllocate[%s] is empty after allocated", test.podKey)
 	}
@@ -37,7 +46,7 @@ func TestAllocateDeAllocate(t *testing.T) {
 	if test.clb.cache[lbId][port] == false {
 		t.Errorf("Allocate port %d failed", port)
 	}
-	test.clb.deAllocate(test.podKey)
+	test.clb.deAllocate(context.TODO(), fakeClient, test.podKey, pod.Namespace)
 	if test.clb.cache[lbId][port] == true {
 		t.Errorf("deAllocate port %d failed", port)
 	}
