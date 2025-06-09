@@ -175,6 +175,7 @@ func (manager GameServerManager) SyncGsToPod() error {
 			if gsState == gameKruiseV1alpha1.Crash {
 				eventType = corev1.EventTypeWarning
 			}
+			newAnnotations[gameKruiseV1alpha1.GameServerStateLastChangedTime] = time.Now().Format(TimeFormat)
 			manager.eventRecorder.Eventf(gs, eventType, StateReason, "State turn from %s to %s ", podGsState, string(gsState))
 		}
 	}
