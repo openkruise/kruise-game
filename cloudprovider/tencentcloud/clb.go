@@ -71,6 +71,7 @@ func (p *ClbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	return p.reconcile(c, pod, ctx)
 }
 
+// Ensure the annotation of pod is correct.
 func (p *ClbPlugin) reconcile(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
 	networkManager := utils.NewNetworkManager(pod, c)
 	networkStatus, _ := networkManager.GetNetworkStatus()
