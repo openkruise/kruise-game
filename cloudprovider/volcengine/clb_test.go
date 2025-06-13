@@ -18,10 +18,11 @@ package volcengine
 
 import (
 	"context"
-	"k8s.io/utils/ptr"
 	"reflect"
 	"sync"
 	"testing"
+
+	"k8s.io/utils/ptr"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -135,6 +136,18 @@ func TestParseLbConfig(t *testing.T) {
 		if test.isFixed != sc.isFixed {
 			t.Errorf("isFixed expect: %v, actual: %v", test.isFixed, sc.isFixed)
 		}
+	}
+}
+
+func TestParseLbConfig_EnableClbScatter(t *testing.T) {
+	conf := []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: ClbIdsConfigName, Value: "clb-1,clb-2"},
+		{Name: PortProtocolsConfigName, Value: "80,81"},
+		{Name: EnableClbScatterConfigName, Value: "true"},
+	}
+	sc := parseLbConfig(conf)
+	if !sc.enableClbScatter {
+		t.Errorf("enableClbScatter expect true, got false")
 	}
 }
 
@@ -354,5 +367,32 @@ func TestClbPlugin_consSvc(t *testing.T) {
 		if got := c.consSvc(tt.args.config, tt.args.pod, tt.args.client, tt.args.ctx); !reflect.DeepEqual(got, tt.want) {
 			t.Errorf("consSvc() = %v, want %v", got, tt.want)
 		}
+	}
+}
+
+func TestAllocateScatter(t *testing.T) {
+	clb := &ClbPlugin{
+		maxPort:     120,
+		minPort:     100,
+		cache:       map[string]portAllocated{"clb-1": {}, "clb-2": {}},
+		podAllocate: make(map[string]string),
+		mutex:       sync.RWMutex{},
+	}
+	// 初始化 cache
+	for _, id := range []string{"clb-1", "clb-2"} {
+		clb.cache[id] = make(portAllocated)
+		for i := clb.minPort; i < clb.maxPort; i++ {
+			clb.cache[id][i] = false
+		}
+	}
+	lbIds := []string{"clb-1", "clb-2"}
+	// 连续分配 4 次，轮询应分布到 clb-1, clb-2, clb-1, clb-2
+	results := make([]string, 0)
+	for i := 0; i < 4; i++ {
+		lbId, _ := clb.allocate(lbIds, 1, "ns/pod"+string(rune(i)), true)
+		results = append(results, lbId)
+	}
+	if !(results[0] != results[1] && results[0] == results[2] && results[1] == results[3]) {
+		t.Errorf("scatter allocate not round robin: %v", results)
 	}
 }
