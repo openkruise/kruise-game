@@ -18,10 +18,11 @@ package volcengine
 
 import (
 	"context"
-	"k8s.io/utils/ptr"
 	"reflect"
 	"sync"
 	"testing"
+
+	"k8s.io/utils/ptr"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -330,7 +331,7 @@ func TestClbPlugin_consSvc(t *testing.T) {
 						SvcSelectorKey: "test-pod",
 					},
 					Ports: []corev1.ServicePort{{
-						Name:     "82",
+						Name:     "82-TCP",
 						Port:     80,
 						Protocol: "TCP",
 						TargetPort: intstr.IntOrString{

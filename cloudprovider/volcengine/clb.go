@@ -459,7 +459,7 @@ func (c *ClbPlugin) consSvc(config *clbConfig, pod *corev1.Pod, client client.Cl
 	svcPorts := make([]corev1.ServicePort, 0)
 	for i := 0; i < len(config.targetPorts); i++ {
 		svcPorts = append(svcPorts, corev1.ServicePort{
-			Name:       strconv.Itoa(config.targetPorts[i]),
+			Name:       strconv.Itoa(config.targetPorts[i]) + "-" + string(config.protocols[i]),
 			Port:       ports[i],
 			Protocol:   config.protocols[i],
 			TargetPort: intstr.FromInt(config.targetPorts[i]),
