@@ -1,10 +1,11 @@
 package util
 
 import (
-	"k8s.io/klog/v2"
 	"os"
 	"strconv"
 	"time"
+
+	"k8s.io/klog/v2"
 )
 
 func GetNetworkTotalWaitTime() time.Duration {
@@ -29,4 +30,16 @@ func GetNetworkIntervalTime() time.Duration {
 		}
 	}
 	return networkIntervalTime
+}
+
+// GetGameServerConcurrentReconciles from env
+func GetGameServerConcurrentReconciles() int {
+	val := os.Getenv("GAMESERVER_CONCURRENT_RECONCILES")
+	if val == "" {
+		return 10
+	}
+	if v, err := strconv.Atoi(val); err == nil && v > 0 {
+		return v
+	}
+	return 10
 }

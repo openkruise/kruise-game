@@ -43,3 +43,37 @@ func TestGetNetworkIntervalTime(t *testing.T) {
 		}
 	}
 }
+func TestGetGameServerConcurrentReconciles(t *testing.T) {
+	tests := []struct {
+		gameServerConcurrentReconciles string
+		result                         int
+	}{
+		{
+			gameServerConcurrentReconciles: "",
+			result:                         10, // Default value
+		},
+		{
+			gameServerConcurrentReconciles: "20",
+			result:                         20,
+		},
+		{
+			gameServerConcurrentReconciles: "invalid",
+			result:                         10, // Default value for invalid input
+		},
+		{
+			gameServerConcurrentReconciles: "0",
+			result:                         10, // Default value for non-positive input
+		},
+		{
+			gameServerConcurrentReconciles: "-5",
+			result:                         10, // Default value for negative input
+		},
+	}
+	defer os.Unsetenv("GAMESERVER_CONCURRENT_RECONCILES")
+	for _, test := range tests {
+		os.Setenv("GAMESERVER_CONCURRENT_RECONCILES", test.gameServerConcurrentReconciles)
+		if GetGameServerConcurrentReconciles() != test.result {
+			t.Errorf("expect %v but got %v", test.result, GetGameServerConcurrentReconciles())
+		}
+	}
+}
