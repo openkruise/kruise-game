@@ -51,7 +51,7 @@ import (
 var (
 	controllerKind = gamekruiseiov1alpha1.SchemeGroupVersion.WithKind("GameServer")
 	// leave it to batch size
-	concurrentReconciles = 10
+	concurrentReconciles = util.GetGameServerConcurrentReconciles()
 )
 
 func Add(mgr manager.Manager) error {
