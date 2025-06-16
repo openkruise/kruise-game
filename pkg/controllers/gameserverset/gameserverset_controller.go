@@ -18,6 +18,7 @@ package gameserverset
 
 import (
 	"context"
+
 	kruisev1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -223,7 +224,8 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		Namespace: gss.GetNamespace(),
 		LabelSelector: labels.SelectorFromSet(map[string]string{
 			gamekruiseiov1alpha1.GameServerOwnerGssKey: gss.GetName(),
-		})})
+		}),
+	})
 	if err != nil {
 		klog.Errorf("failed to list GameServers of GameServerSet %s in %s.", gss.GetName(), gss.GetNamespace())
 		return reconcile.Result{}, err

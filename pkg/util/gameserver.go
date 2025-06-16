@@ -190,6 +190,9 @@ func GetNewAstsFromGss(gss *gameKruiseV1alpha1.GameServerSet, asts *kruiseV1beta
 	}
 	asts.Spec.UpdateStrategy.RollingUpdate = rollingUpdateStatefulSetStrategy
 
+	// set PersistentVolumeClaimRetentionPolicy
+	asts.Spec.PersistentVolumeClaimRetentionPolicy = gss.Spec.PersistentVolumeClaimRetentionPolicy
+
 	return asts
 }
 

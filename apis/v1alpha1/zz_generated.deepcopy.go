@@ -22,6 +22,7 @@ package v1alpha1
 
 import (
 	"github.com/openkruise/kruise-api/apps/pub"
+	"github.com/openkruise/kruise-api/apps/v1beta1"
 	"k8s.io/api/core/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -210,6 +211,11 @@ func (in *GameServerSetSpec) DeepCopyInto(out *GameServerSetSpec) {
 		in, out := &in.Lifecycle, &out.Lifecycle
 		*out = new(pub.Lifecycle)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.PersistentVolumeClaimRetentionPolicy != nil {
+		in, out := &in.PersistentVolumeClaimRetentionPolicy, &out.PersistentVolumeClaimRetentionPolicy
+		*out = new(v1beta1.StatefulSetPersistentVolumeClaimRetentionPolicy)
+		**out = **in
 	}
 }
 
