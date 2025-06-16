@@ -18,6 +18,11 @@ package kubernetes
 
 import (
 	"context"
+	"net"
+	"strconv"
+	"strings"
+	"sync"
+
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	"github.com/openkruise/kruise-game/cloudprovider/errors"
@@ -29,20 +34,17 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	log "k8s.io/klog/v2"
-	"net"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strconv"
-	"strings"
-	"sync"
 )
 
 const (
 	HostPortNetwork = "Kubernetes-HostPort"
-	//ContainerPortsKey represents the configuration key when using hostPort.
-	//Its corresponding value format is as follows, containerName:port1/protocol1,port2/protocol2,... e.g. game-server:25565/TCP
-	//When no protocol is specified, TCP is used by default
+	// ContainerPortsKey represents the configuration key when using hostPort.
+	// Its corresponding value format is as follows, containerName:port1/protocol1,port2/protocol2,... e.g. game-server:25565/TCP
+	// When no protocol is specified, TCP is used by default
 	ContainerPortsKey = "ContainerPorts"
 	PortSameAsHost    = "SameAsHost"
+	ProtocolTCPUDP    = "TCPUDP"
 )
 
 type HostPortPlugin struct {
@@ -108,12 +110,26 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 				if port == -1 {
 					port = hostPorts[numToAlloc-1]
 				}
-				containerPort := corev1.ContainerPort{
-					ContainerPort: port,
-					HostPort:      hostPorts[numToAlloc-1],
-					Protocol:      containerProtocolsMap[container.Name][i],
+				protocol := containerProtocolsMap[container.Name][i]
+				hostPort := hostPorts[numToAlloc-1]
+				if protocol == ProtocolTCPUDP {
+					containerPorts = append(containerPorts,
+						corev1.ContainerPort{
+							ContainerPort: port,
+							HostPort:      hostPort,
+							Protocol:      corev1.ProtocolTCP,
+						}, corev1.ContainerPort{
+							ContainerPort: port,
+							HostPort:      hostPort,
+							Protocol:      corev1.ProtocolUDP,
+						})
+				} else {
+					containerPorts = append(containerPorts, corev1.ContainerPort{
+						ContainerPort: port,
+						HostPort:      hostPort,
+						Protocol:      protocol,
+					})
 				}
-				containerPorts = append(containerPorts, containerPort)
 				numToAlloc--
 			}
 			containers[cIndex].Ports = containerPorts
