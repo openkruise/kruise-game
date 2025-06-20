@@ -58,6 +58,11 @@ type GameServerSetSpec struct {
 	ScaleStrategy        ScaleStrategy        `json:"scaleStrategy,omitempty"`
 	Network              *Network             `json:"network,omitempty"`
 	Lifecycle            *appspub.Lifecycle   `json:"lifecycle,omitempty"`
+	// PersistentVolumeClaimRetentionPolicy describes the policy used for PVCs created from
+	// the StatefulSet VolumeClaimTemplates. This requires the
+	// StatefulSetAutoDeletePVC feature gate to be enabled, which is alpha.
+	// +optional
+	PersistentVolumeClaimRetentionPolicy *kruiseV1beta1.StatefulSetPersistentVolumeClaimRetentionPolicy `json:"persistentVolumeClaimRetentionPolicy,omitempty"`
 }
 
 type GameServerTemplate struct {
