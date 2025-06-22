@@ -49,6 +49,7 @@ var (
 	webhookCertDir          string
 	webhookServiceNamespace string
 	webhookServiceName      string
+	enableCertGeneration    bool
 )
 
 func init() {
@@ -56,6 +57,7 @@ func init() {
 	flag.StringVar(&webhookCertDir, "webhook-server-certs-dir", "/tmp/webhook-certs/", "Path to the X.509-formatted webhook certificate.")
 	flag.StringVar(&webhookServiceNamespace, "webhook-service-namespace", "kruise-game-system", "kruise game webhook service namespace.")
 	flag.StringVar(&webhookServiceName, "webhook-service-name", "kruise-game-webhook-service", "kruise game wehook service name.")
+	flag.BoolVar(&enableCertGeneration, "enable-cert-generation", true, "Whether to enable self-generated certs for webhook server. If set to false, you need to provide the certs in the specified directory.")
 }
 
 // +kubebuilder:rbac:groups=apps.kruise.io,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
@@ -112,72 +114,77 @@ func (ws *Webhook) SetupWithManager(mgr manager.Manager) *Webhook {
 
 // Initialize create MutatingWebhookConfiguration before start
 func (ws *Webhook) Initialize(cfg *rest.Config) error {
-	dnsName := generator.ServiceToCommonName(webhookServiceNamespace, webhookServiceName)
+	if enableCertGeneration {
+		dnsName := generator.ServiceToCommonName(webhookServiceNamespace, webhookServiceName)
+		// if enable self-generated certs, ensure the certs are generated and written to the specified directory
+		if webhookCertDir == "" {
+			return fmt.Errorf("webhook cert dir is not set")
+		}
+		var err error
+		var certWriter writer.CertWriter
+		certWriter, err = writer.NewFSCertWriter(writer.FSCertWriterOptions{Path: webhookCertDir})
+		if err != nil {
+			return fmt.Errorf("failed to constructs FSCertWriter: %v", err)
+		}
 
-	var certWriter writer.CertWriter
-	var err error
+		certs, _, err := certWriter.EnsureCert(dnsName)
+		if err != nil {
+			return fmt.Errorf("failed to ensure certs: %v", err)
+		}
 
-	certWriter, err = writer.NewFSCertWriter(writer.FSCertWriterOptions{Path: webhookCertDir})
-	if err != nil {
-		return fmt.Errorf("failed to constructs FSCertWriter: %v", err)
+		if err := writer.WriteCertsToDir(webhookCertDir, certs); err != nil {
+			return fmt.Errorf("failed to write certs to dir: %v", err)
+		}
+
+		clientSet, err := clientset.NewForConfig(cfg)
+		if err != nil {
+			return err
+		}
+
+		if err := checkValidatingConfiguration(clientSet, certs.CACert); err != nil {
+			return fmt.Errorf("failed to check mutating webhook,because of %s", err.Error())
+		}
+
+		if err := checkMutatingConfiguration(clientSet, certs.CACert); err != nil {
+			return fmt.Errorf("failed to check mutating webhook,because of %s", err.Error())
+		}
 	}
 
-	certs, _, err := certWriter.EnsureCert(dnsName)
-	if err != nil {
-		return fmt.Errorf("failed to ensure certs: %v", err)
-	}
-
-	if err := writer.WriteCertsToDir(webhookCertDir, certs); err != nil {
-		return fmt.Errorf("failed to write certs to dir: %v", err)
-	}
-
-	clientSet, err := clientset.NewForConfig(cfg)
-	if err != nil {
-		return err
-	}
-
-	if err := checkValidatingConfiguration(dnsName, clientSet, certs.CACert); err != nil {
-		return fmt.Errorf("failed to check mutating webhook,because of %s", err.Error())
-	}
-
-	if err := checkMutatingConfiguration(dnsName, clientSet, certs.CACert); err != nil {
-		return fmt.Errorf("failed to check mutating webhook,because of %s", err.Error())
-	}
 	return nil
 }
 
-func checkValidatingConfiguration(dnsName string, kubeClient clientset.Interface, caBundle []byte) error {
+func checkValidatingConfiguration(kubeClient clientset.Interface, caBundle []byte) error {
 	vwc, err := kubeClient.AdmissionregistrationV1().ValidatingWebhookConfigurations().Get(context.TODO(), validatingWebhookConfigurationName, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// create new webhook
-			return createValidatingWebhook(dnsName, kubeClient, caBundle)
+			return createValidatingWebhook(kubeClient, caBundle)
 		} else {
 			return err
 		}
 	}
-	return updateValidatingWebhook(vwc, dnsName, kubeClient, caBundle)
+	return updateValidatingWebhook(vwc, kubeClient, caBundle)
 }
 
-func checkMutatingConfiguration(dnsName string, kubeClient clientset.Interface, caBundle []byte) error {
+func checkMutatingConfiguration(kubeClient clientset.Interface, caBundle []byte) error {
 	mwc, err := kubeClient.AdmissionregistrationV1().MutatingWebhookConfigurations().Get(context.TODO(), mutatingWebhookConfigurationName, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// create new webhook
-			return createMutatingWebhook(dnsName, kubeClient, caBundle)
+			return createMutatingWebhook(kubeClient, caBundle)
 		} else {
 			return err
 		}
 	}
-	return updateMutatingWebhook(mwc, dnsName, kubeClient, caBundle)
+	return updateMutatingWebhook(mwc, kubeClient, caBundle)
 }
 
-func createValidatingWebhook(dnsName string, kubeClient clientset.Interface, caBundle []byte) error {
+func createValidatingWebhook(kubeClient clientset.Interface, caBundle []byte) error {
 	webhookConfig := &admissionregistrationv1.ValidatingWebhookConfiguration{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: validatingWebhookConfigurationName,
 		},
-		Webhooks: getValidatingWebhookConf(dnsName, caBundle),
+		Webhooks: getValidatingWebhookConf(caBundle),
 	}
 
 	if _, err := kubeClient.AdmissionregistrationV1().ValidatingWebhookConfigurations().Create(context.TODO(), webhookConfig, metav1.CreateOptions{}); err != nil {
@@ -186,12 +193,12 @@ func createValidatingWebhook(dnsName string, kubeClient clientset.Interface, caB
 	return nil
 }
 
-func createMutatingWebhook(dnsName string, kubeClient clientset.Interface, caBundle []byte) error {
+func createMutatingWebhook(kubeClient clientset.Interface, caBundle []byte) error {
 	webhookConfig := &admissionregistrationv1.MutatingWebhookConfiguration{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: mutatingWebhookConfigurationName,
 		},
-		Webhooks: getMutatingWebhookConf(dnsName, caBundle),
+		Webhooks: getMutatingWebhookConf(caBundle),
 	}
 
 	if _, err := kubeClient.AdmissionregistrationV1().MutatingWebhookConfigurations().Create(context.TODO(), webhookConfig, metav1.CreateOptions{}); err != nil {
@@ -200,28 +207,28 @@ func createMutatingWebhook(dnsName string, kubeClient clientset.Interface, caBun
 	return nil
 }
 
-func updateValidatingWebhook(vwc *admissionregistrationv1.ValidatingWebhookConfiguration, dnsName string, kubeClient clientset.Interface, caBundle []byte) error {
-	vwc.Webhooks = getValidatingWebhookConf(dnsName, caBundle)
+func updateValidatingWebhook(vwc *admissionregistrationv1.ValidatingWebhookConfiguration, kubeClient clientset.Interface, caBundle []byte) error {
+	vwc.Webhooks = getValidatingWebhookConf(caBundle)
 	if _, err := kubeClient.AdmissionregistrationV1().ValidatingWebhookConfigurations().Update(context.TODO(), vwc, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("failed to update %s: %v", validatingWebhookConfigurationName, err)
 	}
 	return nil
 }
 
-func updateMutatingWebhook(mwc *admissionregistrationv1.MutatingWebhookConfiguration, dnsName string, kubeClient clientset.Interface, caBundle []byte) error {
-	mwc.Webhooks = getMutatingWebhookConf(dnsName, caBundle)
+func updateMutatingWebhook(mwc *admissionregistrationv1.MutatingWebhookConfiguration, kubeClient clientset.Interface, caBundle []byte) error {
+	mwc.Webhooks = getMutatingWebhookConf(caBundle)
 	if _, err := kubeClient.AdmissionregistrationV1().MutatingWebhookConfigurations().Update(context.TODO(), mwc, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("failed to update %s: %v", mutatingWebhookConfigurationName, err)
 	}
 	return nil
 }
 
-func getValidatingWebhookConf(dnsName string, caBundle []byte) []admissionregistrationv1.ValidatingWebhook {
+func getValidatingWebhookConf(caBundle []byte) []admissionregistrationv1.ValidatingWebhook {
 	sideEffectClassNone := admissionregistrationv1.SideEffectClassNone
 	fail := admissionregistrationv1.Fail
 	return []admissionregistrationv1.ValidatingWebhook{
 		{
-			Name:                    dnsName,
+			Name:                    "vgameserverset.kb.io",
 			SideEffects:             &sideEffectClassNone,
 			FailurePolicy:           &fail,
 			AdmissionReviewVersions: []string{"v1", "v1beta1"},
@@ -247,12 +254,12 @@ func getValidatingWebhookConf(dnsName string, caBundle []byte) []admissionregist
 	}
 }
 
-func getMutatingWebhookConf(dnsName string, caBundle []byte) []admissionregistrationv1.MutatingWebhook {
+func getMutatingWebhookConf(caBundle []byte) []admissionregistrationv1.MutatingWebhook {
 	sideEffectClassNone := admissionregistrationv1.SideEffectClassNone
 	fail := admissionregistrationv1.Fail
 	return []admissionregistrationv1.MutatingWebhook{
 		{
-			Name:                    dnsName,
+			Name:                    "mgameserverset.kb.io",
 			SideEffects:             &sideEffectClassNone,
 			FailurePolicy:           &fail,
 			AdmissionReviewVersions: []string{"v1", "v1beta1"},
