@@ -18,6 +18,7 @@ package gameserverset
 
 import (
 	"context"
+	"flag"
 
 	kruisev1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
@@ -46,6 +47,10 @@ import (
 	"github.com/openkruise/kruise-game/pkg/util"
 	utildiscovery "github.com/openkruise/kruise-game/pkg/util/discovery"
 )
+
+func init() {
+	flag.IntVar(&concurrentReconciles, "gameserverset-workers", concurrentReconciles, "Max concurrent workers for GameServerSet controller.")
+}
 
 var (
 	controllerKind = gamekruiseiov1alpha1.SchemeGroupVersion.WithKind("GameServerSet")
