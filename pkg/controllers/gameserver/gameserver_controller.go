@@ -18,6 +18,7 @@ package gameserver
 
 import (
 	"context"
+	"flag"
 	"reflect"
 	"time"
 
@@ -47,6 +48,10 @@ import (
 	"github.com/openkruise/kruise-game/pkg/util"
 	utildiscovery "github.com/openkruise/kruise-game/pkg/util/discovery"
 )
+
+func init() {
+	flag.IntVar(&concurrentReconciles, "gameserver-workers", concurrentReconciles, "Max concurrent workers for GameServer controller.")
+}
 
 var (
 	controllerKind = gamekruiseiov1alpha1.SchemeGroupVersion.WithKind("GameServer")
