@@ -34,6 +34,15 @@ func IsNumInList(num int, list []int) bool {
 	return false
 }
 
+func IsNumInListInt32(num int32, list []int32) bool {
+	for _, n := range list {
+		if num == n {
+			return true
+		}
+	}
+	return false
+}
+
 func IsStringInList(str string, list []string) bool {
 	for _, s := range list {
 		if s == str {
