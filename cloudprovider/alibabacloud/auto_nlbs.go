@@ -203,6 +203,12 @@ func (a *AutoNLBsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx cont
 			return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 		}
 
+		if svc.Status.LoadBalancer.Ingress == nil || len(svc.Status.LoadBalancer.Ingress) == 0 {
+			networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
+			pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+			return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+		}
+
 		endPoints = endPoints + svc.Status.LoadBalancer.Ingress[0].Hostname + "/" + eipType
 
 		if i == len(conf.eipTypes)-1 {
@@ -403,8 +409,8 @@ func (a *AutoNLBsPlugin) consSvc(namespace, gssName, eipType string, svcIndex in
 			svcAnnotations[LBHealthCheckMethodAnnotationKey] = conf.lBHealthCheckMethod
 		}
 	}
-	if eipType == IntranetEIPType {
-		svcAnnotations[NLBAddressTypeAnnotationKey] = eipType
+	if strings.Contains(eipType, IntranetEIPType) {
+		svcAnnotations[NLBAddressTypeAnnotationKey] = IntranetEIPType
 	}
 
 	return &corev1.Service{
