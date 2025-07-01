@@ -21,10 +21,11 @@ import (
 	"sync"
 	"testing"
 
-	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+
+	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 )
 
 func TestAllocateDeAllocate(t *testing.T) {

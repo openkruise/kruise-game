@@ -22,11 +22,10 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/exp/constraints"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
-
-	"golang.org/x/exp/constraints"
 )
 
 // see github.com/openkruise/kruise/pkg/util/api/asts.go

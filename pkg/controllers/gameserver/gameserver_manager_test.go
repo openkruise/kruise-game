@@ -6,10 +6,6 @@ import (
 	"strconv"
 	"testing"
 
-	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
-	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
-	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -19,6 +15,12 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
+	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
+
+	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/util"
 )
 
 var (

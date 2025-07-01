@@ -5,10 +5,6 @@ import (
 	"reflect"
 	"testing"
 
-	appspub "github.com/openkruise/kruise-api/apps/pub"
-	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
-	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	"github.com/openkruise/kruise-game/pkg/util"
 	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,6 +13,12 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	appspub "github.com/openkruise/kruise-api/apps/pub"
+	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
+
+	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/util"
 )
 
 func TestInitAsts(t *testing.T) {

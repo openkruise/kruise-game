@@ -20,8 +20,9 @@ import (
 	"flag"
 
 	"github.com/BurntSushi/toml"
-	"github.com/openkruise/kruise-game/cloudprovider/options"
 	"k8s.io/klog/v2"
+
+	"github.com/openkruise/kruise-game/cloudprovider/options"
 )
 
 var Opt *Options

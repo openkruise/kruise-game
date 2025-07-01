@@ -8,10 +8,6 @@ import (
 	"strings"
 	"time"
 
-	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	kruisegameclientset "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
-	"github.com/openkruise/kruise-game/pkg/util"
-	"github.com/openkruise/kruise-game/test/e2e/client"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
@@ -20,6 +16,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
+
+	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	kruisegameclientset "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
+	"github.com/openkruise/kruise-game/pkg/util"
+	"github.com/openkruise/kruise-game/test/e2e/client"
 )
 
 type Framework struct {

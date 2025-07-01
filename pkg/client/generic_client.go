@@ -17,11 +17,12 @@ limitations under the License.
 package client
 
 import (
-	kruiseclientset "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/discovery"
 	kubeclientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	kruiseclientset "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
 )
 
 // GenericClientset defines a generic client

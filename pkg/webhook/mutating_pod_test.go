@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"testing"
 
-	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -15,6 +14,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 )
 
 var (

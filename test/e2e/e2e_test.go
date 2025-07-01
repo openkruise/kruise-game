@@ -1,12 +1,14 @@
 package e2e
 
 import (
+	"testing"
+
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/gomega"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
+
 	"github.com/openkruise/kruise-game/test/e2e/framework"
 	"github.com/openkruise/kruise-game/test/e2e/testcase"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
-	"testing"
 )
 
 func TestE2E(t *testing.T) {

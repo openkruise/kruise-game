@@ -17,12 +17,13 @@ limitations under the License.
 package v1alpha1
 
 import (
-	appspub "github.com/openkruise/kruise-api/apps/pub"
-	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+
+	appspub "github.com/openkruise/kruise-api/apps/pub"
+	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
