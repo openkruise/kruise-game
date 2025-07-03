@@ -2,16 +2,18 @@ package alibabacloud
 
 import (
 	"context"
-	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	"github.com/openkruise/kruise-game/pkg/util"
+	"reflect"
+	"sync"
+	"testing"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
-	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sync"
-	"testing"
+
+	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/util"
 )
 
 func TestNLBAllocateDeAllocate(t *testing.T) {

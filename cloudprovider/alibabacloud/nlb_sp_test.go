@@ -1,10 +1,12 @@
 package alibabacloud
 
 import (
-	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	corev1 "k8s.io/api/core/v1"
 	"reflect"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+
+	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 )
 
 func TestParseNLbSpConfig(t *testing.T) {

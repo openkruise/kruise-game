@@ -18,13 +18,15 @@ package controller
 
 import (
 	"context"
-	"github.com/openkruise/kruise-game/pkg/controllers/gameserver"
-	"github.com/openkruise/kruise-game/pkg/controllers/gameserverset"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+
+	"github.com/openkruise/kruise-game/pkg/controllers/gameserver"
+	"github.com/openkruise/kruise-game/pkg/controllers/gameserverset"
 )
 
 var controllerAddFuncs []func(manager.Manager) error
