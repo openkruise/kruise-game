@@ -22,7 +22,7 @@ spec:
       name: DESIRED
       type: integer
     - description: The number of currently all GameServers.
-      jsonPath: .status.replicas
+      jsonPath: .status.currentReplicas
       name: CURRENT
       type: integer
     - description: The number of GameServers updated.
