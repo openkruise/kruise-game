@@ -456,11 +456,13 @@ func (manager *GameServerSetManager) SyncStatus() error {
 
 	maintainingGs := 0
 	waitToBeDeletedGs := 0
+	preDeleteGs := 0
 
 	for _, pod := range podList {
 
 		podLabels := pod.GetLabels()
 		opsState := podLabels[gameKruiseV1alpha1.GameServerOpsStateKey]
+		state := podLabels[gameKruiseV1alpha1.GameServerStateKey]
 
 		// ops state
 		switch opsState {
@@ -468,6 +470,12 @@ func (manager *GameServerSetManager) SyncStatus() error {
 			waitToBeDeletedGs++
 		case string(gameKruiseV1alpha1.Maintaining):
 			maintainingGs++
+		}
+
+		// state
+		switch state {
+		case string(gameKruiseV1alpha1.PreDelete):
+			preDeleteGs++
 		}
 	}
 
@@ -480,6 +488,7 @@ func (manager *GameServerSetManager) SyncStatus() error {
 		UpdatedReadyReplicas:    asts.Status.UpdatedReadyReplicas,
 		MaintainingReplicas:     ptr.To[int32](int32(maintainingGs)),
 		WaitToBeDeletedReplicas: ptr.To[int32](int32(waitToBeDeletedGs)),
+		PreDeleteReplicas:       ptr.To[int32](int32(preDeleteGs)),
 		LabelSelector:           asts.Status.LabelSelector,
 		ObservedGeneration:      gss.GetGeneration(),
 	}

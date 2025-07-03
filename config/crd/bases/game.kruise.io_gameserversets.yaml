@@ -41,6 +41,10 @@ spec:
       jsonPath: .status.waitToBeDeletedReplicas
       name: WaitToBeDeleted
       type: integer
+    - description: The number of GameServers PreDelete.
+      jsonPath: .status.preDeleteReplicas
+      name: PreDelete
+      type: integer
     - description: The age of GameServerSet.
       jsonPath: .metadata.creationTimestamp
       name: AGE
@@ -1018,6 +1022,9 @@ spec:
               observedGeneration:
                 description: The generation observed by the controller.
                 format: int64
+                type: integer
+              preDeleteReplicas:
+                format: int32
                 type: integer
               readyReplicas:
                 format: int32
