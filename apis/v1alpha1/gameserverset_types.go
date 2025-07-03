@@ -191,6 +191,7 @@ type GameServerSetStatus struct {
 	UpdatedReadyReplicas    int32  `json:"updatedReadyReplicas,omitempty"`
 	MaintainingReplicas     *int32 `json:"maintainingReplicas,omitempty"`
 	WaitToBeDeletedReplicas *int32 `json:"waitToBeDeletedReplicas,omitempty"`
+	PreDeleteReplicas       *int32 `json:"preDeleteReplicas,omitempty"`
 	// LabelSelector is label selectors for query over pods that should match the replica count used by HPA.
 	LabelSelector string `json:"labelSelector,omitempty"`
 }
@@ -203,6 +204,7 @@ type GameServerSetStatus struct {
 //+kubebuilder:printcolumn:name="READY",type="integer",JSONPath=".status.readyReplicas",description="The number of GameServers ready."
 //+kubebuilder:printcolumn:name="Maintaining",type="integer",JSONPath=".status.maintainingReplicas",description="The number of GameServers Maintaining."
 //+kubebuilder:printcolumn:name="WaitToBeDeleted",type="integer",JSONPath=".status.waitToBeDeletedReplicas",description="The number of GameServers WaitToBeDeleted."
+//+kubebuilder:printcolumn:name="PreDelete",type="integer",JSONPath=".status.preDeleteReplicas",description="The number of GameServers PreDelete."
 //+kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp",description="The age of GameServerSet."
 //+kubebuilder:subresource:status
 //+kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.labelSelector
