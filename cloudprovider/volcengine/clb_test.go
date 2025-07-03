@@ -350,7 +350,7 @@ func TestClbPlugin_consSvc(t *testing.T) {
 						SvcSelectorKey: "test-pod",
 					},
 					Ports: []corev1.ServicePort{{
-						Name:     "82-TCP",
+						Name:     "82-tcp",
 						Port:     80,
 						Protocol: "TCP",
 						TargetPort: intstr.IntOrString{
@@ -800,5 +800,326 @@ func TestClbPlugin_OnPodDeleted(t *testing.T) {
 	_ = clb3.OnPodDeleted(fakeClient3, pod3, ctx)
 	if _, ok := clb3.podAllocate["ns2/gss1"]; !ok {
 		t.Errorf("OnPodDeleted should NOT deAllocate podKey ns2/gss1 for fixed case (gss exists)")
+	}
+}
+
+func TestNetworkReady(t *testing.T) {
+	tests := []struct {
+		name                string
+		svc                 *corev1.Service
+		pod                 *corev1.Pod
+		config              *clbConfig
+		expectedInternalLen int
+		expectedExternalLen int
+		expectedExternalIPs []string
+	}{
+		{
+			name: "单 ingress IP 模式 - enableMultiIngress=false",
+			svc: &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Ports: []corev1.ServicePort{
+						{
+							Name:       "port1",
+							Port:       8080,
+							TargetPort: intstr.FromInt(80),
+							Protocol:   corev1.ProtocolTCP,
+						},
+						{
+							Name:       "port2",
+							Port:       9090,
+							TargetPort: intstr.FromInt(90),
+							Protocol:   corev1.ProtocolTCP,
+						},
+					},
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{
+							{IP: "1.2.3.4"},
+							{IP: "5.6.7.8"}, // 多个 ingress，但只使用第一个
+						},
+					},
+				},
+			},
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					PodIP: "10.0.0.1",
+				},
+			},
+			config: &clbConfig{
+				enableMultiIngress: false, // 禁用多 ingress IP 模式
+			},
+			expectedInternalLen: 2,                              // 2个端口对应2个 internal address
+			expectedExternalLen: 2,                              // 2个端口对应2个 external address（但只使用第一个 ingress IP）
+			expectedExternalIPs: []string{"1.2.3.4", "1.2.3.4"}, // 都使用第一个 IP
+		},
+		{
+			name: "多 ingress IP 模式 - enableMultiIngress=true 多个 ingress",
+			svc: &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Ports: []corev1.ServicePort{
+						{
+							Name:       "port1",
+							Port:       8080,
+							TargetPort: intstr.FromInt(80),
+							Protocol:   corev1.ProtocolTCP,
+						},
+						{
+							Name:       "port2",
+							Port:       9090,
+							TargetPort: intstr.FromInt(90),
+							Protocol:   corev1.ProtocolTCP,
+						},
+					},
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{
+							{IP: "1.2.3.4"},
+							{IP: "5.6.7.8"},
+						},
+					},
+				},
+			},
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					PodIP: "10.0.0.1",
+				},
+			},
+			config: &clbConfig{
+				enableMultiIngress: true, // 启用多 ingress IP 模式
+			},
+			expectedInternalLen: 2,                                                    // 2个端口对应2个 internal address
+			expectedExternalLen: 4,                                                    // 2个 ingress IP × 2个端口 = 4个 external address
+			expectedExternalIPs: []string{"1.2.3.4", "1.2.3.4", "5.6.7.8", "5.6.7.8"}, // 每个 ingress IP 对应每个端口
+		},
+		{
+			name: "多 ingress IP 模式 - enableMultiIngress=true 但只有一个 ingress",
+			svc: &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Ports: []corev1.ServicePort{
+						{
+							Name:       "port1",
+							Port:       8080,
+							TargetPort: intstr.FromInt(80),
+							Protocol:   corev1.ProtocolTCP,
+						},
+					},
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{
+							{IP: "1.2.3.4"}, // 只有一个 ingress IP
+						},
+					},
+				},
+			},
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					PodIP: "10.0.0.1",
+				},
+			},
+			config: &clbConfig{
+				enableMultiIngress: true, // 启用多 ingress IP 模式，但因为只有一个 ingress 所以走单 IP 逻辑
+			},
+			expectedInternalLen: 1, // 1个端口对应1个 internal address
+			expectedExternalLen: 1, // 1个端口对应1个 external address（因为只有一个 ingress IP，走单 IP 逻辑）
+			expectedExternalIPs: []string{"1.2.3.4"},
+		},
+		{
+			name: "空端口列表",
+			svc: &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Ports: []corev1.ServicePort{}, // 空端口列表
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{
+							{IP: "1.2.3.4"},
+						},
+					},
+				},
+			},
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					PodIP: "10.0.0.1",
+				},
+			},
+			config: &clbConfig{
+				enableMultiIngress: true,
+			},
+			expectedInternalLen: 0, // 无端口，无 address
+			expectedExternalLen: 0,
+			expectedExternalIPs: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			networkStatus := &gamekruiseiov1alpha1.NetworkStatus{}
+
+			// 调用被测试的函数
+			networkReady(tt.svc, tt.pod, networkStatus, tt.config)
+
+			// 验证网络状态
+			if networkStatus.CurrentNetworkState != gamekruiseiov1alpha1.NetworkReady {
+				t.Errorf("Expected NetworkReady, got %v", networkStatus.CurrentNetworkState)
+			}
+
+			// 验证 internal addresses 数量
+			if len(networkStatus.InternalAddresses) != tt.expectedInternalLen {
+				t.Errorf("Expected %d internal addresses, got %d", tt.expectedInternalLen, len(networkStatus.InternalAddresses))
+			}
+
+			// 验证 external addresses 数量
+			if len(networkStatus.ExternalAddresses) != tt.expectedExternalLen {
+				t.Errorf("Expected %d external addresses, got %d", tt.expectedExternalLen, len(networkStatus.ExternalAddresses))
+			}
+
+			// 验证 external addresses 的 IP
+			actualExternalIPs := make([]string, len(networkStatus.ExternalAddresses))
+			for i, addr := range networkStatus.ExternalAddresses {
+				actualExternalIPs[i] = addr.IP
+			}
+
+			if !reflect.DeepEqual(actualExternalIPs, tt.expectedExternalIPs) {
+				t.Errorf("Expected external IPs %v, got %v", tt.expectedExternalIPs, actualExternalIPs)
+			}
+
+			// 验证 internal addresses 的 IP 都是 pod IP
+			for _, addr := range networkStatus.InternalAddresses {
+				if addr.IP != tt.pod.Status.PodIP {
+					t.Errorf("Expected internal IP %s, got %s", tt.pod.Status.PodIP, addr.IP)
+				}
+			}
+
+			// 验证端口协议和端口号的正确性
+			if len(tt.svc.Spec.Ports) > 0 {
+				// 验证 internal addresses 的端口
+				for i, internalAddr := range networkStatus.InternalAddresses {
+					if len(internalAddr.Ports) != 1 {
+						t.Errorf("Expected 1 port per internal address, got %d", len(internalAddr.Ports))
+						continue
+					}
+
+					expectedTargetPort := tt.svc.Spec.Ports[i].TargetPort
+					if *internalAddr.Ports[0].Port != expectedTargetPort {
+						t.Errorf("Expected internal port %v, got %v", expectedTargetPort, *internalAddr.Ports[0].Port)
+					}
+
+					if internalAddr.Ports[0].Protocol != tt.svc.Spec.Ports[i].Protocol {
+						t.Errorf("Expected protocol %v, got %v", tt.svc.Spec.Ports[i].Protocol, internalAddr.Ports[0].Protocol)
+					}
+				}
+
+				// 验证 external addresses 的端口（根据模式不同验证方式不同）
+				if tt.config.enableMultiIngress && len(tt.svc.Status.LoadBalancer.Ingress) > 1 {
+					// 多 ingress IP 模式：每个 ingress IP 都有所有端口
+					expectedPortCount := len(tt.svc.Spec.Ports) * len(tt.svc.Status.LoadBalancer.Ingress)
+					if len(networkStatus.ExternalAddresses) != expectedPortCount {
+						t.Errorf("Expected %d external addresses in multi-ingress mode, got %d", expectedPortCount, len(networkStatus.ExternalAddresses))
+					}
+				} else {
+					// 单 ingress IP 模式：只有一个 IP，每个端口一个 address
+					expectedPortCount := len(tt.svc.Spec.Ports)
+					if len(networkStatus.ExternalAddresses) != expectedPortCount {
+						t.Errorf("Expected %d external addresses in single-ingress mode, got %d", expectedPortCount, len(networkStatus.ExternalAddresses))
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestNetworkReady_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name        string
+		svc         *corev1.Service
+		pod         *corev1.Pod
+		config      *clbConfig
+		expectPanic bool
+	}{
+		{
+			name: "没有 ingress IP",
+			svc: &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Ports: []corev1.ServicePort{
+						{
+							Name:       "port1",
+							Port:       8080,
+							TargetPort: intstr.FromInt(80),
+							Protocol:   corev1.ProtocolTCP,
+						},
+					},
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{}, // 空的 ingress 列表
+					},
+				},
+			},
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					PodIP: "10.0.0.1",
+				},
+			},
+			config: &clbConfig{
+				enableMultiIngress: false,
+			},
+			expectPanic: false, // 修改：现在不期望 panic
+		},
+		{
+			name: "没有 ingress IP",
+			svc: &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Ports: []corev1.ServicePort{
+						{
+							Name:       "port1",
+							Port:       8080,
+							TargetPort: intstr.FromInt(80),
+							Protocol:   corev1.ProtocolTCP,
+						},
+					},
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{}, // 空的 ingress 列表
+					},
+				},
+			},
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					PodIP: "10.0.0.1",
+				},
+			},
+			config: &clbConfig{
+				enableMultiIngress: true,
+			},
+			expectPanic: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			networkStatus := &gamekruiseiov1alpha1.NetworkStatus{}
+
+			if tt.expectPanic {
+				defer func() {
+					if r := recover(); r == nil {
+						t.Errorf("Expected panic but didn't get one")
+					}
+				}()
+			}
+
+			// 调用被测试的函数
+			networkReady(tt.svc, tt.pod, networkStatus, tt.config)
+
+			if !tt.expectPanic {
+				// 如果不期望 panic，验证基本状态
+				if networkStatus.CurrentNetworkState != gamekruiseiov1alpha1.NetworkReady {
+					t.Errorf("Expected NetworkReady, got %v", networkStatus.CurrentNetworkState)
+				}
+			}
+		})
 	}
 }

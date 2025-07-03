@@ -57,6 +57,7 @@ const (
 	ClbSchedulerWRR               = "wrr"
 	SvcSelectorKey                = "statefulset.kubernetes.io/pod-name"
 	EnableClbScatterConfigName    = "EnableClbScatter"
+	EnableMultiIngressConfigName  = "EnableMultiIngress"
 )
 
 type portAllocated map[int32]bool
@@ -79,6 +80,7 @@ type clbConfig struct {
 	annotations                   map[string]string
 	allocateLoadBalancerNodePorts bool
 	enableClbScatter              bool // 新增：打散开关
+	enableMultiIngress            bool // 新增：多 ingress IP 开关
 }
 
 func (c *ClbPlugin) Name() string {
@@ -256,11 +258,61 @@ func (c *ClbPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx cont
 	}
 
 	// network ready
+	networkReady(svc, pod, networkStatus, config)
+	pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+	return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+}
+
+func networkReady(svc *corev1.Service, pod *corev1.Pod, networkStatus *gamekruiseiov1alpha1.NetworkStatus, config *clbConfig) {
 	internalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
 	externalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
+
+	// 检查是否启用多 ingress IP 支持
+	if config.enableMultiIngress && len(svc.Status.LoadBalancer.Ingress) > 1 {
+		// 多 ingress IP 模式：为每个 ingress IP 创建单独的 external address
+		for _, ingress := range svc.Status.LoadBalancer.Ingress {
+			for _, port := range svc.Spec.Ports {
+				instrIPort := port.TargetPort
+				instrEPort := intstr.FromInt(int(port.Port))
+
+				// 每个 ingress IP 都创建一个单独的 external address
+				externalAddress := gamekruiseiov1alpha1.NetworkAddress{
+					IP: ingress.IP,
+					Ports: []gamekruiseiov1alpha1.NetworkPort{
+						{
+							Name:     instrIPort.String(),
+							Port:     &instrEPort,
+							Protocol: port.Protocol,
+						},
+					},
+				}
+				externalAddresses = append(externalAddresses, externalAddress)
+			}
+		}
+	} else {
+		// 单 ingress IP 模式（原有逻辑）
+		if len(svc.Status.LoadBalancer.Ingress) > 0 {
+			for _, port := range svc.Spec.Ports {
+				instrIPort := port.TargetPort
+				instrEPort := intstr.FromInt(int(port.Port))
+				externalAddress := gamekruiseiov1alpha1.NetworkAddress{
+					IP: svc.Status.LoadBalancer.Ingress[0].IP,
+					Ports: []gamekruiseiov1alpha1.NetworkPort{
+						{
+							Name:     instrIPort.String(),
+							Port:     &instrEPort,
+							Protocol: port.Protocol,
+						},
+					},
+				}
+				externalAddresses = append(externalAddresses, externalAddress)
+			}
+		}
+	}
+
+	// internal addresses 逻辑保持不变
 	for _, port := range svc.Spec.Ports {
 		instrIPort := port.TargetPort
-		instrEPort := intstr.FromInt(int(port.Port))
 		internalAddress := gamekruiseiov1alpha1.NetworkAddress{
 			IP: pod.Status.PodIP,
 			Ports: []gamekruiseiov1alpha1.NetworkPort{
@@ -271,24 +323,12 @@ func (c *ClbPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx cont
 				},
 			},
 		}
-		externalAddress := gamekruiseiov1alpha1.NetworkAddress{
-			IP: svc.Status.LoadBalancer.Ingress[0].IP,
-			Ports: []gamekruiseiov1alpha1.NetworkPort{
-				{
-					Name:     instrIPort.String(),
-					Port:     &instrEPort,
-					Protocol: port.Protocol,
-				},
-			},
-		}
 		internalAddresses = append(internalAddresses, internalAddress)
-		externalAddresses = append(externalAddresses, externalAddress)
 	}
+
 	networkStatus.InternalAddresses = internalAddresses
 	networkStatus.ExternalAddresses = externalAddresses
 	networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkReady
-	pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
-	return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 }
 
 func (c *ClbPlugin) OnPodDeleted(client client.Client, pod *corev1.Pod, ctx context.Context) cperrors.PluginError {
@@ -480,12 +520,17 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *clbConfig {
 	allocateLoadBalancerNodePorts := true
 	annotations := map[string]string{}
 	enableClbScatter := false
+	enableMultiIngress := false
 	for _, c := range conf {
 		switch c.Name {
 		case ClbIdsConfigName:
+			seenIds := make(map[string]struct{})
 			for _, clbId := range strings.Split(c.Value, ",") {
 				if clbId != "" {
-					lbIds = append(lbIds, clbId)
+					if _, exists := seenIds[clbId]; !exists {
+						lbIds = append(lbIds, clbId)
+						seenIds[clbId] = struct{}{}
+					}
 				}
 			}
 		case PortProtocolsConfigName:
@@ -528,6 +573,11 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *clbConfig {
 			if err == nil {
 				enableClbScatter = v
 			}
+		case EnableMultiIngressConfigName:
+			v, err := strconv.ParseBool(c.Value)
+			if err == nil {
+				enableMultiIngress = v
+			}
 		}
 	}
 	return &clbConfig{
@@ -538,6 +588,7 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *clbConfig {
 		annotations:                   annotations,
 		allocateLoadBalancerNodePorts: allocateLoadBalancerNodePorts,
 		enableClbScatter:              enableClbScatter,
+		enableMultiIngress:            enableMultiIngress,
 	}
 }
 
@@ -569,8 +620,9 @@ func (c *ClbPlugin) consSvc(config *clbConfig, pod *corev1.Pod, client client.Cl
 
 	svcPorts := make([]corev1.ServicePort, 0)
 	for i := 0; i < len(config.targetPorts); i++ {
+		portName := fmt.Sprintf("%d-%s", config.targetPorts[i], strings.ToLower(string(config.protocols[i])))
 		svcPorts = append(svcPorts, corev1.ServicePort{
-			Name:       strconv.Itoa(config.targetPorts[i]) + "-" + string(config.protocols[i]),
+			Name:       portName,
 			Port:       ports[i],
 			Protocol:   config.protocols[i],
 			TargetPort: intstr.FromInt(config.targetPorts[i]),
