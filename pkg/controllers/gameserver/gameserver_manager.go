@@ -129,6 +129,11 @@ func (manager GameServerManager) SyncGsToPod() error {
 	var gsState gameKruiseV1alpha1.GameServerState
 	switch pod.Status.Phase {
 	case corev1.PodRunning:
+		// GameServer Deleting
+		if !pod.DeletionTimestamp.IsZero() {
+			gsState = gameKruiseV1alpha1.Deleting
+			break
+		}
 		// GameServer Updating
 		lifecycleState, exist := pod.GetLabels()[kruisePub.LifecycleStateKey]
 		if exist && lifecycleState == string(kruisePub.LifecycleStateUpdating) {
@@ -143,12 +148,6 @@ func (manager GameServerManager) SyncGsToPod() error {
 		// GameServer PreDelete
 		if exist && lifecycleState == string(kruisePub.LifecycleStatePreparingDelete) {
 			gsState = gameKruiseV1alpha1.PreDelete
-			break
-		}
-
-		// GameServer Deleting
-		if !pod.DeletionTimestamp.IsZero() {
-			gsState = gameKruiseV1alpha1.Deleting
 			break
 		}
 		// GameServer Ready / NotReady
