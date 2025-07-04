@@ -41,6 +41,7 @@ spec:
         - --provider-config=/etc/kruise-game/config.toml
         - --api-server-qps=5
         - --api-server-qps-burst=10
+        - --enable-cert-generation=false
         image: controller:latest
         name: manager
         env:

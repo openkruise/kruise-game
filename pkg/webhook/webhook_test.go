@@ -2,29 +2,28 @@ package webhook
 
 import (
 	"context"
+	"reflect"
+	"testing"
+
 	v1 "k8s.io/api/admissionregistration/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
-	"reflect"
-	"testing"
 )
 
 func TestCheckValidatingConfiguration(t *testing.T) {
 	tests := []struct {
 		vwcNow   *v1.ValidatingWebhookConfiguration
-		dnsName  string
 		caBundle []byte
 		vwcNew   *v1.ValidatingWebhookConfiguration
 	}{
 		{
 			vwcNow:   nil,
-			dnsName:  "dnsName",
 			caBundle: []byte(`xxx`),
 			vwcNew: &v1.ValidatingWebhookConfiguration{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: validatingWebhookConfigurationName,
 				},
-				Webhooks: getValidatingWebhookConf("dnsName", []byte(`xxx`)),
+				Webhooks: getValidatingWebhookConf([]byte(`xxx`)),
 			},
 		},
 		{
@@ -32,15 +31,14 @@ func TestCheckValidatingConfiguration(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: validatingWebhookConfigurationName,
 				},
-				Webhooks: getValidatingWebhookConf("dnsName", []byte(`old`)),
+				Webhooks: getValidatingWebhookConf([]byte(`old`)),
 			},
-			dnsName:  "dnsName",
 			caBundle: []byte(`new`),
 			vwcNew: &v1.ValidatingWebhookConfiguration{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: validatingWebhookConfigurationName,
 				},
-				Webhooks: getValidatingWebhookConf("dnsName", []byte(`new`)),
+				Webhooks: getValidatingWebhookConf([]byte(`new`)),
 			},
 		},
 		{
@@ -49,13 +47,12 @@ func TestCheckValidatingConfiguration(t *testing.T) {
 					Name: validatingWebhookConfigurationName,
 				},
 			},
-			dnsName:  "dnsName",
 			caBundle: []byte(`new`),
 			vwcNew: &v1.ValidatingWebhookConfiguration{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: validatingWebhookConfigurationName,
 				},
-				Webhooks: getValidatingWebhookConf("dnsName", []byte(`new`)),
+				Webhooks: getValidatingWebhookConf([]byte(`new`)),
 			},
 		},
 	}
@@ -69,7 +66,7 @@ func TestCheckValidatingConfiguration(t *testing.T) {
 			}
 		}
 
-		if err := checkValidatingConfiguration(test.dnsName, clientSet, test.caBundle); err != nil {
+		if err := checkValidatingConfiguration(clientSet, test.caBundle); err != nil {
 			t.Error(err)
 		}
 
@@ -87,19 +84,17 @@ func TestCheckValidatingConfiguration(t *testing.T) {
 func TestCheckMutatingConfiguration(t *testing.T) {
 	tests := []struct {
 		mwcNow   *v1.MutatingWebhookConfiguration
-		dnsName  string
 		caBundle []byte
 		mwcNew   *v1.MutatingWebhookConfiguration
 	}{
 		{
 			mwcNow:   nil,
-			dnsName:  "dnsName",
 			caBundle: []byte(`xxx`),
 			mwcNew: &v1.MutatingWebhookConfiguration{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: mutatingWebhookConfigurationName,
 				},
-				Webhooks: getMutatingWebhookConf("dnsName", []byte(`xxx`)),
+				Webhooks: getMutatingWebhookConf([]byte(`xxx`)),
 			},
 		},
 		{
@@ -107,15 +102,14 @@ func TestCheckMutatingConfiguration(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: mutatingWebhookConfigurationName,
 				},
-				Webhooks: getMutatingWebhookConf("dnsName", []byte(`old`)),
+				Webhooks: getMutatingWebhookConf([]byte(`old`)),
 			},
-			dnsName:  "dnsName",
 			caBundle: []byte(`new`),
 			mwcNew: &v1.MutatingWebhookConfiguration{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: mutatingWebhookConfigurationName,
 				},
-				Webhooks: getMutatingWebhookConf("dnsName", []byte(`new`)),
+				Webhooks: getMutatingWebhookConf([]byte(`new`)),
 			},
 		},
 		{
@@ -124,13 +118,12 @@ func TestCheckMutatingConfiguration(t *testing.T) {
 					Name: mutatingWebhookConfigurationName,
 				},
 			},
-			dnsName:  "dnsName",
 			caBundle: []byte(`new`),
 			mwcNew: &v1.MutatingWebhookConfiguration{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: mutatingWebhookConfigurationName,
 				},
-				Webhooks: getMutatingWebhookConf("dnsName", []byte(`new`)),
+				Webhooks: getMutatingWebhookConf([]byte(`new`)),
 			},
 		},
 	}
@@ -144,7 +137,7 @@ func TestCheckMutatingConfiguration(t *testing.T) {
 			}
 		}
 
-		if err := checkMutatingConfiguration(test.dnsName, clientSet, test.caBundle); err != nil {
+		if err := checkMutatingConfiguration(clientSet, test.caBundle); err != nil {
 			t.Error(err)
 		}
 
