@@ -18,6 +18,11 @@ package gameserver
 
 import (
 	"context"
+	"reflect"
+	"strconv"
+	"strings"
+	"time"
+
 	kruisePub "github.com/openkruise/kruise-api/apps/pub"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
@@ -30,11 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
-	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strconv"
-	"strings"
-	"time"
 )
 
 var (
@@ -43,7 +44,7 @@ var (
 )
 
 const (
-	TimeFormat = "2006-01-02 15:04:05"
+	TimeFormat = time.RFC3339
 )
 
 const (
@@ -180,9 +181,33 @@ func (manager GameServerManager) SyncGsToPod() error {
 	}
 
 	if pod.Annotations[gameKruiseV1alpha1.GameServerNetworkType] != "" {
-		oldTime, err := time.Parse(TimeFormat, pod.Annotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime])
-		if (err == nil && time.Since(oldTime) > NetworkIntervalTime && time.Since(gs.Status.NetworkStatus.LastTransitionTime.Time) < NetworkTotalWaitTime) || (pod.Annotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime] == "") {
+		oldTriggerTime := pod.Annotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime]
+		if oldTriggerTime == "" {
+			klog.V(4).Infof("GameServer %s/%s has no previous network trigger time, will set one", gs.Namespace, gs.Name)
 			newAnnotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime] = time.Now().Format(TimeFormat)
+		} else {
+			oldTime, err := time.Parse(TimeFormat, oldTriggerTime)
+			if err != nil {
+				klog.Errorf("Failed to parse previous network trigger time for GameServer %s/%s: %v", gs.Namespace, gs.Name, err)
+				oldTime = time.Now().Add(-NetworkIntervalTime)
+				newAnnotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime] = oldTime.Format(TimeFormat)
+			}
+			timeSinceOldTrigger := time.Since(oldTime)
+			timeSinceNetworkTransition := time.Since(gs.Status.NetworkStatus.LastTransitionTime.Time)
+
+			klog.Infof("GameServer %s/%s network timing: timeSinceOldTrigger=%v (needs > %v), timeSinceNetworkTransition=%v (needs < %v)",
+				gs.Namespace, gs.Name, timeSinceOldTrigger, NetworkIntervalTime, timeSinceNetworkTransition, NetworkTotalWaitTime)
+
+			if timeSinceOldTrigger > NetworkIntervalTime && timeSinceNetworkTransition < NetworkTotalWaitTime {
+				klog.V(4).Infof("GameServer %s/%s network trigger conditions met, updating trigger time", gs.Namespace, gs.Name)
+				newAnnotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime] = time.Now().Format(TimeFormat)
+			} else if timeSinceNetworkTransition >= NetworkTotalWaitTime {
+				// 超出最大等待时间，记录 event
+				klog.Infof("GameServer %s/%s network wait timeout: waited %v", gs.Namespace, gs.Name, timeSinceNetworkTransition)
+				manager.eventRecorder.Eventf(gs, corev1.EventTypeWarning, StateReason, "Network wait timeout: waited %v, max %v", timeSinceNetworkTransition, NetworkTotalWaitTime)
+			} else {
+				klog.Infof("GameServer %s/%s network trigger conditions not met", gs.Namespace, gs.Name)
+			}
 		}
 	}
 
