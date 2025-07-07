@@ -18,16 +18,18 @@ package alibabacloud
 
 import (
 	"context"
+	"strings"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	"github.com/openkruise/kruise-game/cloudprovider/alibabacloud/apis/v1beta1"
 	"github.com/openkruise/kruise-game/cloudprovider/errors"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strings"
 )
 
 const (

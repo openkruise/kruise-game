@@ -23,13 +23,10 @@ import (
 	"time"
 
 	ackv1alpha1 "github.com/aws-controllers-k8s/elbv2-controller/apis/v1alpha1"
-	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
-	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -39,6 +36,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	ctrlwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
+	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
@@ -51,8 +53,6 @@ import (
 	"github.com/openkruise/kruise-game/pkg/metrics"
 	"github.com/openkruise/kruise-game/pkg/util/client"
 	"github.com/openkruise/kruise-game/pkg/webhook"
-	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	ctrlwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
 	//+kubebuilder:scaffold:imports
 )
 

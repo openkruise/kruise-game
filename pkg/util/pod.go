@@ -17,8 +17,9 @@ limitations under the License.
 package util
 
 import (
-	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+
+	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 )
 
 // GetPodConditionFromList extracts the provided condition from the given list of condition and

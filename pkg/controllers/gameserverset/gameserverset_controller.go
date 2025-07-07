@@ -20,8 +20,6 @@ import (
 	"context"
 	"flag"
 
-	kruisev1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
-	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -42,6 +40,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+
+	kruisev1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
+	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"

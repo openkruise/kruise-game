@@ -18,8 +18,10 @@ package gameserverset
 
 import (
 	"context"
-	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
-	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
+	"sort"
+	"strconv"
+	"sync"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -32,9 +34,9 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sort"
-	"strconv"
-	"sync"
+
+	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
+	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"

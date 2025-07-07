@@ -18,10 +18,11 @@ package gameserver
 
 import (
 	"context"
-	kruisePub "github.com/openkruise/kruise-api/apps/pub"
-	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	"github.com/openkruise/kruise-game/cloudprovider/utils"
-	"github.com/openkruise/kruise-game/pkg/util"
+	"reflect"
+	"strconv"
+	"strings"
+	"time"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,11 +31,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
-	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strconv"
-	"strings"
-	"time"
+
+	kruisePub "github.com/openkruise/kruise-api/apps/pub"
+
+	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/cloudprovider/utils"
+	"github.com/openkruise/kruise-game/pkg/util"
 )
 
 var (

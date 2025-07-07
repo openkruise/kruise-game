@@ -33,6 +33,7 @@ import (
 
 	appspub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
+
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 )
 

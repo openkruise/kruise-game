@@ -15,6 +15,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
+
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	kruisegameclientset "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
 )

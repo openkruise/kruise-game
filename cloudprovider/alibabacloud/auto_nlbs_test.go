@@ -17,11 +17,12 @@ limitations under the License.
 package alibabacloud
 
 import (
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"reflect"
 	"sync"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 func TestIsNeedToCreateService(t *testing.T) {
