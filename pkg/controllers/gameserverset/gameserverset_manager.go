@@ -18,6 +18,7 @@ package gameserverset
 
 import (
 	"context"
+	kruisePub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -129,13 +130,9 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	c := manager.client
 	ctx := context.Background()
 	var podList []corev1.Pod
-	for _, pod := range manager.podList {
-		if pod.GetDeletionTimestamp() == nil {
-			podList = append(podList, pod)
-		}
-	}
+	podList = append(podList, manager.podList...)
 
-	currentReplicas := len(podList)
+	currentReplicas := int(*asts.Spec.Replicas)
 	expectedReplicas := int(*gss.Spec.Replicas)
 	as := gss.GetAnnotations()
 	specReserveIds := util.GetReserveOrdinalIntSet(asts.Spec.ReserveOrdinals)
@@ -144,8 +141,8 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	notExistIds := util.GetSetInANotInB(specReserveIds, reserveIds)
 	gssReserveIds := util.GetReserveOrdinalIntSet(gss.Spec.ReserveGameServerIds)
 
-	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas; With newExplicit: %v; oldExplicit: %v; oldImplicit: %v",
-		gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas, gssReserveIds, reserveIds, notExistIds)
+	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas; With newExplicit: %v; oldExplicit: %v; oldImplicit: %v; total pods num: %d",
+		gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas, gssReserveIds, reserveIds, notExistIds, len(podList))
 	manager.eventRecorder.Eventf(gss, corev1.EventTypeNormal, ScaleReason, "scale from %d to %d", currentReplicas, expectedReplicas)
 
 	newManageIds, newReserveIds := computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, podList)
@@ -200,8 +197,22 @@ func computeToScaleGs(gssReserveIds, reserveIds, notExistIds sets.Set[int], expe
 	// 2. Remove the pods ids is in newExplicit.
 	workloadManageIds = sets.New[int]()
 	var newPods []corev1.Pod
+	deletingPodIds := sets.New[int]()
+	preDeletingPodIds := sets.New[int]()
 	for _, pod := range pods {
 		index := util.GetIndexFromGsName(pod.Name)
+
+		// if pod is deleting, exclude it.
+		if pod.GetDeletionTimestamp() != nil {
+			deletingPodIds.Insert(index)
+			continue
+		}
+		// if pod is preDeleting, exclude it.
+		if lifecycleState, exist := pod.GetLabels()[kruisePub.LifecycleStateKey]; exist && lifecycleState == string(kruisePub.LifecycleStatePreparingDelete) {
+			preDeletingPodIds.Insert(index)
+			continue
+		}
+
 		if newExplicit.Has(index) {
 			continue
 		}
@@ -217,7 +228,7 @@ func computeToScaleGs(gssReserveIds, reserveIds, notExistIds sets.Set[int], expe
 		num := 0
 		var toAdd []int
 		for i := 0; num < expectedReplicas-existReplicas; i++ {
-			if workloadManageIds.Has(i) || newExplicit.Has(i) {
+			if workloadManageIds.Has(i) || newExplicit.Has(i) || preDeletingPodIds.Has(i) {
 				continue
 			}
 			if newImplicit.Has(i) {

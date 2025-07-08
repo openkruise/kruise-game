@@ -3,10 +3,6 @@ package gameserverset
 import (
 	"context"
 	"fmt"
-	"reflect"
-	"strconv"
-	"testing"
-
 	appspub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
@@ -20,8 +16,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
+	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"strconv"
+	"testing"
 
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
@@ -39,6 +38,8 @@ func init() {
 }
 
 func TestComputeToScaleGs(t *testing.T) {
+	timeNow := metav1.Now()
+
 	tests := []struct {
 		newGssReserveIds sets.Set[int]
 		oldGssreserveIds sets.Set[int]
@@ -418,6 +419,56 @@ func TestComputeToScaleGs(t *testing.T) {
 			newReserveIds: sets.New(0),
 			newManageIds:  sets.New(1, 2, 3, 4),
 		},
+		// case 11
+		{
+			newGssReserveIds: sets.New[int](),
+			oldGssreserveIds: sets.New[int](),
+			notExistIds:      sets.New[int](2, 3, 4),
+			expectedReplicas: 4,
+			pods: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-0",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-1",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-2",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+							appspub.LifecycleStateKey:                      string(appspub.LifecycleStatePreparingDelete),
+						},
+						DeletionTimestamp: &timeNow,
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-3",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+							appspub.LifecycleStateKey:                      string(appspub.LifecycleStatePreparingDelete),
+						},
+					},
+				},
+			},
+			newReserveIds: sets.New(3),
+			newManageIds:  sets.New(0, 1, 2, 4),
+		},
 	}
 
 	for i, test := range tests {
@@ -515,6 +566,7 @@ func TestIsNeedToScale(t *testing.T) {
 
 func TestGameServerScale(t *testing.T) {
 	recorder := record.NewFakeRecorder(100)
+	//timeNow := metav1.Now()
 
 	tests := []struct {
 		name           string
@@ -781,6 +833,70 @@ func TestGameServerScale(t *testing.T) {
 				},
 			},
 			astsReserveIds: nil,
+			gssReserveIds:  "",
+		},
+		{
+			name: "case4: scale up when pods with PreDelete state",
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "case4",
+				},
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					Replicas:             ptr.To[int32](5),
+					ReserveGameServerIds: []intstr.IntOrString{},
+				},
+			},
+			asts: &kruiseV1beta1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "case4",
+				},
+				Spec: kruiseV1beta1.StatefulSetSpec{
+					Replicas:        ptr.To[int32](3),
+					ReserveOrdinals: []intstr.IntOrString{intstr.FromInt(3), intstr.FromInt(4), intstr.FromInt(5)},
+				},
+			},
+			podList: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "case4-0",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "case4-1",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "case4-2",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "case4-3",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+							appspub.LifecycleStateKey:                      string(appspub.LifecycleStatePreparingDelete),
+						},
+					},
+				},
+			},
+			astsReserveIds: sets.New(3),
 			gssReserveIds:  "",
 		},
 	}
