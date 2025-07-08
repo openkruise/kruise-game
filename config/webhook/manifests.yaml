@@ -1,0 +1,65 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: mutating-webhook
+webhooks:
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: kruise-game-system
+      path: /mutate-v1-pod
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: mgameserverset.kb.io
+  rules:
+  - operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    resources:
+    - pods
+  objectSelector:
+    matchExpressions:
+    - key: game.kruise.io/owner-gss
+      operator: Exists
+  sideEffects: None
+
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: validating-webhook
+webhooks:
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: kruise-game-system
+      path: /validate-v1alpha1-gss
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: vgameserverset.kb.io
+  namespaceSelector: {}
+  objectSelector: {}
+  rules:
+  - apiGroups:
+    - game.kruise.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - gameserversets
+  sideEffects: None
+  timeoutSeconds: 10
