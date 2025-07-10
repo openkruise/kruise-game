@@ -43,11 +43,12 @@ var (
 )
 
 const (
-	TimeFormat = "2006-01-02 15:04:05"
+	TimeFormat = time.RFC3339
 )
 
 const (
-	StateReason = "GsStateChanged"
+	StateReason          = "GsStateChanged"
+	GsNetworkStateReason = "GsNetworkState"
 )
 
 type Control interface {
@@ -181,8 +182,16 @@ func (manager GameServerManager) SyncGsToPod() error {
 
 	if pod.Annotations[gameKruiseV1alpha1.GameServerNetworkType] != "" {
 		oldTime, err := time.Parse(TimeFormat, pod.Annotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime])
-		if (err == nil && time.Since(oldTime) > NetworkIntervalTime && time.Since(gs.Status.NetworkStatus.LastTransitionTime.Time) < NetworkTotalWaitTime) || (pod.Annotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime] == "") {
+		if err != nil {
+			klog.Errorf("Failed to parse previous network trigger time for GameServer %s/%s: %v", gs.Namespace, gs.Name, err)
 			newAnnotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime] = time.Now().Format(TimeFormat)
+		} else {
+			timeSinceOldTrigger := time.Since(oldTime)
+			timeSinceNetworkTransition := time.Since(gs.Status.NetworkStatus.LastTransitionTime.Time)
+			if timeSinceOldTrigger > NetworkIntervalTime && timeSinceNetworkTransition < NetworkTotalWaitTime {
+				klog.V(4).Infof("GameServer %s/%s network trigger conditions met, updating trigger time", gs.Namespace, gs.Name)
+				newAnnotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime] = time.Now().Format(TimeFormat)
+			}
 		}
 	}
 
@@ -310,10 +319,14 @@ func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerS
 func (manager GameServerManager) WaitOrNot() bool {
 	networkStatus := manager.gameServer.Status.NetworkStatus
 	alreadyWait := time.Since(networkStatus.LastTransitionTime.Time)
-	if networkStatus.DesiredNetworkState != networkStatus.CurrentNetworkState && alreadyWait < NetworkTotalWaitTime {
-		klog.Infof("GameServer %s/%s DesiredNetworkState: %s CurrentNetworkState: %s. %v remaining",
-			manager.gameServer.GetNamespace(), manager.gameServer.GetName(), networkStatus.DesiredNetworkState, networkStatus.CurrentNetworkState, NetworkTotalWaitTime-alreadyWait)
-		return true
+	if networkStatus.DesiredNetworkState != networkStatus.CurrentNetworkState {
+		if alreadyWait < NetworkTotalWaitTime {
+			klog.Infof("GameServer %s/%s DesiredNetworkState: %s CurrentNetworkState: %s. %v remaining",
+				manager.gameServer.GetNamespace(), manager.gameServer.GetName(), networkStatus.DesiredNetworkState, networkStatus.CurrentNetworkState, NetworkTotalWaitTime-alreadyWait)
+			return true
+		} else {
+			manager.eventRecorder.Eventf(manager.gameServer, corev1.EventTypeWarning, GsNetworkStateReason, "Network wait timeout: waited %v, max %v", alreadyWait, NetworkTotalWaitTime)
+		}
 	}
 	return false
 }
