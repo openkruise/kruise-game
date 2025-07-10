@@ -21,4 +21,4 @@ spec:
         secret:
           defaultMode: 420
           secretName:  kruise-game-certs
-          optional: true
+          optional: false
