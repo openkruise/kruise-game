@@ -146,6 +146,9 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 		Name: pod.Spec.NodeName,
 	}, node)
 	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return pod, nil
+		}
 		return pod, errors.NewPluginError(errors.ApiCallError, err.Error())
 	}
 	nodeIp := getAddress(node)
