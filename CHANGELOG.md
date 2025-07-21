@@ -1,5 +1,57 @@
 # Change Log
 
+## v1.0.0
+> Change log since v0.10.0
+
+### Features & Enhancements
+- add support svc external traffic policy for alibabacloud slb https://github.com/openkruise/kruise-game/pull/194
+- alibabacloud slb support map same TCP and UDP port https://github.com/openkruise/kruise-game/pull/197
+- feat: add annotation of opsState-last-changed-time https://github.com/openkruise/kruise-game/pull/200
+- Add hwcloud provider and elb plugin https://github.com/openkruise/kruise-game/pull/201
+- Increase the upper limit of ali-nlb ports https://github.com/openkruise/kruise-game/pull/204
+- Add index-offset-scheduler https://github.com/openkruise/kruise-game/pull/205
+- enhance: create service of ali-multi-nlbs in https://github.com/openkruise/kruise-game/pull/207
+- feat: support multi groups for nlbs https://github.com/openkruise/kruise-game/pull/213
+- feat: support range type for ReserveIDs https://github.com/openkruise/kruise-game/pull/209
+- ServiceQualities support serverless pod https://github.com/openkruise/kruise-game/pull/212
+- enhance: support svc external traffic policy for AlibabaCloud-Multi-NLBs https://github.com/openkruise/kruise-game/pull/216
+- enhance: add network ready condition for AlibabaCloud-Multi-NLBs plugin https://github.com/openkruise/kruise-game/pull/214
+- feat: add eip provider of VKE https://github.com/openkruise/kruise-game/pull/218
+- feat(metrics): improve observability for GameServersOpsStateCount metrics https://github.com/openkruise/kruise-game/pull/221
+- feat: support minAvailable percentage type https://github.com/openkruise/kruise-game/pull/222
+- enhance: activity of externalscaler relate to minAvailable https://github.com/openkruise/kruise-game/pull/228
+- enhance: Kubernetes-HostPort support container port same as host https://github.com/openkruise/kruise-game/pull/230
+- enhance: AlibabaCloud-SLB-SharedPort plugin support managed services https://github.com/openkruise/kruise-game/pull/224
+- cancel the limit of Ali NLB port range https://github.com/openkruise/kruise-game/pull/235
+- update TencentCloud-CLB plugin https://github.com/openkruise/kruise-game/pull/239
+- feat: volcengine-clb plugin support EnableClbScatter https://github.com/openkruise/kruise-game/pull/241
+- feat(Kubernetes-HostPort): support TCPUDP protocol https://github.com/openkruise/kruise-game/pull/244
+- feat: add annotation of state-last-changed-time https://github.com/openkruise/kruise-game/pull/238
+- Add PersistentVolumeClaimRetentionPolicy support to GameServerSet https://github.com/openkruise/kruise-game/pull/243
+- feat: support user-defined number of controller workers https://github.com/openkruise/kruise-game/pull/247
+- feat: support new plugin named AlibabaCloud-AutoNLBs https://github.com/openkruise/kruise-game/pull/246
+- AlibabaCloud-AutoNLBs support multi intranet type eip https://github.com/openkruise/kruise-game/pull/248
+- feat: add PreDeleteReplicas for GameServerSet status https://github.com/openkruise/kruise-game/pull/254
+- feat: support EnableMultiIngress for vke https://github.com/openkruise/kruise-game/pull/251
+- feat: add enable-cert-generation option https://github.com/openkruise/kruise-game/pull/245
+- enhance: network trigger time adapts to different time zones https://github.com/openkruise/kruise-game/pull/259
+
+### Bug Fixes
+- fix: support auto-scaling when replicas is 0 https://github.com/openkruise/kruise-game/pull/225
+- fix: update ppmHash when ServiceQualities changed https://github.com/openkruise/kruise-game/pull/226
+- fix the external scaler error when minAvailable is 0 https://github.com/openkruise/kruise-game/pull/227
+- fix old svc remain after pod recreate when using Volcengine-CLB https://github.com/openkruise/kruise-game/pull/233
+- fix duplicated port for Volcengine-CLB plugin https://github.com/openkruise/kruise-game/pull/240
+- bugfix: gs state should be changed from PreDelete to Deleting https://github.com/openkruise/kruise-game/pull/252
+- fix the meaning of CURRENT printcolumn when using kubectl https://github.com/openkruise/kruise-game/pull/253
+- bugfix: consider preDelete pods when scaling https://github.com/openkruise/kruise-game/pull/257
+- bugfix(Kubernetes-HostPort): allow pod update when node notfound https://github.com/openkruise/kruise-game/pull/260
+
+### Deps
+- update workflow ci go cache to v4 https://github.com/openkruise/kruise-game/pull/206
+- deps: update to k8s 0.30.10 https://github.com/openkruise/kruise-game/pull/210
+- update ci workflow to ubuntu-24.04 https://github.com/openkruise/kruise-game/pull/215
+
 ## v0.10.0
 > Change log since v0.9.0
 
