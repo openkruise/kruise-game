@@ -10,7 +10,7 @@ on:
 
 env:
   # Common versions
-  GO_VERSION: '1.21'
+  GO_VERSION: '1.22'
   GOLANGCI_VERSION: 'v1.58'
   DOCKER_BUILDX_VERSION: 'v0.4.2'
 
@@ -23,7 +23,7 @@ env:
 jobs:
 
   golangci-lint:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -34,7 +34,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: Cache Go Dependencies
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
@@ -50,7 +50,7 @@ jobs:
           skip-pkg-cache: true
 
   unit-tests:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v3
         with:
@@ -62,7 +62,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: Cache Go Dependencies
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}

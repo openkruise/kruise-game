@@ -18,6 +18,11 @@ package kubernetes
 
 import (
 	"context"
+	"net"
+	"strconv"
+	"strings"
+	"sync"
+
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	"github.com/openkruise/kruise-game/cloudprovider/errors"
@@ -29,19 +34,17 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	log "k8s.io/klog/v2"
-	"net"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strconv"
-	"strings"
-	"sync"
 )
 
 const (
 	HostPortNetwork = "Kubernetes-HostPort"
-	//ContainerPortsKey represents the configuration key when using hostPort.
-	//Its corresponding value format is as follows, containerName:port1/protocol1,port2/protocol2,... e.g. game-server:25565/TCP
-	//When no protocol is specified, TCP is used by default
+	// ContainerPortsKey represents the configuration key when using hostPort.
+	// Its corresponding value format is as follows, containerName:port1/protocol1,port2/protocol2,... e.g. game-server:25565/TCP
+	// When no protocol is specified, TCP is used by default
 	ContainerPortsKey = "ContainerPorts"
+	PortSameAsHost    = "SameAsHost"
+	ProtocolTCPUDP    = "TCPUDP"
 )
 
 type HostPortPlugin struct {
@@ -103,12 +106,30 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 		if ports, ok := containerPortsMap[container.Name]; ok {
 			containerPorts := container.Ports
 			for i, port := range ports {
-				containerPort := corev1.ContainerPort{
-					ContainerPort: port,
-					HostPort:      hostPorts[numToAlloc-1],
-					Protocol:      containerProtocolsMap[container.Name][i],
+				// -1 means same as host
+				if port == -1 {
+					port = hostPorts[numToAlloc-1]
 				}
-				containerPorts = append(containerPorts, containerPort)
+				protocol := containerProtocolsMap[container.Name][i]
+				hostPort := hostPorts[numToAlloc-1]
+				if protocol == ProtocolTCPUDP {
+					containerPorts = append(containerPorts,
+						corev1.ContainerPort{
+							ContainerPort: port,
+							HostPort:      hostPort,
+							Protocol:      corev1.ProtocolTCP,
+						}, corev1.ContainerPort{
+							ContainerPort: port,
+							HostPort:      hostPort,
+							Protocol:      corev1.ProtocolUDP,
+						})
+				} else {
+					containerPorts = append(containerPorts, corev1.ContainerPort{
+						ContainerPort: port,
+						HostPort:      hostPort,
+						Protocol:      protocol,
+					})
+				}
 				numToAlloc--
 			}
 			containers[cIndex].Ports = containerPorts
@@ -125,6 +146,9 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 		Name: pod.Spec.NodeName,
 	}, node)
 	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return pod, nil
+		}
 		return pod, errors.NewPluginError(errors.ApiCallError, err.Error())
 	}
 	nodeIp := getAddress(node)
@@ -338,9 +362,15 @@ func parseConfig(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.Pod)
 				for _, portString := range strings.Split(cpSlice[1], ",") {
 					ppSlice := strings.Split(portString, "/")
 					// handle port
-					port, err := strconv.ParseInt(ppSlice[0], 10, 32)
-					if err != nil {
-						continue
+					var port int64
+					var err error
+					if ppSlice[0] == PortSameAsHost {
+						port = -1
+					} else {
+						port, err = strconv.ParseInt(ppSlice[0], 10, 32)
+						if err != nil {
+							continue
+						}
 					}
 					numToAlloc++
 					ports = append(ports, int32(port))

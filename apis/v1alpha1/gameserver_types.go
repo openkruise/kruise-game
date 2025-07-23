@@ -23,16 +23,18 @@ import (
 )
 
 const (
-	GameServerStateKey           = "game.kruise.io/gs-state"
-	GameServerOpsStateKey        = "game.kruise.io/gs-opsState"
-	GameServerUpdatePriorityKey  = "game.kruise.io/gs-update-priority"
-	GameServerDeletePriorityKey  = "game.kruise.io/gs-delete-priority"
-	GameServerDeletingKey        = "game.kruise.io/gs-deleting"
-	GameServerNetworkType        = "game.kruise.io/network-type"
-	GameServerNetworkConf        = "game.kruise.io/network-conf"
-	GameServerNetworkDisabled    = "game.kruise.io/network-disabled"
-	GameServerNetworkStatus      = "game.kruise.io/network-status"
-	GameServerNetworkTriggerTime = "game.kruise.io/network-trigger-time"
+	GameServerStateKey                = "game.kruise.io/gs-state"
+	GameServerOpsStateKey             = "game.kruise.io/gs-opsState"
+	GameServerUpdatePriorityKey       = "game.kruise.io/gs-update-priority"
+	GameServerDeletePriorityKey       = "game.kruise.io/gs-delete-priority"
+	GameServerDeletingKey             = "game.kruise.io/gs-deleting"
+	GameServerNetworkType             = "game.kruise.io/network-type"
+	GameServerNetworkConf             = "game.kruise.io/network-conf"
+	GameServerNetworkDisabled         = "game.kruise.io/network-disabled"
+	GameServerNetworkStatus           = "game.kruise.io/network-status"
+	GameServerNetworkTriggerTime      = "game.kruise.io/network-trigger-time"
+	GameServerOpsStateLastChangedTime = "game.kruise.io/opsState-last-changed-time"
+	GameServerStateLastChangedTime    = "game.kruise.io/state-last-changed-time"
 )
 
 // GameServerSpec defines the desired state of GameServer

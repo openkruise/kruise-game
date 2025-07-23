@@ -2,6 +2,9 @@ package webhook
 
 import (
 	"context"
+	"reflect"
+	"testing"
+
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -9,11 +12,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
-	"testing"
 )
 
 var (
@@ -309,10 +310,7 @@ func TestGetPodFromRequest(t *testing.T) {
 		},
 	}
 
-	decoder, err := admission.NewDecoder(runtime.NewScheme())
-	if err != nil {
-		t.Error(err)
-	}
+	decoder := admission.NewDecoder(runtime.NewScheme())
 
 	for i, test := range tests {
 		actual, err := getPodFromRequest(test.req, decoder)

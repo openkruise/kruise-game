@@ -7,6 +7,6 @@ metadata:
 spec:
   ports:
     - port: 443
-      targetPort: 9876
+      targetPort: webhook-server
   selector:
     control-plane: controller-manager

@@ -2,10 +2,7 @@ package gameserverset
 
 import (
 	"context"
-	"reflect"
-	"strconv"
-	"testing"
-
+	"fmt"
 	appspub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
@@ -14,11 +11,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
+	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"strconv"
+	"testing"
 
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
@@ -36,20 +38,22 @@ func init() {
 }
 
 func TestComputeToScaleGs(t *testing.T) {
+	timeNow := metav1.Now()
+
 	tests := []struct {
-		newGssReserveIds []int
-		oldGssreserveIds []int
-		notExistIds      []int
+		newGssReserveIds sets.Set[int]
+		oldGssreserveIds sets.Set[int]
+		notExistIds      sets.Set[int]
 		expectedReplicas int
 		pods             []corev1.Pod
-		newReserveIds    []int
-		newManageIds     []int
+		newReserveIds    sets.Set[int]
+		newManageIds     sets.Set[int]
 	}{
 		// case 0
 		{
-			newGssReserveIds: []int{2, 3, 4},
-			oldGssreserveIds: []int{2, 3},
-			notExistIds:      []int{5},
+			newGssReserveIds: sets.New(2, 3, 4),
+			oldGssreserveIds: sets.New(2, 3),
+			notExistIds:      sets.New(5),
 			expectedReplicas: 3,
 			pods: []corev1.Pod{
 				{
@@ -89,14 +93,14 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newReserveIds: []int{2, 3, 4, 5},
-			newManageIds:  []int{0, 1, 6},
+			newReserveIds: sets.New(2, 3, 4, 5),
+			newManageIds:  sets.New(0, 1, 6),
 		},
 		// case 1
 		{
-			newGssReserveIds: []int{0, 2, 3},
-			oldGssreserveIds: []int{0, 4, 5},
-			notExistIds:      []int{},
+			newGssReserveIds: sets.New(0, 2, 3),
+			oldGssreserveIds: sets.New(0, 4, 5),
+			notExistIds:      sets.New[int](),
 			expectedReplicas: 3,
 			pods: []corev1.Pod{
 				{
@@ -145,14 +149,14 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newReserveIds: []int{0, 2, 3, 4, 5},
-			newManageIds:  []int{1, 6, 7},
+			newReserveIds: sets.New(0, 2, 3, 4, 5),
+			newManageIds:  sets.New(1, 6, 7),
 		},
 		// case 2
 		{
-			newGssReserveIds: []int{0},
-			oldGssreserveIds: []int{0, 4, 5},
-			notExistIds:      []int{},
+			newGssReserveIds: sets.New(0),
+			oldGssreserveIds: sets.New(0, 4, 5),
+			notExistIds:      sets.New[int](),
 			expectedReplicas: 1,
 			pods: []corev1.Pod{
 				{
@@ -201,14 +205,14 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newReserveIds: []int{0, 2, 3, 4, 5, 6, 7},
-			newManageIds:  []int{1},
+			newReserveIds: sets.New(0, 2, 3, 4, 5, 6, 7),
+			newManageIds:  sets.New(1),
 		},
 		// case 3
 		{
-			newGssReserveIds: []int{0, 2, 3},
-			oldGssreserveIds: []int{0, 4, 5},
-			notExistIds:      []int{},
+			newGssReserveIds: sets.New(0, 2, 3),
+			oldGssreserveIds: sets.New(0, 4, 5),
+			notExistIds:      sets.New[int](),
 			expectedReplicas: 4,
 			pods: []corev1.Pod{
 				{
@@ -257,14 +261,14 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newReserveIds: []int{0, 2, 3, 5},
-			newManageIds:  []int{1, 4, 6, 7},
+			newReserveIds: sets.New(0, 2, 3, 5),
+			newManageIds:  sets.New(1, 4, 6, 7),
 		},
 		// case 4
 		{
-			newGssReserveIds: []int{0, 3, 5},
-			oldGssreserveIds: []int{0, 3, 5},
-			notExistIds:      []int{},
+			newGssReserveIds: sets.New(0, 3, 5),
+			oldGssreserveIds: sets.New(0, 3, 5),
+			notExistIds:      sets.New[int](),
 			expectedReplicas: 1,
 			pods: []corev1.Pod{
 				{
@@ -304,14 +308,14 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newReserveIds: []int{0, 3, 5, 2, 4, 6},
-			newManageIds:  []int{1},
+			newReserveIds: sets.New(0, 3, 5, 2, 4, 6),
+			newManageIds:  sets.New(1),
 		},
 		// case 5
 		{
-			newGssReserveIds: []int{1, 2},
-			oldGssreserveIds: []int{},
-			notExistIds:      []int{1, 2},
+			newGssReserveIds: sets.New(1, 2),
+			oldGssreserveIds: sets.New[int](),
+			notExistIds:      sets.New(1, 2),
 			expectedReplicas: 2,
 			pods: []corev1.Pod{
 				{
@@ -333,44 +337,44 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newReserveIds: []int{1, 2},
-			newManageIds:  []int{0, 3},
+			newReserveIds: sets.New(1, 2),
+			newManageIds:  sets.New(0, 3),
 		},
 		// case 6
 		{
-			newGssReserveIds: []int{},
-			oldGssreserveIds: []int{},
-			notExistIds:      []int{},
+			newGssReserveIds: sets.New[int](),
+			oldGssreserveIds: sets.New[int](),
+			notExistIds:      sets.New[int](),
 			expectedReplicas: 3,
 			pods:             []corev1.Pod{},
-			newReserveIds:    []int{},
-			newManageIds:     []int{0, 1, 2},
+			newReserveIds:    sets.New[int](),
+			newManageIds:     sets.New(0, 1, 2),
 		},
 		// case 7
 		{
-			newGssReserveIds: []int{1, 2},
-			oldGssreserveIds: []int{},
-			notExistIds:      []int{},
+			newGssReserveIds: sets.New(1, 2),
+			oldGssreserveIds: sets.New[int](),
+			notExistIds:      sets.New[int](),
 			expectedReplicas: 3,
 			pods:             []corev1.Pod{},
-			newReserveIds:    []int{1, 2},
-			newManageIds:     []int{0, 3, 4},
+			newReserveIds:    sets.New(1, 2),
+			newManageIds:     sets.New(0, 3, 4),
 		},
 		// case 8
 		{
-			newGssReserveIds: []int{0},
-			oldGssreserveIds: []int{},
-			notExistIds:      []int{0},
+			newGssReserveIds: sets.New(0),
+			oldGssreserveIds: sets.New[int](),
+			notExistIds:      sets.New(0),
 			expectedReplicas: 1,
 			pods:             []corev1.Pod{},
-			newReserveIds:    []int{0},
-			newManageIds:     []int{1},
+			newReserveIds:    sets.New(0),
+			newManageIds:     sets.New(1),
 		},
 		// case 9
 		{
-			newGssReserveIds: []int{},
-			oldGssreserveIds: []int{1},
-			notExistIds:      []int{},
+			newGssReserveIds: sets.New[int](),
+			oldGssreserveIds: sets.New(1),
+			notExistIds:      sets.New[int](),
 			expectedReplicas: 2,
 			pods: []corev1.Pod{
 				{
@@ -392,14 +396,14 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newReserveIds: []int{1},
-			newManageIds:  []int{0, 2},
+			newReserveIds: sets.New(1),
+			newManageIds:  sets.New(0, 2),
 		},
 		// case 10
 		{
-			newGssReserveIds: []int{0},
-			oldGssreserveIds: []int{},
-			notExistIds:      []int{2, 3, 4},
+			newGssReserveIds: sets.New(0),
+			oldGssreserveIds: sets.New[int](),
+			notExistIds:      sets.New(2, 3, 4),
 			expectedReplicas: 4,
 			pods: []corev1.Pod{
 				{
@@ -412,31 +416,85 @@ func TestComputeToScaleGs(t *testing.T) {
 					},
 				},
 			},
-			newReserveIds: []int{0},
-			newManageIds:  []int{1, 2, 3, 4},
+			newReserveIds: sets.New(0),
+			newManageIds:  sets.New(1, 2, 3, 4),
+		},
+		// case 11
+		{
+			newGssReserveIds: sets.New[int](),
+			oldGssreserveIds: sets.New[int](),
+			notExistIds:      sets.New[int](2, 3, 4),
+			expectedReplicas: 4,
+			pods: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-0",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-1",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-2",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+							appspub.LifecycleStateKey:                      string(appspub.LifecycleStatePreparingDelete),
+						},
+						DeletionTimestamp: &timeNow,
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "xxx-3",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+							appspub.LifecycleStateKey:                      string(appspub.LifecycleStatePreparingDelete),
+						},
+					},
+				},
+			},
+			newReserveIds: sets.New(3),
+			newManageIds:  sets.New(0, 1, 2, 4),
 		},
 	}
 
 	for i, test := range tests {
-		t.Logf("case %d : newGssReserveIds: %v ; oldGssreserveIds: %v ; notExistIds: %v ; expectedReplicas: %d; pods: %v", i, test.newGssReserveIds, test.oldGssreserveIds, test.notExistIds, test.expectedReplicas, test.pods)
-		newManageIds, newReserveIds := computeToScaleGs(test.newGssReserveIds, test.oldGssreserveIds, test.notExistIds, test.expectedReplicas, test.pods)
-		if !util.IsSliceEqual(newReserveIds, test.newReserveIds) {
-			t.Errorf("case %d: expect newNotExistIds %v but got %v", i, test.newReserveIds, newReserveIds)
-		}
-		if !util.IsSliceEqual(newManageIds, test.newManageIds) {
-			t.Errorf("case %d: expect newManageIds %v but got %v", i, test.newManageIds, newManageIds)
-		}
-		t.Logf("case %d : newManageIds: %v ; newReserveIds: %v", i, newManageIds, newReserveIds)
+		t.Run(fmt.Sprintf("case %d", i), func(t *testing.T) {
+			t.Logf("case %d : newGssReserveIds: %v ; oldGssreserveIds: %v ; notExistIds: %v ; expectedReplicas: %d; pods: %v", i, test.newGssReserveIds, test.oldGssreserveIds, test.notExistIds, test.expectedReplicas, test.pods)
+			newManageIds, newReserveIds := computeToScaleGs(test.newGssReserveIds, test.oldGssreserveIds, test.notExistIds, test.expectedReplicas, test.pods)
+			if !newReserveIds.Equal(test.newReserveIds) {
+				t.Errorf("case %d: expect newReserveIds %v but got %v", i, test.newReserveIds, newReserveIds)
+			}
+			if !newManageIds.Equal(test.newManageIds) {
+				t.Errorf("case %d: expect newManageIds %v but got %v", i, test.newManageIds, newManageIds)
+			}
+			t.Logf("case %d : newManageIds: %v ; newReserveIds: %v", i, newManageIds, newReserveIds)
+		})
 	}
 }
 
 func TestIsNeedToScale(t *testing.T) {
 	tests := []struct {
+		name   string
 		gss    *gameKruiseV1alpha1.GameServerSet
 		asts   *kruiseV1beta1.StatefulSet
 		result bool
 	}{
 		{
+			name: "case 0",
 			gss: &gameKruiseV1alpha1.GameServerSet{
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
 					Replicas: ptr.To[int32](5),
@@ -453,13 +511,14 @@ func TestIsNeedToScale(t *testing.T) {
 			result: false,
 		},
 		{
+			name: "case 1",
 			gss: &gameKruiseV1alpha1.GameServerSet{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{gameKruiseV1alpha1.GameServerSetReserveIdsKey: "1,5"},
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
 					Replicas:             ptr.To[int32](5),
-					ReserveGameServerIds: []int{1, 5},
+					ReserveGameServerIds: []intstr.IntOrString{intstr.FromInt(1), intstr.FromInt(5)},
 				},
 			},
 			asts: &kruiseV1beta1.StatefulSet{
@@ -472,31 +531,53 @@ func TestIsNeedToScale(t *testing.T) {
 			},
 			result: false,
 		},
+		{
+			name: "case 2",
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					Replicas:             ptr.To[int32](5),
+					ReserveGameServerIds: []intstr.IntOrString{intstr.FromInt(1), intstr.FromInt(5)},
+				},
+			},
+			asts: &kruiseV1beta1.StatefulSet{
+				Spec: kruiseV1beta1.StatefulSetSpec{
+					Replicas: ptr.To[int32](5),
+				},
+				Status: kruiseV1beta1.StatefulSetStatus{
+					Replicas: int32(5),
+				},
+			},
+			result: true,
+		},
 	}
 	for _, test := range tests {
-		manager := &GameServerSetManager{
-			gameServerSet: test.gss,
-			asts:          test.asts,
-		}
-		actual := manager.IsNeedToScale()
-		if actual != test.result {
-			t.Errorf("expect spec %v but got %v", test.result, actual)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			manager := &GameServerSetManager{
+				gameServerSet: test.gss,
+				asts:          test.asts,
+			}
+			actual := manager.IsNeedToScale()
+			if actual != test.result {
+				t.Errorf("expect spec %v but got %v", test.result, actual)
+			}
+		})
 	}
 }
 
 func TestGameServerScale(t *testing.T) {
 	recorder := record.NewFakeRecorder(100)
+	//timeNow := metav1.Now()
 
 	tests := []struct {
+		name           string
 		gss            *gameKruiseV1alpha1.GameServerSet
 		asts           *kruiseV1beta1.StatefulSet
 		podList        []corev1.Pod
-		astsReserveIds []int
+		astsReserveIds sets.Set[int]
 		gssReserveIds  string
 	}{
-		// case0: scale down without reserveIds
 		{
+			name: "case0: scale down without reserveIds",
 			gss: &gameKruiseV1alpha1.GameServerSet{
 				ObjectMeta: metav1.ObjectMeta{
 					Namespace:   "xxx",
@@ -505,7 +586,7 @@ func TestGameServerScale(t *testing.T) {
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
 					Replicas:             ptr.To[int32](3),
-					ReserveGameServerIds: []int{1},
+					ReserveGameServerIds: []intstr.IntOrString{intstr.FromInt(1)},
 				},
 			},
 			asts: &kruiseV1beta1.StatefulSet{
@@ -515,7 +596,7 @@ func TestGameServerScale(t *testing.T) {
 				},
 				Spec: kruiseV1beta1.StatefulSetSpec{
 					Replicas:        ptr.To[int32](4),
-					ReserveOrdinals: []int{1},
+					ReserveOrdinals: []intstr.IntOrString{intstr.FromInt(1)},
 				},
 				Status: kruiseV1beta1.StatefulSetStatus{
 					Replicas: int32(4),
@@ -559,11 +640,11 @@ func TestGameServerScale(t *testing.T) {
 					},
 				},
 			},
-			astsReserveIds: []int{1, 2},
+			astsReserveIds: sets.New(1, 2),
 			gssReserveIds:  "1",
 		},
-		// case1: scale down with reserveIds
 		{
+			name: "case1: scale down with reserveIds",
 			gss: &gameKruiseV1alpha1.GameServerSet{
 				ObjectMeta: metav1.ObjectMeta{
 					Namespace:   "xxx",
@@ -572,7 +653,7 @@ func TestGameServerScale(t *testing.T) {
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
 					Replicas:             ptr.To[int32](3),
-					ReserveGameServerIds: []int{1, 0},
+					ReserveGameServerIds: []intstr.IntOrString{intstr.FromInt(1), intstr.FromInt(0)},
 				},
 			},
 			asts: &kruiseV1beta1.StatefulSet{
@@ -582,7 +663,7 @@ func TestGameServerScale(t *testing.T) {
 				},
 				Spec: kruiseV1beta1.StatefulSetSpec{
 					Replicas:        ptr.To[int32](4),
-					ReserveOrdinals: []int{1},
+					ReserveOrdinals: []intstr.IntOrString{intstr.FromInt(1)},
 				},
 				Status: kruiseV1beta1.StatefulSetStatus{
 					Replicas: int32(4),
@@ -626,11 +707,11 @@ func TestGameServerScale(t *testing.T) {
 					},
 				},
 			},
-			astsReserveIds: []int{1, 0},
-			gssReserveIds:  "1,0",
+			astsReserveIds: sets.New(0, 1),
+			gssReserveIds:  "0,1",
 		},
-		// case2: scale up with reserveIds
 		{
+			name: "case2: scale up with reserveIds",
 			gss: &gameKruiseV1alpha1.GameServerSet{
 				ObjectMeta: metav1.ObjectMeta{
 					Namespace:   "xxx",
@@ -639,7 +720,7 @@ func TestGameServerScale(t *testing.T) {
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
 					Replicas:             ptr.To[int32](5),
-					ReserveGameServerIds: []int{},
+					ReserveGameServerIds: []intstr.IntOrString{},
 				},
 			},
 			asts: &kruiseV1beta1.StatefulSet{
@@ -649,7 +730,7 @@ func TestGameServerScale(t *testing.T) {
 				},
 				Spec: kruiseV1beta1.StatefulSetSpec{
 					Replicas:        ptr.To[int32](4),
-					ReserveOrdinals: []int{1},
+					ReserveOrdinals: []intstr.IntOrString{intstr.FromInt(1)},
 				},
 				Status: kruiseV1beta1.StatefulSetStatus{
 					Replicas: int32(4),
@@ -696,8 +777,8 @@ func TestGameServerScale(t *testing.T) {
 			astsReserveIds: nil,
 			gssReserveIds:  "",
 		},
-		// case3: scale up with both reserveIds and others
 		{
+			name: "case3: scale up with both reserveIds and others",
 			gss: &gameKruiseV1alpha1.GameServerSet{
 				ObjectMeta: metav1.ObjectMeta{
 					Namespace:   "xxx",
@@ -706,7 +787,7 @@ func TestGameServerScale(t *testing.T) {
 				},
 				Spec: gameKruiseV1alpha1.GameServerSetSpec{
 					Replicas:             ptr.To[int32](5),
-					ReserveGameServerIds: []int{},
+					ReserveGameServerIds: []intstr.IntOrString{},
 				},
 			},
 			asts: &kruiseV1beta1.StatefulSet{
@@ -716,7 +797,7 @@ func TestGameServerScale(t *testing.T) {
 				},
 				Spec: kruiseV1beta1.StatefulSetSpec{
 					Replicas:        ptr.To[int32](3),
-					ReserveOrdinals: []int{1, 3},
+					ReserveOrdinals: []intstr.IntOrString{intstr.FromInt(1), intstr.FromInt(3)},
 				},
 				Status: kruiseV1beta1.StatefulSetStatus{
 					Replicas: int32(3),
@@ -754,44 +835,111 @@ func TestGameServerScale(t *testing.T) {
 			astsReserveIds: nil,
 			gssReserveIds:  "",
 		},
+		{
+			name: "case4: scale up when pods with PreDelete state",
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "case4",
+				},
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					Replicas:             ptr.To[int32](5),
+					ReserveGameServerIds: []intstr.IntOrString{},
+				},
+			},
+			asts: &kruiseV1beta1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "case4",
+				},
+				Spec: kruiseV1beta1.StatefulSetSpec{
+					Replicas:        ptr.To[int32](3),
+					ReserveOrdinals: []intstr.IntOrString{intstr.FromInt(3), intstr.FromInt(4), intstr.FromInt(5)},
+				},
+			},
+			podList: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "case4-0",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "case4-1",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "case4-2",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "case4-3",
+						Labels: map[string]string{
+							gameKruiseV1alpha1.GameServerOpsStateKey:       string(gameKruiseV1alpha1.None),
+							gameKruiseV1alpha1.GameServerDeletePriorityKey: "0",
+							appspub.LifecycleStateKey:                      string(appspub.LifecycleStatePreparingDelete),
+						},
+					},
+				},
+			},
+			astsReserveIds: sets.New(3),
+			gssReserveIds:  "",
+		},
 	}
 
 	for _, test := range tests {
-		objs := []client.Object{test.asts, test.gss}
-		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
-		manager := &GameServerSetManager{
-			gameServerSet: test.gss,
-			asts:          test.asts,
-			podList:       test.podList,
-			eventRecorder: recorder,
-			client:        c,
-		}
+		t.Run(test.name, func(t *testing.T) {
+			objs := []client.Object{test.asts, test.gss}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+			manager := &GameServerSetManager{
+				gameServerSet: test.gss,
+				asts:          test.asts,
+				podList:       test.podList,
+				eventRecorder: recorder,
+				client:        c,
+			}
 
-		if err := manager.GameServerScale(); err != nil {
-			t.Error(err)
-		}
+			if err := manager.GameServerScale(); err != nil {
+				t.Error(err)
+			}
 
-		updateAsts := &kruiseV1beta1.StatefulSet{}
-		if err := manager.client.Get(context.TODO(), types.NamespacedName{
-			Namespace: test.asts.Namespace,
-			Name:      test.asts.Name,
-		}, updateAsts); err != nil {
-			t.Error(err)
-		}
-		if !util.IsSliceEqual(updateAsts.Spec.ReserveOrdinals, test.astsReserveIds) {
-			t.Errorf("expect asts ReserveOrdinals %v but got %v", test.astsReserveIds, updateAsts.Spec.ReserveOrdinals)
-		}
+			updateAsts := &kruiseV1beta1.StatefulSet{}
+			if err := manager.client.Get(context.TODO(), types.NamespacedName{
+				Namespace: test.asts.Namespace,
+				Name:      test.asts.Name,
+			}, updateAsts); err != nil {
+				t.Error(err)
+			}
+			gotIds := util.GetReserveOrdinalIntSet(updateAsts.Spec.ReserveOrdinals)
+			if !gotIds.Equal(test.astsReserveIds) {
+				t.Errorf("expect asts ReserveOrdinals %v but got %v", test.astsReserveIds, gotIds)
+			}
 
-		updateGss := &gameKruiseV1alpha1.GameServerSet{}
-		if err := manager.client.Get(context.TODO(), types.NamespacedName{
-			Namespace: test.gss.Namespace,
-			Name:      test.gss.Name,
-		}, updateGss); err != nil {
-			t.Error(err)
-		}
-		if updateGss.GetAnnotations()[gameKruiseV1alpha1.GameServerSetReserveIdsKey] != test.gssReserveIds {
-			t.Errorf("expect asts ReserveOrdinals %v but got %v", test.gssReserveIds, updateGss.GetAnnotations()[gameKruiseV1alpha1.GameServerSetReserveIdsKey])
-		}
+			updateGss := &gameKruiseV1alpha1.GameServerSet{}
+			if err := manager.client.Get(context.TODO(), types.NamespacedName{
+				Namespace: test.gss.Namespace,
+				Name:      test.gss.Name,
+			}, updateGss); err != nil {
+				t.Error(err)
+			}
+			if updateGss.GetAnnotations()[gameKruiseV1alpha1.GameServerSetReserveIdsKey] != test.gssReserveIds {
+				t.Errorf("expect asts ReserveOrdinals %v but got %v", test.gssReserveIds, updateGss.GetAnnotations()[gameKruiseV1alpha1.GameServerSetReserveIdsKey])
+			}
+		})
 	}
 }
 
@@ -799,8 +947,8 @@ func TestSyncGameServer(t *testing.T) {
 	tests := []struct {
 		gss           *gameKruiseV1alpha1.GameServerSet
 		gsList        []*gameKruiseV1alpha1.GameServer
-		newManageIds  []int
-		oldManageIds  []int
+		newManageIds  sets.Set[int]
+		oldManageIds  sets.Set[int]
 		IdsLabelTure  []int
 		IdsLabelFalse []int
 	}{
@@ -850,8 +998,8 @@ func TestSyncGameServer(t *testing.T) {
 					},
 				},
 			},
-			oldManageIds:  []int{0, 2, 3, 4},
-			newManageIds:  []int{0, 1},
+			oldManageIds:  sets.New(0, 2, 3, 4),
+			newManageIds:  sets.New(0, 1),
 			IdsLabelTure:  []int{2, 3, 4},
 			IdsLabelFalse: []int{},
 		},
@@ -865,8 +1013,8 @@ func TestSyncGameServer(t *testing.T) {
 				},
 			},
 			gsList:        []*gameKruiseV1alpha1.GameServer{},
-			oldManageIds:  []int{},
-			newManageIds:  []int{0, 1, 3},
+			oldManageIds:  sets.New[int](),
+			newManageIds:  sets.New(0, 1, 3),
 			IdsLabelTure:  []int{},
 			IdsLabelFalse: []int{},
 		},
@@ -891,8 +1039,8 @@ func TestSyncGameServer(t *testing.T) {
 					},
 				},
 			},
-			oldManageIds:  []int{},
-			newManageIds:  []int{0},
+			oldManageIds:  sets.New[int](),
+			newManageIds:  sets.New(0),
 			IdsLabelTure:  []int{},
 			IdsLabelFalse: []int{0},
 		},
@@ -1011,6 +1159,7 @@ func TestNumberToKill(t *testing.T) {
 						Name:              "xxx-2",
 						Namespace:         "xxx",
 						DeletionTimestamp: &now,
+						Finalizers:        []string{"test"},
 					},
 				},
 				{
@@ -1052,6 +1201,7 @@ func TestNumberToKill(t *testing.T) {
 						Name:              "xxx-2",
 						Namespace:         "xxx",
 						DeletionTimestamp: &now,
+						Finalizers:        []string{"test"},
 					},
 				},
 				{
@@ -1093,6 +1243,7 @@ func TestNumberToKill(t *testing.T) {
 						Name:              "xxx-2",
 						Namespace:         "xxx",
 						DeletionTimestamp: &now,
+						Finalizers:        []string{"test"},
 					},
 				},
 				{
@@ -1226,6 +1377,320 @@ func TestGameServerSetManager_UpdateWorkload(t *testing.T) {
 
 		if !reflect.DeepEqual(updateAsts.Spec, test.newAsts.Spec) {
 			t.Errorf("expect new asts spec %v but got %v", test.newAsts.Spec, updateAsts.Spec)
+		}
+	}
+}
+
+func TestGameServerSetManager_SyncPodProbeMarker(t *testing.T) {
+	tests := []struct {
+		name         string
+		getGss       func() *gameKruiseV1alpha1.GameServerSet
+		getPPM       func() *kruiseV1alpha1.PodProbeMarker
+		newPPM       func() *kruiseV1alpha1.PodProbeMarker
+		expectedDone bool
+	}{
+		{
+			name: "first create PPM",
+			getGss: func() *gameKruiseV1alpha1.GameServerSet {
+				obj := &gameKruiseV1alpha1.GameServerSet{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "xxx",
+						Name:      "case0",
+					},
+					Spec: gameKruiseV1alpha1.GameServerSetSpec{
+						ServiceQualities: []gameKruiseV1alpha1.ServiceQuality{
+							{
+								Name:          "healthy",
+								ContainerName: "main",
+								Probe: corev1.Probe{
+									ProbeHandler: corev1.ProbeHandler{
+										Exec: &corev1.ExecAction{
+											Command: []string{"/bin/sh", "-c", "/healthy.sh"},
+										},
+									},
+								},
+							},
+						},
+					},
+				}
+				return obj
+			},
+			getPPM: func() *kruiseV1alpha1.PodProbeMarker {
+				return nil
+			},
+			newPPM: func() *kruiseV1alpha1.PodProbeMarker {
+				obj := &kruiseV1alpha1.PodProbeMarker{
+					Spec: kruiseV1alpha1.PodProbeMarkerSpec{
+						Selector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{
+								"game.kruise.io/owner-gss": "case0",
+							},
+						},
+						Probes: []kruiseV1alpha1.PodContainerProbe{
+							{
+								Name:             "healthy",
+								ContainerName:    "main",
+								PodConditionType: "game.kruise.io/healthy",
+								Probe: kruiseV1alpha1.ContainerProbeSpec{
+									Probe: corev1.Probe{
+										ProbeHandler: corev1.ProbeHandler{
+											Exec: &corev1.ExecAction{
+												Command: []string{"/bin/sh", "-c", "/healthy.sh"},
+											},
+										},
+										InitialDelaySeconds: DefaultInitialDelaySeconds,
+										TimeoutSeconds:      DefaultTimeoutSeconds,
+										PeriodSeconds:       DefaultPeriodSeconds,
+										SuccessThreshold:    DefaultSuccessThreshold,
+										FailureThreshold:    DefaultFailureThreshold,
+									},
+								},
+							},
+						},
+					},
+				}
+				return obj
+			},
+			expectedDone: false,
+		},
+		{
+			name: "second check PPM status, and false",
+			getGss: func() *gameKruiseV1alpha1.GameServerSet {
+				obj := &gameKruiseV1alpha1.GameServerSet{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "xxx",
+						Name:      "case0",
+					},
+					Spec: gameKruiseV1alpha1.GameServerSetSpec{
+						ServiceQualities: []gameKruiseV1alpha1.ServiceQuality{
+							{
+								Name:          "healthy",
+								ContainerName: "main",
+								Probe: corev1.Probe{
+									ProbeHandler: corev1.ProbeHandler{
+										Exec: &corev1.ExecAction{
+											Command: []string{"/bin/sh", "-c", "/healthy.sh"},
+										},
+									},
+								},
+							},
+						},
+					},
+				}
+				return obj
+			},
+			getPPM: func() *kruiseV1alpha1.PodProbeMarker {
+				obj := &kruiseV1alpha1.PodProbeMarker{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace:  "xxx",
+						Name:       "case0",
+						Generation: 1,
+						Annotations: map[string]string{
+							"game.kruise.io/ppm-hash": "3716291985",
+						},
+					},
+					Spec: kruiseV1alpha1.PodProbeMarkerSpec{
+						Selector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{
+								"game.kruise.io/owner-gss": "case0",
+							},
+						},
+						Probes: []kruiseV1alpha1.PodContainerProbe{
+							{
+								Name:             "healthy",
+								ContainerName:    "main",
+								PodConditionType: "game.kruise.io/healthy",
+								Probe: kruiseV1alpha1.ContainerProbeSpec{
+									Probe: corev1.Probe{
+										ProbeHandler: corev1.ProbeHandler{
+											Exec: &corev1.ExecAction{
+												Command: []string{"/bin/sh", "-c", "/healthy.sh"},
+											},
+										},
+										InitialDelaySeconds: DefaultInitialDelaySeconds,
+										TimeoutSeconds:      DefaultTimeoutSeconds,
+										PeriodSeconds:       DefaultPeriodSeconds,
+										SuccessThreshold:    DefaultSuccessThreshold,
+										FailureThreshold:    DefaultFailureThreshold,
+									},
+								},
+							},
+						},
+					},
+				}
+				return obj
+			},
+			newPPM: func() *kruiseV1alpha1.PodProbeMarker {
+				obj := &kruiseV1alpha1.PodProbeMarker{
+					Spec: kruiseV1alpha1.PodProbeMarkerSpec{
+						Selector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{
+								"game.kruise.io/owner-gss": "case0",
+							},
+						},
+						Probes: []kruiseV1alpha1.PodContainerProbe{
+							{
+								Name:             "healthy",
+								ContainerName:    "main",
+								PodConditionType: "game.kruise.io/healthy",
+								Probe: kruiseV1alpha1.ContainerProbeSpec{
+									Probe: corev1.Probe{
+										ProbeHandler: corev1.ProbeHandler{
+											Exec: &corev1.ExecAction{
+												Command: []string{"/bin/sh", "-c", "/healthy.sh"},
+											},
+										},
+										InitialDelaySeconds: DefaultInitialDelaySeconds,
+										TimeoutSeconds:      DefaultTimeoutSeconds,
+										PeriodSeconds:       DefaultPeriodSeconds,
+										SuccessThreshold:    DefaultSuccessThreshold,
+										FailureThreshold:    DefaultFailureThreshold,
+									},
+								},
+							},
+						},
+					},
+				}
+				return obj
+			},
+			expectedDone: false,
+		},
+		{
+			name: "third check PPM status, and true",
+			getGss: func() *gameKruiseV1alpha1.GameServerSet {
+				obj := &gameKruiseV1alpha1.GameServerSet{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "xxx",
+						Name:      "case0",
+					},
+					Spec: gameKruiseV1alpha1.GameServerSetSpec{
+						ServiceQualities: []gameKruiseV1alpha1.ServiceQuality{
+							{
+								Name:          "healthy",
+								ContainerName: "main",
+								Probe: corev1.Probe{
+									ProbeHandler: corev1.ProbeHandler{
+										Exec: &corev1.ExecAction{
+											Command: []string{"/bin/sh", "-c", "/healthy.sh"},
+										},
+									},
+								},
+							},
+						},
+					},
+				}
+				return obj
+			},
+			getPPM: func() *kruiseV1alpha1.PodProbeMarker {
+				obj := &kruiseV1alpha1.PodProbeMarker{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace:  "xxx",
+						Name:       "case0",
+						Generation: 1,
+						Annotations: map[string]string{
+							"game.kruise.io/ppm-hash": "3716291985",
+						},
+					},
+					Spec: kruiseV1alpha1.PodProbeMarkerSpec{
+						Selector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{
+								"game.kruise.io/owner-gss": "case0",
+							},
+						},
+						Probes: []kruiseV1alpha1.PodContainerProbe{
+							{
+								Name:             "healthy",
+								ContainerName:    "main",
+								PodConditionType: "game.kruise.io/healthy",
+								Probe: kruiseV1alpha1.ContainerProbeSpec{
+									Probe: corev1.Probe{
+										ProbeHandler: corev1.ProbeHandler{
+											Exec: &corev1.ExecAction{
+												Command: []string{"/bin/sh", "-c", "/healthy.sh"},
+											},
+										},
+										InitialDelaySeconds: DefaultInitialDelaySeconds,
+										TimeoutSeconds:      DefaultTimeoutSeconds,
+										PeriodSeconds:       DefaultPeriodSeconds,
+										SuccessThreshold:    DefaultSuccessThreshold,
+										FailureThreshold:    DefaultFailureThreshold,
+									},
+								},
+							},
+						},
+					},
+					Status: kruiseV1alpha1.PodProbeMarkerStatus{
+						ObservedGeneration: 1,
+					},
+				}
+				return obj
+			},
+			newPPM: func() *kruiseV1alpha1.PodProbeMarker {
+				obj := &kruiseV1alpha1.PodProbeMarker{
+					Spec: kruiseV1alpha1.PodProbeMarkerSpec{
+						Selector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{
+								"game.kruise.io/owner-gss": "case0",
+							},
+						},
+						Probes: []kruiseV1alpha1.PodContainerProbe{
+							{
+								Name:             "healthy",
+								ContainerName:    "main",
+								PodConditionType: "game.kruise.io/healthy",
+								Probe: kruiseV1alpha1.ContainerProbeSpec{
+									Probe: corev1.Probe{
+										ProbeHandler: corev1.ProbeHandler{
+											Exec: &corev1.ExecAction{
+												Command: []string{"/bin/sh", "-c", "/healthy.sh"},
+											},
+										},
+										InitialDelaySeconds: DefaultInitialDelaySeconds,
+										TimeoutSeconds:      DefaultTimeoutSeconds,
+										PeriodSeconds:       DefaultPeriodSeconds,
+										SuccessThreshold:    DefaultSuccessThreshold,
+										FailureThreshold:    DefaultFailureThreshold,
+									},
+								},
+							},
+						},
+					},
+				}
+				return obj
+			},
+			expectedDone: true,
+		},
+	}
+	recorder := record.NewFakeRecorder(100)
+	for _, test := range tests {
+		gss := test.getGss()
+		objs := []client.Object{gss}
+		ppm := test.getPPM()
+		if ppm != nil {
+			objs = append(objs, ppm)
+		}
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+		manager := &GameServerSetManager{
+			gameServerSet: gss,
+			client:        c,
+			eventRecorder: recorder,
+		}
+
+		err, done := manager.SyncPodProbeMarker()
+		if err != nil {
+			t.Errorf("SyncPodProbeMarker failed: %s", err.Error())
+		} else if done != test.expectedDone {
+			t.Errorf("expected(%v), but get(%v)", test.expectedDone, done)
+		}
+		newObj := &kruiseV1alpha1.PodProbeMarker{}
+		if err = manager.client.Get(context.TODO(), types.NamespacedName{
+			Namespace: gss.Namespace,
+			Name:      gss.Name,
+		}, newObj); err != nil {
+			t.Error(err)
+		}
+		if !reflect.DeepEqual(newObj.Spec, test.newPPM().Spec) {
+			t.Errorf("expect new asts spec %v but got %v", test.newPPM().Spec, newObj.Spec)
 		}
 	}
 }

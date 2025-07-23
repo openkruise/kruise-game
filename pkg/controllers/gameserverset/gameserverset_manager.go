@@ -18,6 +18,7 @@ package gameserverset
 
 import (
 	"context"
+	kruisePub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -26,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
@@ -45,9 +47,18 @@ type Control interface {
 	SyncStatus() error
 	IsNeedToScale() bool
 	IsNeedToUpdateWorkload() bool
-	SyncPodProbeMarker() error
+	SyncPodProbeMarker() (error, bool)
 	GetReplicasAfterKilling() *int32
+	SyncStsAndPodList(asts *kruiseV1beta1.StatefulSet, gsList []corev1.Pod)
 }
+
+const (
+	DefaultTimeoutSeconds      = 5
+	DefaultInitialDelaySeconds = 10
+	DefaultPeriodSeconds       = 3
+	DefaultSuccessThreshold    = 1
+	DefaultFailureThreshold    = 3
+)
 
 const (
 	ScaleReason          = "Scale"
@@ -65,14 +76,17 @@ type GameServerSetManager struct {
 	eventRecorder record.EventRecorder
 }
 
-func NewGameServerSetManager(gss *gameKruiseV1alpha1.GameServerSet, asts *kruiseV1beta1.StatefulSet, gsList []corev1.Pod, c client.Client, recorder record.EventRecorder) Control {
+func NewGameServerSetManager(gss *gameKruiseV1alpha1.GameServerSet, c client.Client, recorder record.EventRecorder) Control {
 	return &GameServerSetManager{
 		gameServerSet: gss,
-		asts:          asts,
-		podList:       gsList,
 		client:        c,
 		eventRecorder: recorder,
 	}
+}
+
+func (manager *GameServerSetManager) SyncStsAndPodList(asts *kruiseV1beta1.StatefulSet, gsList []corev1.Pod) {
+	manager.asts = asts
+	manager.podList = gsList
 }
 
 func (manager *GameServerSetManager) GetReplicasAfterKilling() *int32 {
@@ -96,13 +110,18 @@ func (manager *GameServerSetManager) GetReplicasAfterKilling() *int32 {
 	return ptr.To[int32](*gss.Spec.Replicas - int32(toKill))
 }
 
+// IsNeedToScale checks if the GameServerSet need to scale,
+// return True when the replicas or reserveGameServerIds is changed
 func (manager *GameServerSetManager) IsNeedToScale() bool {
 	gss := manager.gameServerSet
 	asts := manager.asts
+	gssSpecReserveIds := util.GetReserveOrdinalIntSet(gss.Spec.ReserveGameServerIds)
 
 	// no need to scale
 	return !(*gss.Spec.Replicas == *asts.Spec.Replicas &&
-		util.IsSliceEqual(util.StringToIntSlice(gss.GetAnnotations()[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ","), gss.Spec.ReserveGameServerIds))
+		util.StringToOrdinalIntSet(
+			gss.GetAnnotations()[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ",",
+		).Equal(gssSpecReserveIds))
 }
 
 func (manager *GameServerSetManager) GameServerScale() error {
@@ -111,33 +130,31 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	c := manager.client
 	ctx := context.Background()
 	var podList []corev1.Pod
-	for _, pod := range manager.podList {
-		if pod.GetDeletionTimestamp() == nil {
-			podList = append(podList, pod)
-		}
-	}
+	podList = append(podList, manager.podList...)
 
-	currentReplicas := len(podList)
+	currentReplicas := int(*asts.Spec.Replicas)
 	expectedReplicas := int(*gss.Spec.Replicas)
 	as := gss.GetAnnotations()
-	reserveIds := util.StringToIntSlice(as[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ",")
-	notExistIds := util.GetSliceInANotInB(asts.Spec.ReserveOrdinals, reserveIds)
-	gssReserveIds := gss.Spec.ReserveGameServerIds
+	specReserveIds := util.GetReserveOrdinalIntSet(asts.Spec.ReserveOrdinals)
+	reserveIds := util.GetReserveOrdinalIntSet(
+		util.StringToIntStrSlice(as[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ","))
+	notExistIds := util.GetSetInANotInB(specReserveIds, reserveIds)
+	gssReserveIds := util.GetReserveOrdinalIntSet(gss.Spec.ReserveGameServerIds)
 
-	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas; With newExplicit: %v; oldExplicit: %v; oldImplicit: %v",
-		gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas, gssReserveIds, reserveIds, notExistIds)
+	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas; With newExplicit: %v; oldExplicit: %v; oldImplicit: %v; total pods num: %d",
+		gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas, gssReserveIds, reserveIds, notExistIds, len(podList))
 	manager.eventRecorder.Eventf(gss, corev1.EventTypeNormal, ScaleReason, "scale from %d to %d", currentReplicas, expectedReplicas)
 
 	newManageIds, newReserveIds := computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, podList)
 
 	if gss.Spec.GameServerTemplate.ReclaimPolicy == gameKruiseV1alpha1.DeleteGameServerReclaimPolicy {
-		err := SyncGameServer(gss, c, newManageIds, util.GetIndexListFromPodList(podList))
+		err := SyncGameServer(gss, c, newManageIds, util.GetIndexSetFromPodList(podList))
 		if err != nil {
 			return err
 		}
 	}
 
-	asts.Spec.ReserveOrdinals = newReserveIds
+	asts.Spec.ReserveOrdinals = util.OrdinalSetToIntStrSlice(newReserveIds)
 	asts.Spec.Replicas = gss.Spec.Replicas
 	asts.Spec.ScaleStrategy = &kruiseV1beta1.StatefulSetScaleStrategy{
 		MaxUnavailable: gss.Spec.ScaleStrategy.MaxUnavailable,
@@ -152,8 +169,8 @@ func (manager *GameServerSetManager) GameServerScale() error {
 		gssReserveIds = newReserveIds
 	}
 	gssAnnotations := make(map[string]string)
-	gssAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] = util.IntSliceToString(gssReserveIds, ",")
-	patchGss := map[string]interface{}{"spec": map[string]interface{}{"reserveGameServerIds": gssReserveIds}, "metadata": map[string]map[string]string{"annotations": gssAnnotations}}
+	gssAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] = util.OrdinalSetToString(gssReserveIds)
+	patchGss := map[string]interface{}{"spec": map[string]interface{}{"reserveGameServerIds": util.OrdinalSetToIntStrSlice(gssReserveIds)}, "metadata": map[string]map[string]string{"annotations": gssAnnotations}}
 	patchGssBytes, _ := json.Marshal(patchGss)
 	err = c.Patch(ctx, gss, client.RawPatch(types.MergePatchType, patchGssBytes))
 	if err != nil {
@@ -169,23 +186,37 @@ func (manager *GameServerSetManager) GameServerScale() error {
 // notExistIds is the implicit id list.
 // gssReserveIds is the newest explicit id list.
 // pods is the pods that managed by gss now.
-func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedReplicas int, pods []corev1.Pod) ([]int, []int) {
+func computeToScaleGs(gssReserveIds, reserveIds, notExistIds sets.Set[int], expectedReplicas int, pods []corev1.Pod) (workloadManageIds sets.Set[int], newReverseIds sets.Set[int]) {
 	// 1. Get newest implicit list & explicit.
-	newAddExplicit := util.GetSliceInANotInB(gssReserveIds, reserveIds)
-	newDeleteExplicit := util.GetSliceInANotInB(reserveIds, gssReserveIds)
-	newImplicit := util.GetSliceInANotInB(notExistIds, newAddExplicit)
-	newImplicit = append(newImplicit, newDeleteExplicit...)
+	newAddExplicit := util.GetSetInANotInB(gssReserveIds, reserveIds)
+	newDeleteExplicit := util.GetSetInANotInB(reserveIds, gssReserveIds)
+	newImplicit := util.GetSetInANotInB(notExistIds, newAddExplicit)
+	newImplicit = newImplicit.Union(newDeleteExplicit)
 	newExplicit := gssReserveIds
 
 	// 2. Remove the pods ids is in newExplicit.
-	var workloadManageIds []int
+	workloadManageIds = sets.New[int]()
 	var newPods []corev1.Pod
+	deletingPodIds := sets.New[int]()
+	preDeletingPodIds := sets.New[int]()
 	for _, pod := range pods {
 		index := util.GetIndexFromGsName(pod.Name)
-		if util.IsNumInList(index, newExplicit) {
+
+		// if pod is deleting, exclude it.
+		if pod.GetDeletionTimestamp() != nil {
+			deletingPodIds.Insert(index)
 			continue
 		}
-		workloadManageIds = append(workloadManageIds, index)
+		// if pod is preDeleting, exclude it.
+		if lifecycleState, exist := pod.GetLabels()[kruisePub.LifecycleStateKey]; exist && lifecycleState == string(kruisePub.LifecycleStatePreparingDelete) {
+			preDeletingPodIds.Insert(index)
+			continue
+		}
+
+		if newExplicit.Has(index) {
+			continue
+		}
+		workloadManageIds.Insert(index)
 		newPods = append(newPods, pod)
 	}
 
@@ -197,38 +228,38 @@ func computeToScaleGs(gssReserveIds, reserveIds, notExistIds []int, expectedRepl
 		num := 0
 		var toAdd []int
 		for i := 0; num < expectedReplicas-existReplicas; i++ {
-			if util.IsNumInList(i, workloadManageIds) || util.IsNumInList(i, newExplicit) {
+			if workloadManageIds.Has(i) || newExplicit.Has(i) || preDeletingPodIds.Has(i) {
 				continue
 			}
-			if util.IsNumInList(i, newImplicit) {
-				newImplicit = util.GetSliceInANotInB(newImplicit, []int{i})
+			if newImplicit.Has(i) {
+				newImplicit.Delete(i)
 			}
 			toAdd = append(toAdd, i)
 			num++
 		}
-		workloadManageIds = append(workloadManageIds, toAdd...)
+		workloadManageIds.Insert(toAdd...)
 	} else if existReplicas > expectedReplicas {
 		// Delete pods.
 		sortedGs := util.DeleteSequenceGs(newPods)
 		sort.Sort(sortedGs)
-		toDelete := util.GetIndexListFromPodList(sortedGs[:existReplicas-expectedReplicas])
-		workloadManageIds = util.GetSliceInANotInB(workloadManageIds, toDelete)
-		newImplicit = append(newImplicit, toDelete...)
+		toDelete := util.GetIndexSetFromPodList(sortedGs[:existReplicas-expectedReplicas])
+		workloadManageIds = util.GetSetInANotInB(workloadManageIds, toDelete)
+		newImplicit = newImplicit.Union(toDelete)
 	}
 
-	return workloadManageIds, append(newImplicit, newExplicit...)
+	return workloadManageIds, newImplicit.Union(newExplicit)
 }
 
-func SyncGameServer(gss *gameKruiseV1alpha1.GameServerSet, c client.Client, newManageIds, oldManageIds []int) error {
+func SyncGameServer(gss *gameKruiseV1alpha1.GameServerSet, c client.Client, newManageIds, oldManageIds sets.Set[int]) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	addIds := util.GetSliceInANotInB(newManageIds, oldManageIds)
-	deleteIds := util.GetSliceInANotInB(oldManageIds, newManageIds)
+	addIds := util.GetSetInANotInB(newManageIds, oldManageIds)
+	deleteIds := util.GetSetInANotInB(oldManageIds, newManageIds)
 
 	errch := make(chan error, len(addIds)+len(deleteIds))
 	var wg sync.WaitGroup
-	for _, gsId := range append(addIds, deleteIds...) {
+	for _, gsId := range addIds.Union(deleteIds).UnsortedList() {
 		wg.Add(1)
 		id := gsId
 		go func(ctx context.Context) {
@@ -249,7 +280,7 @@ func SyncGameServer(gss *gameKruiseV1alpha1.GameServerSet, c client.Client, newM
 				return
 			}
 
-			if util.IsNumInList(id, addIds) && gs.GetLabels()[gameKruiseV1alpha1.GameServerDeletingKey] == "true" {
+			if addIds.Has(id) && gs.GetLabels()[gameKruiseV1alpha1.GameServerDeletingKey] == "true" {
 				gsLabels := make(map[string]string)
 				gsLabels[gameKruiseV1alpha1.GameServerDeletingKey] = "false"
 				patchGs := map[string]interface{}{"metadata": map[string]map[string]string{"labels": gsLabels}}
@@ -266,7 +297,7 @@ func SyncGameServer(gss *gameKruiseV1alpha1.GameServerSet, c client.Client, newM
 				klog.Infof("GameServer %s/%s DeletingKey turn into false", gss.Namespace, gsName)
 			}
 
-			if util.IsNumInList(id, deleteIds) && gs.GetLabels()[gameKruiseV1alpha1.GameServerDeletingKey] != "true" {
+			if deleteIds.Has(id) && gs.GetLabels()[gameKruiseV1alpha1.GameServerDeletingKey] != "true" {
 				gsLabels := make(map[string]string)
 				gsLabels[gameKruiseV1alpha1.GameServerDeletingKey] = "true"
 				patchGs := map[string]interface{}{"metadata": map[string]map[string]string{"labels": gsLabels}}
@@ -317,7 +348,7 @@ func (manager *GameServerSetManager) UpdateWorkload() error {
 	return retryErr
 }
 
-func (manager *GameServerSetManager) SyncPodProbeMarker() error {
+func (manager *GameServerSetManager) SyncPodProbeMarker() (error, bool) {
 	gss := manager.gameServerSet
 	sqs := gss.Spec.ServiceQualities
 	c := manager.client
@@ -332,27 +363,38 @@ func (manager *GameServerSetManager) SyncPodProbeMarker() error {
 	if err != nil {
 		if errors.IsNotFound(err) {
 			if sqs == nil {
-				return nil
+				return nil, true
 			}
 			// create ppm
 			manager.eventRecorder.Event(gss, corev1.EventTypeNormal, CreatePPMReason, "create PodProbeMarker")
-			return c.Create(ctx, createPpm(gss))
+			ppm = createPpm(gss)
+			klog.Infof("GameserverSet(%s/%s) create PodProbeMarker(%s)", gss.Namespace, gss.Name, ppm.Name)
+			return c.Create(ctx, ppm), false
 		}
-		return err
+		return err, false
 	}
 
 	// delete ppm
 	if sqs == nil {
-		return c.Delete(ctx, ppm)
+		klog.Infof("GameserverSet(%s/%s) ServiceQualities is empty, and delete PodProbeMarker", gss.Namespace, gss.Name)
+		return c.Delete(ctx, ppm), false
 	}
 
 	// update ppm
 	if util.GetHash(gss.Spec.ServiceQualities) != ppm.GetAnnotations()[gameKruiseV1alpha1.PpmHashKey] {
 		ppm.Spec.Probes = constructProbes(gss)
+		ppm.Annotations[gameKruiseV1alpha1.PpmHashKey] = util.GetHash(gss.Spec.ServiceQualities)
+		by, _ := json.Marshal(ppm.Spec.Probes)
 		manager.eventRecorder.Event(gss, corev1.EventTypeNormal, UpdatePPMReason, "update PodProbeMarker")
-		return c.Update(ctx, ppm)
+		klog.Infof("GameserverSet(%s/%s) update PodProbeMarker(%s) body(%s)", gss.Namespace, gss.Name, ppm.Name, string(by))
+		return c.Update(ctx, ppm), false
 	}
-	return nil
+	// Determine PodProbeMarker Status to ensure that PodProbeMarker resources have been processed by kruise-manager
+	if ppm.Generation != ppm.Status.ObservedGeneration {
+		klog.Infof("GameserverSet(%s/%s) PodProbeMarker(%s) status observedGeneration is inconsistent, and wait a moment", gss.Namespace, gss.Name, ppm.Name)
+		return nil, false
+	}
+	return nil, true
 }
 
 func constructProbes(gss *gameKruiseV1alpha1.GameServerSet) []kruiseV1alpha1.PodContainerProbe {
@@ -365,6 +407,21 @@ func constructProbes(gss *gameKruiseV1alpha1.GameServerSet) []kruiseV1alpha1.Pod
 				Probe: sq.Probe,
 			},
 			PodConditionType: util.AddPrefixGameKruise(sq.Name),
+		}
+		if probe.Probe.TimeoutSeconds == 0 {
+			probe.Probe.TimeoutSeconds = DefaultTimeoutSeconds
+		}
+		if probe.Probe.InitialDelaySeconds == 0 {
+			probe.Probe.InitialDelaySeconds = DefaultInitialDelaySeconds
+		}
+		if probe.Probe.PeriodSeconds == 0 {
+			probe.Probe.PeriodSeconds = DefaultPeriodSeconds
+		}
+		if probe.Probe.SuccessThreshold == 0 {
+			probe.Probe.SuccessThreshold = DefaultSuccessThreshold
+		}
+		if probe.Probe.FailureThreshold == 0 {
+			probe.Probe.FailureThreshold = DefaultFailureThreshold
 		}
 		probes = append(probes, probe)
 	}
@@ -410,11 +467,13 @@ func (manager *GameServerSetManager) SyncStatus() error {
 
 	maintainingGs := 0
 	waitToBeDeletedGs := 0
+	preDeleteGs := 0
 
 	for _, pod := range podList {
 
 		podLabels := pod.GetLabels()
 		opsState := podLabels[gameKruiseV1alpha1.GameServerOpsStateKey]
+		state := podLabels[gameKruiseV1alpha1.GameServerStateKey]
 
 		// ops state
 		switch opsState {
@@ -422,6 +481,12 @@ func (manager *GameServerSetManager) SyncStatus() error {
 			waitToBeDeletedGs++
 		case string(gameKruiseV1alpha1.Maintaining):
 			maintainingGs++
+		}
+
+		// state
+		switch state {
+		case string(gameKruiseV1alpha1.PreDelete):
+			preDeleteGs++
 		}
 	}
 
@@ -434,6 +499,7 @@ func (manager *GameServerSetManager) SyncStatus() error {
 		UpdatedReadyReplicas:    asts.Status.UpdatedReadyReplicas,
 		MaintainingReplicas:     ptr.To[int32](int32(maintainingGs)),
 		WaitToBeDeletedReplicas: ptr.To[int32](int32(waitToBeDeletedGs)),
+		PreDeleteReplicas:       ptr.To[int32](int32(preDeleteGs)),
 		LabelSelector:           asts.Status.LabelSelector,
 		ObservedGeneration:      gss.GetGeneration(),
 	}

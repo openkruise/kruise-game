@@ -18,15 +18,20 @@ package volcengine
 
 import (
 	"context"
-	"k8s.io/utils/ptr"
+	"encoding/json"
 	"reflect"
 	"sync"
 	"testing"
 
+	"k8s.io/utils/ptr"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
@@ -51,7 +56,10 @@ func TestAllocateDeAllocate(t *testing.T) {
 		num:    3,
 	}
 
-	lbId, ports := test.clb.allocate(test.lbIds, test.num, test.podKey)
+	lbId, ports, err := test.clb.allocate(test.lbIds, test.num, test.podKey)
+	if err != nil {
+		t.Errorf("allocate failed: %v", err)
+	}
 	if _, exist := test.clb.podAllocate[test.podKey]; !exist {
 		t.Errorf("podAllocate[%s] is empty after allocated", test.podKey)
 	}
@@ -135,6 +143,18 @@ func TestParseLbConfig(t *testing.T) {
 		if test.isFixed != sc.isFixed {
 			t.Errorf("isFixed expect: %v, actual: %v", test.isFixed, sc.isFixed)
 		}
+	}
+}
+
+func TestParseLbConfig_EnableClbScatter(t *testing.T) {
+	conf := []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: ClbIdsConfigName, Value: "clb-1,clb-2"},
+		{Name: PortProtocolsConfigName, Value: "80,81"},
+		{Name: EnableClbScatterConfigName, Value: "true"},
+	}
+	sc := parseLbConfig(conf)
+	if !sc.enableClbScatter {
+		t.Errorf("enableClbScatter expect true, got false")
 	}
 }
 
@@ -330,7 +350,7 @@ func TestClbPlugin_consSvc(t *testing.T) {
 						SvcSelectorKey: "test-pod",
 					},
 					Ports: []corev1.ServicePort{{
-						Name:     "82",
+						Name:     "82-tcp",
 						Port:     80,
 						Protocol: "TCP",
 						TargetPort: intstr.IntOrString{
@@ -351,8 +371,755 @@ func TestClbPlugin_consSvc(t *testing.T) {
 			cache:       tt.fields.cache,
 			podAllocate: tt.fields.podAllocate,
 		}
-		if got := c.consSvc(tt.args.config, tt.args.pod, tt.args.client, tt.args.ctx); !reflect.DeepEqual(got, tt.want) {
+		if got, _ := c.consSvc(tt.args.config, tt.args.pod, tt.args.client, tt.args.ctx); !reflect.DeepEqual(got, tt.want) {
 			t.Errorf("consSvc() = %v, want %v", got, tt.want)
 		}
+	}
+}
+
+func TestAllocateScatter(t *testing.T) {
+	clb := &ClbPlugin{
+		maxPort:     120,
+		minPort:     100,
+		cache:       map[string]portAllocated{"clb-1": {}, "clb-2": {}},
+		podAllocate: make(map[string]string),
+		mutex:       sync.RWMutex{},
+	}
+	// 初始化 cache
+	for _, id := range []string{"clb-1", "clb-2"} {
+		clb.cache[id] = make(portAllocated)
+		for i := clb.minPort; i < clb.maxPort; i++ {
+			clb.cache[id][i] = false
+		}
+	}
+	lbIds := []string{"clb-1", "clb-2"}
+	// 连续分配 4 次，轮询应分布到 clb-1, clb-2, clb-1, clb-2
+	results := make([]string, 0)
+	for i := 0; i < 4; i++ {
+		lbId, _, err := clb.allocate(lbIds, 1, "ns/pod"+string(rune(i)), true)
+		if err != nil {
+			t.Errorf("error when allocating ports")
+		}
+		results = append(results, lbId)
+	}
+	if !(results[0] != results[1] && results[0] == results[2] && results[1] == results[3]) {
+		t.Errorf("scatter allocate not round robin: %v", results)
+	}
+}
+func TestAllocate2(t *testing.T) {
+	tests := []struct {
+		name             string
+		lbIds            []string
+		num              int
+		nsName           string
+		clb              *ClbPlugin
+		enableClbScatter bool
+		wantLbId         string
+		wantPortsLen     int
+		wantErr          bool
+	}{
+		{
+			name:     "no load balancer IDs",
+			lbIds:    []string{},
+			num:      1,
+			nsName:   "default/test-pod",
+			clb:      &ClbPlugin{mutex: sync.RWMutex{}},
+			wantErr:  true,
+			wantLbId: "",
+		},
+		{
+			name:   "normal allocation without scatter",
+			lbIds:  []string{"lb-1", "lb-2"},
+			num:    2,
+			nsName: "default/test-pod",
+			clb: &ClbPlugin{
+				maxPort:     600,
+				minPort:     500,
+				cache:       map[string]portAllocated{},
+				podAllocate: map[string]string{},
+				mutex:       sync.RWMutex{},
+			},
+			wantLbId:     "lb-1",
+			wantPortsLen: 2,
+			wantErr:      false,
+		},
+		{
+			name:   "allocation with scatter enabled",
+			lbIds:  []string{"lb-1", "lb-2"},
+			num:    2,
+			nsName: "default/test-pod",
+			clb: &ClbPlugin{
+				maxPort:        600,
+				minPort:        500,
+				cache:          map[string]portAllocated{},
+				podAllocate:    map[string]string{},
+				mutex:          sync.RWMutex{},
+				lastScatterIdx: 0,
+			},
+			enableClbScatter: true,
+			wantLbId:         "lb-1", // First allocation should go to lb-1
+			wantPortsLen:     2,
+			wantErr:          false,
+		},
+		{
+			name:   "insufficient ports available",
+			lbIds:  []string{"lb-1"},
+			num:    10, // Request more ports than available
+			nsName: "default/test-pod",
+			clb: &ClbPlugin{
+				maxPort: 505, // Only 5 ports available (500-504)
+				minPort: 500,
+				cache: map[string]portAllocated{
+					"lb-1": map[int32]bool{
+						502: true, // One port already allocated
+					},
+				},
+				podAllocate: map[string]string{},
+				mutex:       sync.RWMutex{},
+			},
+			wantErr: true,
+		},
+		{
+			name:   "allocate multiple ports",
+			lbIds:  []string{"lb-1"},
+			num:    3,
+			nsName: "default/test-pod",
+			clb: &ClbPlugin{
+				maxPort:     510,
+				minPort:     500,
+				cache:       map[string]portAllocated{},
+				podAllocate: map[string]string{},
+				mutex:       sync.RWMutex{},
+			},
+			wantLbId:     "lb-1",
+			wantPortsLen: 3,
+			wantErr:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotLbId, gotPorts, err := tt.clb.allocate(tt.lbIds, tt.num, tt.nsName, tt.enableClbScatter)
+
+			// Check error
+			if (err != nil) != tt.wantErr {
+				t.Errorf("allocate() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			// If we expect an error, we don't need to check the other conditions
+			if tt.wantErr {
+				return
+			}
+
+			// Check lbId
+			if gotLbId != tt.wantLbId {
+				t.Errorf("allocate() gotLbId = %v, want %v", gotLbId, tt.wantLbId)
+			}
+
+			// Check number of ports
+			if len(gotPorts) != tt.wantPortsLen {
+				t.Errorf("allocate() got %d ports, want %d", len(gotPorts), tt.wantPortsLen)
+			}
+
+			// Check if ports are within range
+			for _, port := range gotPorts {
+				if port < tt.clb.minPort || port >= tt.clb.maxPort {
+					t.Errorf("allocated port %d out of range [%d, %d)", port, tt.clb.minPort, tt.clb.maxPort)
+				}
+
+				// Verify the port is marked as allocated in cache
+				if !tt.clb.cache[gotLbId][port] {
+					t.Errorf("port %d not marked as allocated in cache", port)
+				}
+			}
+
+			// Check if podAllocate map is updated
+			if allocStr, ok := tt.clb.podAllocate[tt.nsName]; !ok {
+				t.Errorf("podAllocate not updated for %s", tt.nsName)
+			} else {
+				expected := gotLbId + ":" + util.Int32SliceToString(gotPorts, ",")
+				if allocStr != expected {
+					t.Errorf("podAllocate[%s] = %s, want %s", tt.nsName, allocStr, expected)
+				}
+			}
+		})
+	}
+}
+func TestClbPlugin_OnPodUpdated(t *testing.T) {
+	baseAnnotations := map[string]string{
+		gamekruiseiov1alpha1.GameServerNetworkType: "clb",
+	}
+	// Create test cases
+	tests := []struct {
+		name               string
+		serviceExists      bool
+		serviceOwnerUID    types.UID
+		networkStatus      *gamekruiseiov1alpha1.NetworkStatus
+		networkConfig      []gamekruiseiov1alpha1.NetworkConfParams
+		serviceType        corev1.ServiceType
+		hasIngress         bool
+		networkDisabled    bool
+		expectNetworkReady bool
+		expectErr          bool
+	}{
+		{
+			name:          "Service not found",
+			serviceExists: false,
+			networkStatus: &gamekruiseiov1alpha1.NetworkStatus{
+				CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
+			},
+			networkConfig: []gamekruiseiov1alpha1.NetworkConfParams{
+				{Name: ClbIdsConfigName, Value: "clb-test"},
+				{Name: PortProtocolsConfigName, Value: "80"},
+			},
+			expectErr: false,
+		},
+		{
+			name:            "Service exists but owned by another pod",
+			serviceExists:   true,
+			serviceOwnerUID: "other-uid",
+			networkStatus: &gamekruiseiov1alpha1.NetworkStatus{
+				CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
+			},
+			networkConfig: []gamekruiseiov1alpha1.NetworkConfParams{
+				{Name: ClbIdsConfigName, Value: "clb-test"},
+				{Name: PortProtocolsConfigName, Value: "80"},
+			},
+			expectErr: false,
+		},
+		{
+			name:          "Network disabled",
+			serviceExists: true,
+			serviceType:   corev1.ServiceTypeLoadBalancer,
+			networkStatus: &gamekruiseiov1alpha1.NetworkStatus{
+				CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
+			},
+			networkConfig: []gamekruiseiov1alpha1.NetworkConfParams{
+				{Name: ClbIdsConfigName, Value: "clb-test"},
+				{Name: PortProtocolsConfigName, Value: "80"},
+			},
+			networkDisabled: true,
+			expectErr:       false,
+		},
+		{
+			name:          "Network ready",
+			serviceExists: true,
+			serviceType:   corev1.ServiceTypeLoadBalancer,
+			hasIngress:    true,
+			networkStatus: &gamekruiseiov1alpha1.NetworkStatus{
+				CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
+			},
+			networkConfig: []gamekruiseiov1alpha1.NetworkConfParams{
+				{Name: ClbIdsConfigName, Value: "clb-test"},
+				{Name: PortProtocolsConfigName, Value: "80"},
+			},
+			expectNetworkReady: true,
+			expectErr:          false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// 动态生成 annotation
+			ann := make(map[string]string)
+			for k, v := range baseAnnotations {
+				ann[k] = v
+			}
+			if tt.networkConfig != nil {
+				confBytes, _ := json.Marshal(tt.networkConfig)
+				ann[gamekruiseiov1alpha1.GameServerNetworkConf] = string(confBytes)
+			}
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "test-pod",
+					Namespace:   "default",
+					UID:         "test-uid",
+					Annotations: ann,
+				},
+				Status: corev1.PodStatus{
+					PodIP: "192.168.1.1",
+				},
+			}
+
+			var svc *corev1.Service
+			if tt.serviceExists {
+				svc = &corev1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      pod.Name,
+						Namespace: pod.Namespace,
+					},
+					Spec: corev1.ServiceSpec{
+						Type: tt.serviceType,
+						Ports: []corev1.ServicePort{
+							{
+								Port:       80,
+								TargetPort: intstr.FromInt(8080),
+								Protocol:   corev1.ProtocolTCP,
+							},
+						},
+					},
+				}
+				if tt.serviceOwnerUID != "" {
+					svc.OwnerReferences = []metav1.OwnerReference{
+						{
+							Kind: "Pod",
+							UID:  tt.serviceOwnerUID,
+						},
+					}
+				}
+				if tt.hasIngress {
+					svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{
+						{IP: "192.168.1.100"},
+					}
+				}
+			}
+
+			scheme := runtime.NewScheme()
+			_ = corev1.AddToScheme(scheme)
+			_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+			builder := fake.NewClientBuilder().WithScheme(scheme)
+			if svc != nil {
+				builder = builder.WithObjects(svc)
+			}
+			fakeClient := builder.Build()
+			clb := &ClbPlugin{
+				maxPort:     600,
+				minPort:     500,
+				cache:       make(map[string]portAllocated),
+				podAllocate: make(map[string]string),
+				mutex:       sync.RWMutex{},
+			}
+
+			resultPod, err := clb.OnPodUpdated(fakeClient, pod, context.Background())
+
+			if (err != nil) != tt.expectErr {
+				t.Errorf("OnPodUpdated() error = %v, expectErr %v", err, tt.expectErr)
+			}
+			_ = resultPod
+		})
+	}
+}
+
+func TestClbPlugin_OnPodDeleted(t *testing.T) {
+	ctx := context.Background()
+	// 非 fixed 情况
+	clb := &ClbPlugin{
+		podAllocate: map[string]string{
+			"ns1/pod1": "clb-xxx:100",
+			"ns2/pod2": "clb-xxx:101",
+		},
+		cache: map[string]portAllocated{
+			"clb-xxx": {
+				100: true,
+				101: true,
+			},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pod1",
+			Namespace: "ns1",
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType: "clb",
+				gamekruiseiov1alpha1.GameServerNetworkConf: `[{"Name":"ClbIds","Value":"clb-xxx"},{"Name":"PortProtocols","Value":"100"}]`,
+			},
+		},
+	}
+	fakeClient := fake.NewClientBuilder().Build()
+	_ = clb.OnPodDeleted(fakeClient, pod, ctx)
+	if _, ok := clb.podAllocate["ns1/pod1"]; ok {
+		t.Errorf("OnPodDeleted should deAllocate podKey ns1/pod1")
+	}
+
+	// fixed 情况，gss 不存在，应该 deAllocate 所有关联 key
+	clb2 := &ClbPlugin{
+		podAllocate: map[string]string{
+			"ns2/gss2": "clb-xxx:201",
+		},
+		cache: map[string]portAllocated{
+			"clb-xxx": {
+				200: true,
+				201: true,
+			},
+		},
+	}
+	pod2 := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pod2",
+			Namespace: "ns2",
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType: "clb",
+				gamekruiseiov1alpha1.GameServerNetworkConf: `[{"Name":"ClbIds","Value":"clb-xxx"},{"Name":"PortProtocols","Value":"200"},{"Name":"Fixed","Value":"true"}]`,
+			},
+			Labels: map[string]string{
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: "gss1",
+			},
+		},
+	}
+	fakeClient2 := fake.NewClientBuilder().Build() // 不包含 gss，模拟 not found
+	_ = clb2.OnPodDeleted(fakeClient2, pod2, ctx)
+	if _, ok := clb2.podAllocate["ns2/gss1"]; ok {
+		t.Errorf("OnPodDeleted should deAllocate podKey ns2/gss1 for fixed case (gss not found)")
+	}
+
+	// fixed 情况，gss 存在且无删除时间戳，不应 deAllocate
+	gss := &gamekruiseiov1alpha1.GameServerSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gss1",
+			Namespace: "ns2",
+		},
+	}
+	clb3 := &ClbPlugin{
+		podAllocate: map[string]string{
+			"ns2/gss1": "clb-xxx:200",
+		},
+		cache: map[string]portAllocated{
+			"clb-xxx": {
+				200: true,
+				101: true,
+			},
+		},
+	}
+	pod3 := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pod3",
+			Namespace: "ns2",
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType: "clb",
+				gamekruiseiov1alpha1.GameServerNetworkConf: `[{"Name":"ClbIds","Value":"clb-xxx"},{"Name":"PortProtocols","Value":"200"},{"Name":"Fixed","Value":"true"}]`,
+			},
+			Labels: map[string]string{
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: "gss1",
+			},
+		},
+	}
+	scheme := runtime.NewScheme()
+	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+	fakeClient3 := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gss).Build()
+	_ = clb3.OnPodDeleted(fakeClient3, pod3, ctx)
+	if _, ok := clb3.podAllocate["ns2/gss1"]; !ok {
+		t.Errorf("OnPodDeleted should NOT deAllocate podKey ns2/gss1 for fixed case (gss exists)")
+	}
+}
+
+func TestNetworkReady(t *testing.T) {
+	tests := []struct {
+		name                string
+		svc                 *corev1.Service
+		pod                 *corev1.Pod
+		config              *clbConfig
+		expectedInternalLen int
+		expectedExternalLen int
+		expectedExternalIPs []string
+	}{
+		{
+			name: "单 ingress IP 模式 - enableMultiIngress=false",
+			svc: &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Ports: []corev1.ServicePort{
+						{
+							Name:       "port1",
+							Port:       8080,
+							TargetPort: intstr.FromInt(80),
+							Protocol:   corev1.ProtocolTCP,
+						},
+						{
+							Name:       "port2",
+							Port:       9090,
+							TargetPort: intstr.FromInt(90),
+							Protocol:   corev1.ProtocolTCP,
+						},
+					},
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{
+							{IP: "1.2.3.4"},
+							{IP: "5.6.7.8"}, // 多个 ingress，但只使用第一个
+						},
+					},
+				},
+			},
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					PodIP: "10.0.0.1",
+				},
+			},
+			config: &clbConfig{
+				enableMultiIngress: false, // 禁用多 ingress IP 模式
+			},
+			expectedInternalLen: 2,                              // 2个端口对应2个 internal address
+			expectedExternalLen: 2,                              // 2个端口对应2个 external address（但只使用第一个 ingress IP）
+			expectedExternalIPs: []string{"1.2.3.4", "1.2.3.4"}, // 都使用第一个 IP
+		},
+		{
+			name: "多 ingress IP 模式 - enableMultiIngress=true 多个 ingress",
+			svc: &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Ports: []corev1.ServicePort{
+						{
+							Name:       "port1",
+							Port:       8080,
+							TargetPort: intstr.FromInt(80),
+							Protocol:   corev1.ProtocolTCP,
+						},
+						{
+							Name:       "port2",
+							Port:       9090,
+							TargetPort: intstr.FromInt(90),
+							Protocol:   corev1.ProtocolTCP,
+						},
+					},
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{
+							{IP: "1.2.3.4"},
+							{IP: "5.6.7.8"},
+						},
+					},
+				},
+			},
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					PodIP: "10.0.0.1",
+				},
+			},
+			config: &clbConfig{
+				enableMultiIngress: true, // 启用多 ingress IP 模式
+			},
+			expectedInternalLen: 2,                                                    // 2个端口对应2个 internal address
+			expectedExternalLen: 4,                                                    // 2个 ingress IP × 2个端口 = 4个 external address
+			expectedExternalIPs: []string{"1.2.3.4", "1.2.3.4", "5.6.7.8", "5.6.7.8"}, // 每个 ingress IP 对应每个端口
+		},
+		{
+			name: "多 ingress IP 模式 - enableMultiIngress=true 但只有一个 ingress",
+			svc: &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Ports: []corev1.ServicePort{
+						{
+							Name:       "port1",
+							Port:       8080,
+							TargetPort: intstr.FromInt(80),
+							Protocol:   corev1.ProtocolTCP,
+						},
+					},
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{
+							{IP: "1.2.3.4"}, // 只有一个 ingress IP
+						},
+					},
+				},
+			},
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					PodIP: "10.0.0.1",
+				},
+			},
+			config: &clbConfig{
+				enableMultiIngress: true, // 启用多 ingress IP 模式，但因为只有一个 ingress 所以走单 IP 逻辑
+			},
+			expectedInternalLen: 1, // 1个端口对应1个 internal address
+			expectedExternalLen: 1, // 1个端口对应1个 external address（因为只有一个 ingress IP，走单 IP 逻辑）
+			expectedExternalIPs: []string{"1.2.3.4"},
+		},
+		{
+			name: "空端口列表",
+			svc: &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Ports: []corev1.ServicePort{}, // 空端口列表
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{
+							{IP: "1.2.3.4"},
+						},
+					},
+				},
+			},
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					PodIP: "10.0.0.1",
+				},
+			},
+			config: &clbConfig{
+				enableMultiIngress: true,
+			},
+			expectedInternalLen: 0, // 无端口，无 address
+			expectedExternalLen: 0,
+			expectedExternalIPs: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			networkStatus := &gamekruiseiov1alpha1.NetworkStatus{}
+
+			// 调用被测试的函数
+			networkReady(tt.svc, tt.pod, networkStatus, tt.config)
+
+			// 验证网络状态
+			if networkStatus.CurrentNetworkState != gamekruiseiov1alpha1.NetworkReady {
+				t.Errorf("Expected NetworkReady, got %v", networkStatus.CurrentNetworkState)
+			}
+
+			// 验证 internal addresses 数量
+			if len(networkStatus.InternalAddresses) != tt.expectedInternalLen {
+				t.Errorf("Expected %d internal addresses, got %d", tt.expectedInternalLen, len(networkStatus.InternalAddresses))
+			}
+
+			// 验证 external addresses 数量
+			if len(networkStatus.ExternalAddresses) != tt.expectedExternalLen {
+				t.Errorf("Expected %d external addresses, got %d", tt.expectedExternalLen, len(networkStatus.ExternalAddresses))
+			}
+
+			// 验证 external addresses 的 IP
+			actualExternalIPs := make([]string, len(networkStatus.ExternalAddresses))
+			for i, addr := range networkStatus.ExternalAddresses {
+				actualExternalIPs[i] = addr.IP
+			}
+
+			if !reflect.DeepEqual(actualExternalIPs, tt.expectedExternalIPs) {
+				t.Errorf("Expected external IPs %v, got %v", tt.expectedExternalIPs, actualExternalIPs)
+			}
+
+			// 验证 internal addresses 的 IP 都是 pod IP
+			for _, addr := range networkStatus.InternalAddresses {
+				if addr.IP != tt.pod.Status.PodIP {
+					t.Errorf("Expected internal IP %s, got %s", tt.pod.Status.PodIP, addr.IP)
+				}
+			}
+
+			// 验证端口协议和端口号的正确性
+			if len(tt.svc.Spec.Ports) > 0 {
+				// 验证 internal addresses 的端口
+				for i, internalAddr := range networkStatus.InternalAddresses {
+					if len(internalAddr.Ports) != 1 {
+						t.Errorf("Expected 1 port per internal address, got %d", len(internalAddr.Ports))
+						continue
+					}
+
+					expectedTargetPort := tt.svc.Spec.Ports[i].TargetPort
+					if *internalAddr.Ports[0].Port != expectedTargetPort {
+						t.Errorf("Expected internal port %v, got %v", expectedTargetPort, *internalAddr.Ports[0].Port)
+					}
+
+					if internalAddr.Ports[0].Protocol != tt.svc.Spec.Ports[i].Protocol {
+						t.Errorf("Expected protocol %v, got %v", tt.svc.Spec.Ports[i].Protocol, internalAddr.Ports[0].Protocol)
+					}
+				}
+
+				// 验证 external addresses 的端口（根据模式不同验证方式不同）
+				if tt.config.enableMultiIngress && len(tt.svc.Status.LoadBalancer.Ingress) > 1 {
+					// 多 ingress IP 模式：每个 ingress IP 都有所有端口
+					expectedPortCount := len(tt.svc.Spec.Ports) * len(tt.svc.Status.LoadBalancer.Ingress)
+					if len(networkStatus.ExternalAddresses) != expectedPortCount {
+						t.Errorf("Expected %d external addresses in multi-ingress mode, got %d", expectedPortCount, len(networkStatus.ExternalAddresses))
+					}
+				} else {
+					// 单 ingress IP 模式：只有一个 IP，每个端口一个 address
+					expectedPortCount := len(tt.svc.Spec.Ports)
+					if len(networkStatus.ExternalAddresses) != expectedPortCount {
+						t.Errorf("Expected %d external addresses in single-ingress mode, got %d", expectedPortCount, len(networkStatus.ExternalAddresses))
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestNetworkReady_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name        string
+		svc         *corev1.Service
+		pod         *corev1.Pod
+		config      *clbConfig
+		expectPanic bool
+	}{
+		{
+			name: "没有 ingress IP",
+			svc: &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Ports: []corev1.ServicePort{
+						{
+							Name:       "port1",
+							Port:       8080,
+							TargetPort: intstr.FromInt(80),
+							Protocol:   corev1.ProtocolTCP,
+						},
+					},
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{}, // 空的 ingress 列表
+					},
+				},
+			},
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					PodIP: "10.0.0.1",
+				},
+			},
+			config: &clbConfig{
+				enableMultiIngress: false,
+			},
+			expectPanic: false, // 修改：现在不期望 panic
+		},
+		{
+			name: "没有 ingress IP",
+			svc: &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Ports: []corev1.ServicePort{
+						{
+							Name:       "port1",
+							Port:       8080,
+							TargetPort: intstr.FromInt(80),
+							Protocol:   corev1.ProtocolTCP,
+						},
+					},
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{}, // 空的 ingress 列表
+					},
+				},
+			},
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					PodIP: "10.0.0.1",
+				},
+			},
+			config: &clbConfig{
+				enableMultiIngress: true,
+			},
+			expectPanic: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			networkStatus := &gamekruiseiov1alpha1.NetworkStatus{}
+
+			if tt.expectPanic {
+				defer func() {
+					if r := recover(); r == nil {
+						t.Errorf("Expected panic but didn't get one")
+					}
+				}()
+			}
+
+			// 调用被测试的函数
+			networkReady(tt.svc, tt.pod, networkStatus, tt.config)
+
+			if !tt.expectPanic {
+				// 如果不期望 panic，验证基本状态
+				if networkStatus.CurrentNetworkState != gamekruiseiov1alpha1.NetworkReady {
+					t.Errorf("Expected NetworkReady, got %v", networkStatus.CurrentNetworkState)
+				}
+			}
+		})
 	}
 }

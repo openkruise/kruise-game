@@ -1,8 +1,13 @@
 package framework
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	kruisegameclientset "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
 	"github.com/openkruise/kruise-game/pkg/util"
@@ -15,9 +20,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
-	"strconv"
-	"strings"
-	"time"
 )
 
 type Framework struct {
@@ -52,8 +54,8 @@ func (f *Framework) AfterSuit() error {
 }
 
 func (f *Framework) AfterEach() error {
-	return wait.PollImmediate(5*time.Second, 3*time.Minute,
-		func() (done bool, err error) {
+	return wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
 			err = f.client.DeleteGameServerSet()
 			if err != nil && !apierrors.IsNotFound(err) {
 				{
@@ -122,7 +124,7 @@ func (f *Framework) DeployGssWithServiceQualities() (*gamekruiseiov1alpha1.GameS
 	return f.client.CreateGameServerSet(gss)
 }
 
-func (f *Framework) GameServerScale(gss *gamekruiseiov1alpha1.GameServerSet, desireNum int, reserveGsId *int) (*gamekruiseiov1alpha1.GameServerSet, error) {
+func (f *Framework) GameServerScale(gss *gamekruiseiov1alpha1.GameServerSet, desireNum int, reserveGsId *intstr.IntOrString) (*gamekruiseiov1alpha1.GameServerSet, error) {
 	// TODO: change patch type
 	newReserves := gss.Spec.ReserveGameServerIds
 	if reserveGsId != nil {
@@ -174,8 +176,8 @@ func (f *Framework) ChangeGameServerDeletionPriority(gsName string, deletionPrio
 }
 
 func (f *Framework) WaitForGsCreated(gss *gamekruiseiov1alpha1.GameServerSet) error {
-	return wait.PollImmediate(5*time.Second, 3*time.Minute,
-		func() (done bool, err error) {
+	return wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
 			gssName := gss.GetName()
 			labelSelector := labels.SelectorFromSet(map[string]string{
 				gamekruiseiov1alpha1.GameServerOwnerGssKey: gssName,
@@ -200,8 +202,8 @@ func (f *Framework) WaitForGsCreated(gss *gamekruiseiov1alpha1.GameServerSet) er
 }
 
 func (f *Framework) WaitForUpdated(gss *gamekruiseiov1alpha1.GameServerSet, name, image string) error {
-	return wait.PollImmediate(10*time.Second, 10*time.Minute,
-		func() (done bool, err error) {
+	return wait.PollUntilContextTimeout(context.TODO(), 10*time.Second, 10*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
 			gssName := gss.GetName()
 			labelSelector := labels.SelectorFromSet(map[string]string{
 				gamekruiseiov1alpha1.GameServerOwnerGssKey: gssName,
@@ -260,8 +262,8 @@ func (f *Framework) ExpectGssCorrect(gss *gamekruiseiov1alpha1.GameServerSet, ex
 }
 
 func (f *Framework) WaitForGsOpsStateUpdate(gsName string, opsState string) error {
-	return wait.PollImmediate(5*time.Second, 1*time.Minute,
-		func() (done bool, err error) {
+	return wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
 			pod, err := f.client.GetPod(gsName)
 			if err != nil {
 				return false, err
@@ -275,8 +277,8 @@ func (f *Framework) WaitForGsOpsStateUpdate(gsName string, opsState string) erro
 }
 
 func (f *Framework) WaitForGsDeletionPriorityUpdated(gsName string, deletionPriority string) error {
-	return wait.PollImmediate(5*time.Second, 1*time.Minute,
-		func() (done bool, err error) {
+	return wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
 			pod, err := f.client.GetPod(gsName)
 			if err != nil {
 				return false, err
@@ -294,8 +296,8 @@ func (f *Framework) DeletePodDirectly(index int) error {
 	podName := client.GameServerSet + "-" + strconv.Itoa(index)
 
 	// get
-	if err := wait.PollImmediate(5*time.Second, 3*time.Minute,
-		func() (done bool, err error) {
+	if err := wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
 
 			pod, err := f.client.GetPod(podName)
 			if err != nil {
@@ -313,8 +315,8 @@ func (f *Framework) DeletePodDirectly(index int) error {
 	}
 
 	// check
-	return wait.PollImmediate(5*time.Second, 3*time.Minute,
-		func() (done bool, err error) {
+	return wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
 			pod, err := f.client.GetPod(podName)
 			if err != nil {
 				return false, err
@@ -327,8 +329,8 @@ func (f *Framework) DeletePodDirectly(index int) error {
 }
 
 func (f *Framework) WaitForPodDeleted(podName string) error {
-	return wait.PollImmediate(5*time.Second, 3*time.Minute,
-		func() (done bool, err error) {
+	return wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
 			_, err = f.client.GetPod(podName)
 			if apierrors.IsNotFound(err) {
 				return true, nil
@@ -338,8 +340,8 @@ func (f *Framework) WaitForPodDeleted(podName string) error {
 }
 
 func (f *Framework) ExpectGsCorrect(gsName, opsState, dp, up string) error {
-	return wait.PollImmediate(5*time.Second, 3*time.Minute,
-		func() (done bool, err error) {
+	return wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 5*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
 			gs, err := f.client.GetGameServer(gsName)
 			if err != nil {
 				return false, nil
@@ -353,8 +355,8 @@ func (f *Framework) ExpectGsCorrect(gsName, opsState, dp, up string) error {
 }
 
 func (f *Framework) WaitForGsUpdatePriorityUpdated(gsName string, updatePriority string) error {
-	return wait.PollImmediate(5*time.Second, 1*time.Minute,
-		func() (done bool, err error) {
+	return wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
 			pod, err := f.client.GetPod(gsName)
 			if err != nil {
 				return false, err

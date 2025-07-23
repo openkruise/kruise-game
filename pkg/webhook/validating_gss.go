@@ -19,18 +19,21 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"net/http"
+
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider/manager"
 	"github.com/openkruise/kruise-game/pkg/util"
 	admissionv1 "k8s.io/api/admission/v1"
-	"net/http"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 type GssValidaatingHandler struct {
 	Client               client.Client
-	decoder              *admission.Decoder
+	decoder              admission.Decoder
 	CloudProviderManager *manager.ProviderManager
 }
 
@@ -64,12 +67,50 @@ func (gvh *GssValidaatingHandler) Handle(ctx context.Context, req admission.Requ
 
 func validatingGss(gss *gamekruiseiov1alpha1.GameServerSet, client client.Client) (bool, string) {
 	// validate reserveGameServerIds
-	rgsIds := gss.Spec.ReserveGameServerIds
-	if util.IsRepeat(rgsIds) {
-		return false, fmt.Sprintf("reserveGameServerIds should not be repeat. Now it is %v", rgsIds)
+	vset := sets.Set[int]{}
+
+	validate := func(ids intstr.IntOrString) (bool, string) {
+		switch ids.Type {
+		case intstr.Int:
+			id := ids.IntVal
+			if id < 0 {
+				return false, fmt.Sprintf("reserveGameServerIds should be greater or equal to 0. Now it is %d", id)
+			}
+			if vset.Has(int(id)) {
+				return false, fmt.Sprintf("reserveGameServerIds should not be repeat. Now it is %d", id)
+			}
+			vset.Insert(int(id))
+		case intstr.String:
+			start, end, err := util.ParseRange(ids.StrVal)
+			if err != nil {
+				return false, fmt.Sprintf("invalid range reserveGameServerIds found, an empty slice will be returned: %s", ids.StrVal)
+			}
+			if start < 0 {
+				return false, fmt.Sprintf("reserveGameServerIds should be greater or equal to 0. Now it is %d", start)
+			}
+			if end < 0 {
+				return false, fmt.Sprintf("reserveGameServerIds should be greater or equal to 0. Now it is %d", end)
+			}
+			if start > end {
+				return false, fmt.Sprintf("invalid range reserveGameServerIds found, an empty slice will be returned: %s", ids.StrVal)
+			}
+			if vset.Has(int(start)) || vset.Has(int(end)) {
+				return false, fmt.Sprintf("reserveGameServerIds should not be repeat. Now it is %d-%d", start, end)
+			}
+			for i := start; i <= end; i++ {
+				if vset.Has(int(i)) {
+					return false, fmt.Sprintf("reserveGameServerIds should not be repeat. Now it is %d-%d", start, end)
+				}
+				vset.Insert(int(i))
+			}
+		}
+		return true, ""
 	}
-	if util.IsHasNegativeNum(rgsIds) {
-		return false, fmt.Sprintf("reserveGameServerIds should be greater or equal to 0. Now it is %v", rgsIds)
+
+	for _, id := range gss.Spec.ReserveGameServerIds {
+		if ok, reason := validate(id); !ok {
+			return false, reason
+		}
 	}
 
 	return true, "general validating success"

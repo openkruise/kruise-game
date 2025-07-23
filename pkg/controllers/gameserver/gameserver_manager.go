@@ -43,11 +43,12 @@ var (
 )
 
 const (
-	TimeFormat = "2006-01-02 15:04:05"
+	TimeFormat = time.RFC3339
 )
 
 const (
-	StateReason = "GsStateChanged"
+	StateReason          = "GsStateChanged"
+	GsNetworkStateReason = "GsNetworkState"
 )
 
 type Control interface {
@@ -110,6 +111,7 @@ func (manager GameServerManager) SyncGsToPod() error {
 	}
 	if string(gs.Spec.OpsState) != podGsOpsState {
 		newLabels[gameKruiseV1alpha1.GameServerOpsStateKey] = string(gs.Spec.OpsState)
+		newAnnotations[gameKruiseV1alpha1.GameServerOpsStateLastChangedTime] = time.Now().Format(TimeFormat)
 		if podGsOpsState != "" {
 			eventType := corev1.EventTypeNormal
 			if gs.Spec.OpsState == gameKruiseV1alpha1.Maintaining {
@@ -128,6 +130,11 @@ func (manager GameServerManager) SyncGsToPod() error {
 	var gsState gameKruiseV1alpha1.GameServerState
 	switch pod.Status.Phase {
 	case corev1.PodRunning:
+		// GameServer Deleting
+		if !pod.DeletionTimestamp.IsZero() {
+			gsState = gameKruiseV1alpha1.Deleting
+			break
+		}
 		// GameServer Updating
 		lifecycleState, exist := pod.GetLabels()[kruisePub.LifecycleStateKey]
 		if exist && lifecycleState == string(kruisePub.LifecycleStateUpdating) {
@@ -142,12 +149,6 @@ func (manager GameServerManager) SyncGsToPod() error {
 		// GameServer PreDelete
 		if exist && lifecycleState == string(kruisePub.LifecycleStatePreparingDelete) {
 			gsState = gameKruiseV1alpha1.PreDelete
-			break
-		}
-
-		// GameServer Deleting
-		if !pod.DeletionTimestamp.IsZero() {
-			gsState = gameKruiseV1alpha1.Deleting
 			break
 		}
 		// GameServer Ready / NotReady
@@ -174,14 +175,23 @@ func (manager GameServerManager) SyncGsToPod() error {
 			if gsState == gameKruiseV1alpha1.Crash {
 				eventType = corev1.EventTypeWarning
 			}
+			newAnnotations[gameKruiseV1alpha1.GameServerStateLastChangedTime] = time.Now().Format(TimeFormat)
 			manager.eventRecorder.Eventf(gs, eventType, StateReason, "State turn from %s to %s ", podGsState, string(gsState))
 		}
 	}
 
 	if pod.Annotations[gameKruiseV1alpha1.GameServerNetworkType] != "" {
 		oldTime, err := time.Parse(TimeFormat, pod.Annotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime])
-		if (err == nil && time.Since(oldTime) > NetworkIntervalTime && time.Since(gs.Status.NetworkStatus.LastTransitionTime.Time) < NetworkTotalWaitTime) || (pod.Annotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime] == "") {
+		if err != nil {
+			klog.Errorf("Failed to parse previous network trigger time for GameServer %s/%s: %v", gs.Namespace, gs.Name, err)
 			newAnnotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime] = time.Now().Format(TimeFormat)
+		} else {
+			timeSinceOldTrigger := time.Since(oldTime)
+			timeSinceNetworkTransition := time.Since(gs.Status.NetworkStatus.LastTransitionTime.Time)
+			if timeSinceOldTrigger > NetworkIntervalTime && timeSinceNetworkTransition < NetworkTotalWaitTime {
+				klog.V(4).Infof("GameServer %s/%s network trigger conditions met, updating trigger time", gs.Namespace, gs.Name)
+				newAnnotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime] = time.Now().Format(TimeFormat)
+			}
 		}
 	}
 
@@ -309,10 +319,14 @@ func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerS
 func (manager GameServerManager) WaitOrNot() bool {
 	networkStatus := manager.gameServer.Status.NetworkStatus
 	alreadyWait := time.Since(networkStatus.LastTransitionTime.Time)
-	if networkStatus.DesiredNetworkState != networkStatus.CurrentNetworkState && alreadyWait < NetworkTotalWaitTime {
-		klog.Infof("GameServer %s/%s DesiredNetworkState: %s CurrentNetworkState: %s. %v remaining",
-			manager.gameServer.GetNamespace(), manager.gameServer.GetName(), networkStatus.DesiredNetworkState, networkStatus.CurrentNetworkState, NetworkTotalWaitTime-alreadyWait)
-		return true
+	if networkStatus.DesiredNetworkState != networkStatus.CurrentNetworkState {
+		if alreadyWait < NetworkTotalWaitTime {
+			klog.Infof("GameServer %s/%s DesiredNetworkState: %s CurrentNetworkState: %s. %v remaining",
+				manager.gameServer.GetNamespace(), manager.gameServer.GetName(), networkStatus.DesiredNetworkState, networkStatus.CurrentNetworkState, NetworkTotalWaitTime-alreadyWait)
+			return true
+		} else {
+			manager.eventRecorder.Eventf(manager.gameServer, corev1.EventTypeWarning, GsNetworkStateReason, "Network wait timeout: waited %v, max %v", alreadyWait, NetworkTotalWaitTime)
+		}
 	}
 	return false
 }

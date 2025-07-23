@@ -1,0 +1,31 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: selfsigned-issuer
+  namespace: system
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cert
+  namespace: system
+spec:
+  commonName: kruise-game-controller-manager
+  dnsNames:
+  - $(SERVICE_NAME).$(SERVICE_NAMESPACE)
+  - $(SERVICE_NAME).$(SERVICE_NAMESPACE).svc
+  - $(SERVICE_NAME).$(SERVICE_NAMESPACE).svc.cluster.local
+  secretName: kruise-game-certs
+  usages:
+    - server auth
+    - client auth
+  privateKey:
+    algorithm: RSA
+    size: 2048
+    rotationPolicy: Never
+  issuerRef:
+    name: selfsigned-issuer
+    kind: Issuer
+    group: cert-manager.io

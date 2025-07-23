@@ -41,15 +41,16 @@ import (
 )
 
 const (
-	SlbNetwork              = "AlibabaCloud-SLB"
-	AliasSLB                = "LB-Network"
-	SlbIdsConfigName        = "SlbIds"
-	PortProtocolsConfigName = "PortProtocols"
-	SlbListenerOverrideKey  = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-force-override-listeners"
-	SlbIdAnnotationKey      = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-id"
-	SlbIdLabelKey           = "service.k8s.alibaba/loadbalancer-id"
-	SvcSelectorKey          = "statefulset.kubernetes.io/pod-name"
-	SlbConfigHashKey        = "game.kruise.io/network-config-hash"
+	SlbNetwork                          = "AlibabaCloud-SLB"
+	AliasSLB                            = "LB-Network"
+	SlbIdsConfigName                    = "SlbIds"
+	PortProtocolsConfigName             = "PortProtocols"
+	ExternalTrafficPolicyTypeConfigName = "ExternalTrafficPolicyType"
+	SlbListenerOverrideKey              = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-force-override-listeners"
+	SlbIdAnnotationKey                  = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-id"
+	SlbIdLabelKey                       = "service.k8s.alibaba/loadbalancer-id"
+	SvcSelectorKey                      = "statefulset.kubernetes.io/pod-name"
+	SlbConfigHashKey                    = "game.kruise.io/network-config-hash"
 )
 
 const (
@@ -79,6 +80,7 @@ type slbConfig struct {
 	protocols   []corev1.Protocol
 	isFixed     bool
 
+	externalTrafficPolicyType   corev1.ServiceExternalTrafficPolicyType
 	lBHealthCheckSwitch         string
 	lBHealthCheckProtocolPort   string
 	lBHealthCheckFlag           string
@@ -142,8 +144,11 @@ func initLbCache(svcList []corev1.Service, minPort, maxPort int32, blockPorts []
 			var ports []int32
 			for _, port := range getPorts(svc.Spec.Ports) {
 				if port <= maxPort && port >= minPort {
-					newCache[lbId][port] = true
-					ports = append(ports, port)
+					value, ok := newCache[lbId][port]
+					if !ok || !value {
+						newCache[lbId][port] = true
+						ports = append(ports, port)
+					}
 				}
 			}
 			if len(ports) != 0 {
@@ -408,6 +413,7 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*slbConfig, e
 	protocols := make([]corev1.Protocol, 0)
 	isFixed := false
 
+	externalTrafficPolicy := corev1.ServiceExternalTrafficPolicyTypeCluster
 	lBHealthCheckSwitch := "on"
 	lBHealthCheckProtocolPort := ""
 	lBHealthCheckFlag := "off"
@@ -447,6 +453,10 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*slbConfig, e
 				continue
 			}
 			isFixed = v
+		case ExternalTrafficPolicyTypeConfigName:
+			if strings.EqualFold(c.Value, string(corev1.ServiceExternalTrafficPolicyTypeLocal)) {
+				externalTrafficPolicy = corev1.ServiceExternalTrafficPolicyTypeLocal
+			}
 		case LBHealthCheckSwitchConfigName:
 			checkSwitch := strings.ToLower(c.Value)
 			if checkSwitch != "on" && checkSwitch != "off" {
@@ -529,6 +539,7 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*slbConfig, e
 		protocols:                   protocols,
 		targetPorts:                 ports,
 		isFixed:                     isFixed,
+		externalTrafficPolicyType:   externalTrafficPolicy,
 		lBHealthCheckSwitch:         lBHealthCheckSwitch,
 		lBHealthCheckFlag:           lBHealthCheckFlag,
 		lBHealthCheckType:           lBHealthCheckType,
@@ -569,12 +580,29 @@ func (s *SlbPlugin) consSvc(sc *slbConfig, pod *corev1.Pod, c client.Client, ctx
 
 	svcPorts := make([]corev1.ServicePort, 0)
 	for i := 0; i < len(sc.targetPorts); i++ {
-		svcPorts = append(svcPorts, corev1.ServicePort{
-			Name:       strconv.Itoa(sc.targetPorts[i]),
-			Port:       ports[i],
-			Protocol:   sc.protocols[i],
-			TargetPort: intstr.FromInt(sc.targetPorts[i]),
-		})
+		if sc.protocols[i] == ProtocolTCPUDP {
+			svcPorts = append(svcPorts, corev1.ServicePort{
+				Name:       fmt.Sprintf("%s-%s", strconv.Itoa(sc.targetPorts[i]), corev1.ProtocolTCP),
+				Port:       ports[i],
+				Protocol:   corev1.ProtocolTCP,
+				TargetPort: intstr.FromInt(sc.targetPorts[i]),
+			})
+
+			svcPorts = append(svcPorts, corev1.ServicePort{
+				Name:       fmt.Sprintf("%s-%s", strconv.Itoa(sc.targetPorts[i]), corev1.ProtocolUDP),
+				Port:       ports[i],
+				Protocol:   corev1.ProtocolUDP,
+				TargetPort: intstr.FromInt(sc.targetPorts[i]),
+			})
+
+		} else {
+			svcPorts = append(svcPorts, corev1.ServicePort{
+				Name:       fmt.Sprintf("%s-%s", strconv.Itoa(sc.targetPorts[i]), sc.protocols[i]),
+				Port:       ports[i],
+				Protocol:   sc.protocols[i],
+				TargetPort: intstr.FromInt(sc.targetPorts[i]),
+			})
+		}
 	}
 
 	svcAnnotations := map[string]string{
@@ -606,7 +634,8 @@ func (s *SlbPlugin) consSvc(sc *slbConfig, pod *corev1.Pod, c client.Client, ctx
 			OwnerReferences: getSvcOwnerReference(c, ctx, pod, sc.isFixed),
 		},
 		Spec: corev1.ServiceSpec{
-			Type: corev1.ServiceTypeLoadBalancer,
+			Type:                  corev1.ServiceTypeLoadBalancer,
+			ExternalTrafficPolicy: sc.externalTrafficPolicyType,
 			Selector: map[string]string{
 				SvcSelectorKey: pod.GetName(),
 			},

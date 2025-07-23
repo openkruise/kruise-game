@@ -2,6 +2,10 @@ package gameserver
 
 import (
 	"context"
+	"reflect"
+	"strconv"
+	"testing"
+
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
@@ -13,11 +17,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"strconv"
-	"testing"
 )
 
 var (
@@ -929,7 +930,8 @@ func TestSyncPodToGs(t *testing.T) {
 
 	for i, test := range tests {
 		objs := []client.Object{test.gs, test.pod, test.node, test.gss}
-		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+		c := fake.NewClientBuilder().WithScheme(scheme).
+			WithObjects(objs...).WithStatusSubresource(objs...).Build()
 		manager := &GameServerManager{
 			client:     c,
 			gameServer: test.gs,

@@ -10,16 +10,16 @@ on:
 
 env:
   # Common versions
-  GO_VERSION: '1.21'
-  KIND_ACTION_VERSION: 'v1.3.0'
-  KIND_VERSION: 'v0.14.0'
+  GO_VERSION: '1.22'
+  KIND_VERSION: 'v0.18.0'
   KIND_IMAGE: 'kindest/node:v1.26.4'
   KIND_CLUSTER_NAME: 'ci-testing'
+  CERT_MANAGER_VERSION: 'v1.18.2'
 
 jobs:
 
   game-kruise:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v3
         with:
@@ -40,6 +40,10 @@ jobs:
           export IMAGE="openkruise/kruise-game-manager:e2e-${GITHUB_RUN_ID}"
           docker build --pull --no-cache . -t $IMAGE
           kind load docker-image --name=${KIND_CLUSTER_NAME} $IMAGE || { echo >&2 "kind not installed or error loading image: $IMAGE"; exit 1; }
+      - name: Install Cert-Manager
+        run: |
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/${{ env.CERT_MANAGER_VERSION }}/cert-manager.yaml
+          kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=180s
       - name: Install Kruise
         run: |
           set -ex

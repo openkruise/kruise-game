@@ -43,7 +43,7 @@ var (
 			Name: "okg_gameservers_opsState_count",
 			Help: "The number of gameservers per opsState",
 		},
-		[]string{"opsState"},
+		[]string{"opsState", "gssName", "namespace"},
 	)
 	GameServersTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{

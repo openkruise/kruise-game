@@ -56,17 +56,20 @@ const (
 	ClbSchedulerKey               = "service.beta.kubernetes.io/volcengine-loadbalancer-scheduler"
 	ClbSchedulerWRR               = "wrr"
 	SvcSelectorKey                = "statefulset.kubernetes.io/pod-name"
+	EnableClbScatterConfigName    = "EnableClbScatter"
+	EnableMultiIngressConfigName  = "EnableMultiIngress"
 )
 
 type portAllocated map[int32]bool
 
 type ClbPlugin struct {
-	maxPort     int32
-	minPort     int32
-	blockPorts  []int32
-	cache       map[string]portAllocated
-	podAllocate map[string]string
-	mutex       sync.RWMutex
+	maxPort        int32
+	minPort        int32
+	blockPorts     []int32
+	cache          map[string]portAllocated
+	podAllocate    map[string]string
+	mutex          sync.RWMutex
+	lastScatterIdx int // 新增：用于轮询打散
 }
 
 type clbConfig struct {
@@ -76,6 +79,8 @@ type clbConfig struct {
 	isFixed                       bool
 	annotations                   map[string]string
 	allocateLoadBalancerNodePorts bool
+	enableClbScatter              bool // 新增：打散开关
+	enableMultiIngress            bool // 新增：多 ingress IP 开关
 }
 
 func (c *ClbPlugin) Name() string {
@@ -87,10 +92,12 @@ func (c *ClbPlugin) Alias() string {
 }
 
 func (c *ClbPlugin) Init(client client.Client, options cloudprovider.CloudProviderOptions, ctx context.Context) error {
+	log.Infof("[CLB] Init called, options: %+v", options)
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	clbOptions, ok := options.(provideroptions.VolcengineOptions)
 	if !ok {
+		log.Errorf("[CLB] failed to convert options to clbOptions: %+v", options)
 		return cperrors.ToPluginError(fmt.Errorf("failed to convert options to clbOptions"), cperrors.InternalError)
 	}
 	c.minPort = clbOptions.CLBOptions.MinPort
@@ -100,10 +107,12 @@ func (c *ClbPlugin) Init(client client.Client, options cloudprovider.CloudProvid
 	svcList := &corev1.ServiceList{}
 	err := client.List(ctx, svcList)
 	if err != nil {
+		log.Errorf("[CLB] client.List failed: %v", err)
 		return err
 	}
 
 	c.cache, c.podAllocate = initLbCache(svcList.Items, c.minPort, c.maxPort, c.blockPorts)
+	log.Infof("[CLB] Init finished, minPort=%d, maxPort=%d, blockPorts=%v, svcCount=%d", c.minPort, c.maxPort, c.blockPorts, len(svcList.Items))
 	return nil
 }
 
@@ -142,23 +151,34 @@ func initLbCache(svcList []corev1.Service, minPort, maxPort int32, blockPorts []
 }
 
 func (c *ClbPlugin) OnPodAdded(client client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
+	log.Infof("[CLB] OnPodAdded called for pod %s/%s", pod.GetNamespace(), pod.GetName())
 	return pod, nil
 }
 
 func (c *ClbPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
+	log.Infof("[CLB] OnPodUpdated called for pod %s/%s", pod.GetNamespace(), pod.GetName())
 	networkManager := utils.NewNetworkManager(pod, client)
 
 	networkStatus, err := networkManager.GetNetworkStatus()
 	if err != nil {
+		log.Errorf("[CLB] GetNetworkStatus failed: %v", err)
 		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 	}
 	networkConfig := networkManager.GetNetworkConfig()
+	log.V(4).Infof("[CLB] NetworkConfig: %+v", networkConfig)
 	config := parseLbConfig(networkConfig)
+	log.V(4).Infof("[CLB] Parsed clbConfig: %+v", config)
 	if networkStatus == nil {
+		log.Infof("[CLB] networkStatus is nil, set NetworkNotReady for pod %s/%s", pod.GetNamespace(), pod.GetName())
 		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
 			CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
 		}, pod)
-		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+		if err != nil {
+			return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+		}
+		networkStatus = &gamekruiseiov1alpha1.NetworkStatus{
+			CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
+		}
 	}
 
 	// get svc
@@ -169,35 +189,53 @@ func (c *ClbPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx cont
 	}, svc)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return pod, cperrors.ToPluginError(client.Create(ctx, c.consSvc(config, pod, client, ctx)), cperrors.ApiCallError)
+			log.Infof("[CLB] Service not found for pod %s/%s, will create new svc", pod.GetNamespace(), pod.GetName())
+			svc, err := c.consSvc(config, pod, client, ctx)
+			if err != nil {
+				return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+			}
+			return pod, cperrors.ToPluginError(client.Create(ctx, svc), cperrors.ApiCallError)
 		}
+		log.Errorf("[CLB] client.Get svc failed: %v", err)
 		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+	}
+	if len(svc.OwnerReferences) > 0 && svc.OwnerReferences[0].Kind == "Pod" && svc.OwnerReferences[0].UID != pod.UID {
+		log.Infof("[CLB] waiting old svc %s/%s deleted. old owner pod uid is %s, but now is %s", svc.Namespace, svc.Name, svc.OwnerReferences[0].UID, pod.UID)
+		return pod, nil
 	}
 
 	// update svc
 	if util.GetHash(config) != svc.GetAnnotations()[ClbConfigHashKey] {
+		log.Infof("[CLB] config hash changed for pod %s/%s, updating svc", pod.GetNamespace(), pod.GetName())
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		if err != nil {
 			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
 		}
-		return pod, cperrors.ToPluginError(client.Update(ctx, c.consSvc(config, pod, client, ctx)), cperrors.ApiCallError)
+		newSvc, err := c.consSvc(config, pod, client, ctx)
+		if err != nil {
+			return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+		}
+		return pod, cperrors.ToPluginError(client.Update(ctx, newSvc), cperrors.ApiCallError)
 	}
 
 	// disable network
 	if networkManager.GetNetworkDisabled() && svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
+		log.V(4).Infof("[CLB] Network disabled, set svc type to ClusterIP for pod %s/%s", pod.GetNamespace(), pod.GetName())
 		svc.Spec.Type = corev1.ServiceTypeClusterIP
 		return pod, cperrors.ToPluginError(client.Update(ctx, svc), cperrors.ApiCallError)
 	}
 
 	// enable network
 	if !networkManager.GetNetworkDisabled() && svc.Spec.Type == corev1.ServiceTypeClusterIP {
+		log.V(4).Infof("[CLB] Network enabled, set svc type to LoadBalancer for pod %s/%s", pod.GetNamespace(), pod.GetName())
 		svc.Spec.Type = corev1.ServiceTypeLoadBalancer
 		return pod, cperrors.ToPluginError(client.Update(ctx, svc), cperrors.ApiCallError)
 	}
 
 	// network not ready
 	if len(svc.Status.LoadBalancer.Ingress) == 0 {
+		log.Infof("[CLB] svc %s/%s has no ingress, network not ready", svc.Namespace, svc.Name)
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
@@ -205,6 +243,7 @@ func (c *ClbPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx cont
 
 	// allow not ready containers
 	if util.IsAllowNotReadyContainers(networkManager.GetNetworkConfig()) {
+		log.V(4).Infof("[CLB] AllowNotReadyContainers enabled for pod %s/%s", pod.GetNamespace(), pod.GetName())
 		toUpDateSvc, err := utils.AllowNotReadyContainers(client, ctx, pod, svc, false)
 		if err != nil {
 			return pod, err
@@ -219,11 +258,61 @@ func (c *ClbPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx cont
 	}
 
 	// network ready
+	networkReady(svc, pod, networkStatus, config)
+	pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+	return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+}
+
+func networkReady(svc *corev1.Service, pod *corev1.Pod, networkStatus *gamekruiseiov1alpha1.NetworkStatus, config *clbConfig) {
 	internalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
 	externalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
+
+	// 检查是否启用多 ingress IP 支持
+	if config.enableMultiIngress && len(svc.Status.LoadBalancer.Ingress) > 1 {
+		// 多 ingress IP 模式：为每个 ingress IP 创建单独的 external address
+		for _, ingress := range svc.Status.LoadBalancer.Ingress {
+			for _, port := range svc.Spec.Ports {
+				instrIPort := port.TargetPort
+				instrEPort := intstr.FromInt(int(port.Port))
+
+				// 每个 ingress IP 都创建一个单独的 external address
+				externalAddress := gamekruiseiov1alpha1.NetworkAddress{
+					IP: ingress.IP,
+					Ports: []gamekruiseiov1alpha1.NetworkPort{
+						{
+							Name:     instrIPort.String(),
+							Port:     &instrEPort,
+							Protocol: port.Protocol,
+						},
+					},
+				}
+				externalAddresses = append(externalAddresses, externalAddress)
+			}
+		}
+	} else {
+		// 单 ingress IP 模式（原有逻辑）
+		if len(svc.Status.LoadBalancer.Ingress) > 0 {
+			for _, port := range svc.Spec.Ports {
+				instrIPort := port.TargetPort
+				instrEPort := intstr.FromInt(int(port.Port))
+				externalAddress := gamekruiseiov1alpha1.NetworkAddress{
+					IP: svc.Status.LoadBalancer.Ingress[0].IP,
+					Ports: []gamekruiseiov1alpha1.NetworkPort{
+						{
+							Name:     instrIPort.String(),
+							Port:     &instrEPort,
+							Protocol: port.Protocol,
+						},
+					},
+				}
+				externalAddresses = append(externalAddresses, externalAddress)
+			}
+		}
+	}
+
+	// internal addresses 逻辑保持不变
 	for _, port := range svc.Spec.Ports {
 		instrIPort := port.TargetPort
-		instrEPort := intstr.FromInt(int(port.Port))
 		internalAddress := gamekruiseiov1alpha1.NetworkAddress{
 			IP: pod.Status.PodIP,
 			Ports: []gamekruiseiov1alpha1.NetworkPort{
@@ -234,39 +323,30 @@ func (c *ClbPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx cont
 				},
 			},
 		}
-		externalAddress := gamekruiseiov1alpha1.NetworkAddress{
-			IP: svc.Status.LoadBalancer.Ingress[0].IP,
-			Ports: []gamekruiseiov1alpha1.NetworkPort{
-				{
-					Name:     instrIPort.String(),
-					Port:     &instrEPort,
-					Protocol: port.Protocol,
-				},
-			},
-		}
 		internalAddresses = append(internalAddresses, internalAddress)
-		externalAddresses = append(externalAddresses, externalAddress)
 	}
+
 	networkStatus.InternalAddresses = internalAddresses
 	networkStatus.ExternalAddresses = externalAddresses
 	networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkReady
-	pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
-	return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 }
 
 func (c *ClbPlugin) OnPodDeleted(client client.Client, pod *corev1.Pod, ctx context.Context) cperrors.PluginError {
+	log.Infof("[CLB] OnPodDeleted called for pod %s/%s", pod.GetNamespace(), pod.GetName())
 	networkManager := utils.NewNetworkManager(pod, client)
 	networkConfig := networkManager.GetNetworkConfig()
 	sc := parseLbConfig(networkConfig)
 
 	var podKeys []string
 	if sc.isFixed {
+		log.Infof("[CLB] isFixed=true, check gss for pod %s/%s", pod.GetNamespace(), pod.GetName())
 		gss, err := util.GetGameServerSetOfPod(pod, client, ctx)
 		if err != nil && !errors.IsNotFound(err) {
 			return cperrors.ToPluginError(err, cperrors.ApiCallError)
 		}
 		// gss exists in cluster, do not deAllocate.
 		if err == nil && gss.GetDeletionTimestamp() == nil {
+			log.Infof("[CLB] gss exists, skip deAllocate for pod %s/%s", pod.GetNamespace(), pod.GetName())
 			return nil
 		}
 		// gss not exists in cluster, deAllocate all the ports related to it.
@@ -281,69 +361,131 @@ func (c *ClbPlugin) OnPodDeleted(client client.Client, pod *corev1.Pod, ctx cont
 	}
 
 	for _, podKey := range podKeys {
+		log.Infof("[CLB] deAllocate for podKey %s", podKey)
 		c.deAllocate(podKey)
 	}
 
 	return nil
 }
 
-func (c *ClbPlugin) allocate(lbIds []string, num int, nsName string) (string, []int32) {
+func (c *ClbPlugin) allocate(lbIds []string, num int, nsName string, enableClbScatter ...bool) (string, []int32, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
+	log.Infof("[CLB] allocate called, lbIds=%v, num=%d, nsName=%s, scatter=%v", lbIds, num, nsName, enableClbScatter)
+
+	if len(lbIds) == 0 {
+		return "", nil, fmt.Errorf("no load balancer IDs provided")
+	}
 
 	var ports []int32
 	var lbId string
+	useScatter := false
+	if len(enableClbScatter) > 0 {
+		useScatter = enableClbScatter[0]
+	}
 
-	// find lb with adequate ports
-	for _, clbId := range lbIds {
-		sum := 0
-		for i := c.minPort; i < c.maxPort; i++ {
-			if !c.cache[clbId][i] {
-				sum++
+	if useScatter && len(lbIds) > 0 {
+		log.V(4).Infof("[CLB] scatter enabled, round robin from idx %d", c.lastScatterIdx)
+		// 轮询分配
+		startIdx := c.lastScatterIdx % len(lbIds)
+		for i := 0; i < len(lbIds); i++ {
+			idx := (startIdx + i) % len(lbIds)
+			clbId := lbIds[idx]
+			if c.cache[clbId] == nil {
+				// we assume that an empty cache is allways allocatable
+				c.newCacheForSingleLb(clbId)
+				lbId = clbId
+				c.lastScatterIdx = idx + 1 // 下次从下一个开始
+				break
 			}
-			if sum >= num {
+			sum := 0
+			for p := c.minPort; p < c.maxPort; p++ {
+				if !c.cache[clbId][p] {
+					sum++
+				}
+				if sum >= num {
+					lbId = clbId
+					c.lastScatterIdx = idx + 1 // 下次从下一个开始
+					break
+				}
+			}
+			if lbId != "" {
+				break
+			}
+		}
+	} else {
+		log.V(4).Infof("[CLB] scatter disabled, use default order")
+		// 原有逻辑
+		for _, clbId := range lbIds {
+			if c.cache[clbId] == nil {
+				c.newCacheForSingleLb(clbId)
 				lbId = clbId
 				break
 			}
-		}
-	}
-
-	// select ports
-	for i := 0; i < num; i++ {
-		var port int32
-		if c.cache[lbId] == nil {
-			c.cache[lbId] = make(portAllocated, c.maxPort-c.minPort)
+			sum := 0
 			for i := c.minPort; i < c.maxPort; i++ {
-				c.cache[lbId][i] = false
+				if !c.cache[clbId][i] {
+					sum++
+				}
+				if sum >= num {
+					lbId = clbId
+					break
+				}
 			}
-
-			// block ports
-			for _, blockPort := range c.blockPorts {
-				c.cache[lbId][blockPort] = true
-			}
-		}
-
-		for p, allocated := range c.cache[lbId] {
-			if !allocated {
-				port = p
+			if lbId != "" {
 				break
 			}
 		}
-		c.cache[lbId][port] = true
-		ports = append(ports, port)
+	}
+
+	if lbId == "" {
+		return "", nil, fmt.Errorf("unable to find load balancer with %d available ports", num)
+	}
+	// Find available ports sequentially
+	portCount := 0
+	for port := c.minPort; port < c.maxPort && portCount < num; port++ {
+		if !c.cache[lbId][port] {
+			c.cache[lbId][port] = true
+			ports = append(ports, port)
+			portCount++
+		}
+	}
+
+	// Check if we found enough ports
+	if len(ports) < num {
+		// Rollback: release allocated ports
+		for _, port := range ports {
+			c.cache[lbId][port] = false
+		}
+		return "", nil, fmt.Errorf("insufficient available ports on load balancer %s: found %d, need %d", lbId, len(ports), num)
 	}
 
 	c.podAllocate[nsName] = lbId + ":" + util.Int32SliceToString(ports, ",")
-	log.Infof("pod %s allocate clb %s ports %v", nsName, lbId, ports)
-	return lbId, ports
+	log.Infof("[CLB] pod %s allocate clb %s ports %v", nsName, lbId, ports)
+	return lbId, ports, nil
+}
+
+// newCacheForSingleLb initializes the port allocation cache for a single load balancer. MUST BE CALLED IN LOCK STATE
+func (c *ClbPlugin) newCacheForSingleLb(lbId string) {
+	if c.cache[lbId] == nil {
+		c.cache[lbId] = make(portAllocated, c.maxPort-c.minPort+1)
+		for i := c.minPort; i <= c.maxPort; i++ {
+			c.cache[lbId][i] = false
+		}
+		// block ports
+		for _, blockPort := range c.blockPorts {
+			c.cache[lbId][blockPort] = true
+		}
+	}
 }
 
 func (c *ClbPlugin) deAllocate(nsName string) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-
+	log.Infof("[CLB] deAllocate called for nsName=%s", nsName)
 	allocatedPorts, exist := c.podAllocate[nsName]
 	if !exist {
+		log.Warningf("[CLB] deAllocate: nsName=%s not found in podAllocate", nsName)
 		return
 	}
 
@@ -370,18 +512,25 @@ func init() {
 }
 
 func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *clbConfig {
+	log.Infof("[CLB] parseLbConfig called, conf=%+v", conf)
 	var lbIds []string
 	ports := make([]int, 0)
 	protocols := make([]corev1.Protocol, 0)
 	isFixed := false
 	allocateLoadBalancerNodePorts := true
 	annotations := map[string]string{}
+	enableClbScatter := false
+	enableMultiIngress := false
 	for _, c := range conf {
 		switch c.Name {
 		case ClbIdsConfigName:
+			seenIds := make(map[string]struct{})
 			for _, clbId := range strings.Split(c.Value, ",") {
 				if clbId != "" {
-					lbIds = append(lbIds, clbId)
+					if _, exists := seenIds[clbId]; !exists {
+						lbIds = append(lbIds, clbId)
+						seenIds[clbId] = struct{}{}
+					}
 				}
 			}
 		case PortProtocolsConfigName:
@@ -419,6 +568,16 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *clbConfig {
 					log.Warningf("clb annotation %s is invalid", annoKV[0])
 				}
 			}
+		case EnableClbScatterConfigName:
+			v, err := strconv.ParseBool(c.Value)
+			if err == nil {
+				enableClbScatter = v
+			}
+		case EnableMultiIngressConfigName:
+			v, err := strconv.ParseBool(c.Value)
+			if err == nil {
+				enableMultiIngress = v
+			}
 		}
 	}
 	return &clbConfig{
@@ -428,6 +587,8 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *clbConfig {
 		isFixed:                       isFixed,
 		annotations:                   annotations,
 		allocateLoadBalancerNodePorts: allocateLoadBalancerNodePorts,
+		enableClbScatter:              enableClbScatter,
+		enableMultiIngress:            enableMultiIngress,
 	}
 }
 
@@ -439,7 +600,7 @@ func getPorts(ports []corev1.ServicePort) []int32 {
 	return ret
 }
 
-func (c *ClbPlugin) consSvc(config *clbConfig, pod *corev1.Pod, client client.Client, ctx context.Context) *corev1.Service {
+func (c *ClbPlugin) consSvc(config *clbConfig, pod *corev1.Pod, client client.Client, ctx context.Context) (*corev1.Service, error) {
 	var ports []int32
 	var lbId string
 	podKey := pod.GetNamespace() + "/" + pod.GetName()
@@ -449,13 +610,19 @@ func (c *ClbPlugin) consSvc(config *clbConfig, pod *corev1.Pod, client client.Cl
 		lbId = clbPorts[0]
 		ports = util.StringToInt32Slice(clbPorts[1], ",")
 	} else {
-		lbId, ports = c.allocate(config.lbIds, len(config.targetPorts), podKey)
+		var err error
+		lbId, ports, err = c.allocate(config.lbIds, len(config.targetPorts), podKey, config.enableClbScatter)
+		if err != nil {
+			log.Errorf("[CLB] pod %s allocate clb failed: %v", podKey, err)
+			return nil, err
+		}
 	}
 
 	svcPorts := make([]corev1.ServicePort, 0)
 	for i := 0; i < len(config.targetPorts); i++ {
+		portName := fmt.Sprintf("%d-%s", config.targetPorts[i], strings.ToLower(string(config.protocols[i])))
 		svcPorts = append(svcPorts, corev1.ServicePort{
-			Name:       strconv.Itoa(config.targetPorts[i]),
+			Name:       portName,
 			Port:       ports[i],
 			Protocol:   config.protocols[i],
 			TargetPort: intstr.FromInt(config.targetPorts[i]),
@@ -488,7 +655,7 @@ func (c *ClbPlugin) consSvc(config *clbConfig, pod *corev1.Pod, client client.Cl
 			AllocateLoadBalancerNodePorts: ptr.To[bool](config.allocateLoadBalancerNodePorts),
 		},
 	}
-	return svc
+	return svc, nil
 }
 
 func getSvcOwnerReference(c client.Client, ctx context.Context, pod *corev1.Pod, isFixed bool) []metav1.OwnerReference {

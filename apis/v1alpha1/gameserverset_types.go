@@ -50,14 +50,19 @@ type GameServerSetSpec struct {
 	Replicas *int32 `json:"replicas"`
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
-	GameServerTemplate   GameServerTemplate `json:"gameServerTemplate,omitempty"`
-	ServiceName          string             `json:"serviceName,omitempty"`
-	ReserveGameServerIds []int              `json:"reserveGameServerIds,omitempty"`
-	ServiceQualities     []ServiceQuality   `json:"serviceQualities,omitempty"`
-	UpdateStrategy       UpdateStrategy     `json:"updateStrategy,omitempty"`
-	ScaleStrategy        ScaleStrategy      `json:"scaleStrategy,omitempty"`
-	Network              *Network           `json:"network,omitempty"`
-	Lifecycle            *appspub.Lifecycle `json:"lifecycle,omitempty"`
+	GameServerTemplate   GameServerTemplate   `json:"gameServerTemplate,omitempty"`
+	ServiceName          string               `json:"serviceName,omitempty"`
+	ReserveGameServerIds []intstr.IntOrString `json:"reserveGameServerIds,omitempty"`
+	ServiceQualities     []ServiceQuality     `json:"serviceQualities,omitempty"`
+	UpdateStrategy       UpdateStrategy       `json:"updateStrategy,omitempty"`
+	ScaleStrategy        ScaleStrategy        `json:"scaleStrategy,omitempty"`
+	Network              *Network             `json:"network,omitempty"`
+	Lifecycle            *appspub.Lifecycle   `json:"lifecycle,omitempty"`
+	// PersistentVolumeClaimRetentionPolicy describes the policy used for PVCs created from
+	// the StatefulSet VolumeClaimTemplates. This requires the
+	// StatefulSetAutoDeletePVC feature gate to be enabled, which is alpha.
+	// +optional
+	PersistentVolumeClaimRetentionPolicy *kruiseV1beta1.StatefulSetPersistentVolumeClaimRetentionPolicy `json:"persistentVolumeClaimRetentionPolicy,omitempty"`
 }
 
 type GameServerTemplate struct {
@@ -186,6 +191,7 @@ type GameServerSetStatus struct {
 	UpdatedReadyReplicas    int32  `json:"updatedReadyReplicas,omitempty"`
 	MaintainingReplicas     *int32 `json:"maintainingReplicas,omitempty"`
 	WaitToBeDeletedReplicas *int32 `json:"waitToBeDeletedReplicas,omitempty"`
+	PreDeleteReplicas       *int32 `json:"preDeleteReplicas,omitempty"`
 	// LabelSelector is label selectors for query over pods that should match the replica count used by HPA.
 	LabelSelector string `json:"labelSelector,omitempty"`
 }
@@ -193,11 +199,12 @@ type GameServerSetStatus struct {
 //+genclient
 //+kubebuilder:object:root=true
 //+kubebuilder:printcolumn:name="DESIRED",type="integer",JSONPath=".spec.replicas",description="The desired number of GameServers."
-//+kubebuilder:printcolumn:name="CURRENT",type="integer",JSONPath=".status.replicas",description="The number of currently all GameServers."
+//+kubebuilder:printcolumn:name="CURRENT",type="integer",JSONPath=".status.currentReplicas",description="The number of currently all GameServers."
 //+kubebuilder:printcolumn:name="UPDATED",type="integer",JSONPath=".status.updatedReplicas",description="The number of GameServers updated."
 //+kubebuilder:printcolumn:name="READY",type="integer",JSONPath=".status.readyReplicas",description="The number of GameServers ready."
 //+kubebuilder:printcolumn:name="Maintaining",type="integer",JSONPath=".status.maintainingReplicas",description="The number of GameServers Maintaining."
 //+kubebuilder:printcolumn:name="WaitToBeDeleted",type="integer",JSONPath=".status.waitToBeDeletedReplicas",description="The number of GameServers WaitToBeDeleted."
+//+kubebuilder:printcolumn:name="PreDelete",type="integer",JSONPath=".status.preDeleteReplicas",description="The number of GameServers PreDelete."
 //+kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp",description="The age of GameServerSet."
 //+kubebuilder:subresource:status
 //+kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.labelSelector

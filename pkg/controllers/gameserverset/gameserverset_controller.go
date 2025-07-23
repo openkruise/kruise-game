@@ -18,7 +18,9 @@ package gameserverset
 
 import (
 	"context"
+	"flag"
 
+	kruisev1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -37,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
@@ -44,6 +47,10 @@ import (
 	"github.com/openkruise/kruise-game/pkg/util"
 	utildiscovery "github.com/openkruise/kruise-game/pkg/util/discovery"
 )
+
+func init() {
+	flag.IntVar(&concurrentReconciles, "gameserverset-workers", concurrentReconciles, "Max concurrent workers for GameServerSet controller.")
+}
 
 var (
 	controllerKind = gamekruiseiov1alpha1.SchemeGroupVersion.WithKind("GameServerSet")
@@ -76,17 +83,28 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		return err
 	}
 
-	if err = c.Watch(&source.Kind{Type: &gamekruiseiov1alpha1.GameServerSet{}}, &handler.EnqueueRequestForObject{}); err != nil {
+	if err = c.Watch(source.Kind(mgr.GetCache(), &gamekruiseiov1alpha1.GameServerSet{}, &handler.TypedEnqueueRequestForObject[*gamekruiseiov1alpha1.GameServerSet]{})); err != nil {
 		klog.Error(err)
 		return err
 	}
 
-	if err = watchPod(c); err != nil {
+	if err = c.Watch(source.Kind(mgr.GetCache(), &kruisev1alpha1.PodProbeMarker{}, &handler.TypedEnqueueRequestForObject[*kruisev1alpha1.PodProbeMarker]{}, predicate.TypedFuncs[*kruisev1alpha1.PodProbeMarker]{
+		UpdateFunc: func(e event.TypedUpdateEvent[*kruisev1alpha1.PodProbeMarker]) bool {
+			oldScS := e.ObjectOld
+			newScS := e.ObjectNew
+			return oldScS.Status.ObservedGeneration != newScS.Status.ObservedGeneration
+		},
+	})); err != nil {
 		klog.Error(err)
 		return err
 	}
 
-	if err = watchWorkloads(c); err != nil {
+	if err = watchPod(mgr, c); err != nil {
+		klog.Error(err)
+		return err
+	}
+
+	if err = watchWorkloads(mgr, c); err != nil {
 		klog.Error(err)
 		return err
 	}
@@ -95,11 +113,10 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 }
 
 // watch pod
-func watchPod(c controller.Controller) (err error) {
-
-	if err := c.Watch(&source.Kind{Type: &corev1.Pod{}}, &handler.Funcs{
-		CreateFunc: func(createEvent event.CreateEvent, limitingInterface workqueue.RateLimitingInterface) {
-			pod := createEvent.Object.(*corev1.Pod)
+func watchPod(mgr manager.Manager, c controller.Controller) (err error) {
+	if err := c.Watch(source.Kind(mgr.GetCache(), &corev1.Pod{}, &handler.TypedFuncs[*corev1.Pod]{
+		CreateFunc: func(ctx context.Context, createEvent event.TypedCreateEvent[*corev1.Pod], limitingInterface workqueue.RateLimitingInterface) {
+			pod := createEvent.Object
 			if gssName, exist := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; exist {
 				limitingInterface.Add(reconcile.Request{NamespacedName: types.NamespacedName{
 					Name:      gssName,
@@ -107,8 +124,8 @@ func watchPod(c controller.Controller) (err error) {
 				}})
 			}
 		},
-		UpdateFunc: func(updateEvent event.UpdateEvent, limitingInterface workqueue.RateLimitingInterface) {
-			pod := updateEvent.ObjectNew.(*corev1.Pod)
+		UpdateFunc: func(ctx context.Context, updateEvent event.TypedUpdateEvent[*corev1.Pod], limitingInterface workqueue.RateLimitingInterface) {
+			pod := updateEvent.ObjectNew
 			if gssName, exist := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; exist {
 				limitingInterface.Add(reconcile.Request{NamespacedName: types.NamespacedName{
 					Name:      gssName,
@@ -116,8 +133,8 @@ func watchPod(c controller.Controller) (err error) {
 				}})
 			}
 		},
-		DeleteFunc: func(deleteEvent event.DeleteEvent, limitingInterface workqueue.RateLimitingInterface) {
-			pod := deleteEvent.Object.(*corev1.Pod)
+		DeleteFunc: func(ctx context.Context, deleteEvent event.TypedDeleteEvent[*corev1.Pod], limitingInterface workqueue.RateLimitingInterface) {
+			pod := deleteEvent.Object
 			if gssName, exist := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; exist {
 				limitingInterface.Add(reconcile.Request{NamespacedName: types.NamespacedName{
 					Name:      gssName,
@@ -125,18 +142,20 @@ func watchPod(c controller.Controller) (err error) {
 				}})
 			}
 		},
-	}); err != nil {
+	})); err != nil {
 		return err
 	}
 	return nil
 }
 
 // watch workloads
-func watchWorkloads(c controller.Controller) (err error) {
-	if err := c.Watch(&source.Kind{Type: &kruiseV1beta1.StatefulSet{}}, &handler.EnqueueRequestForOwner{
-		IsController: true,
-		OwnerType:    &gamekruiseiov1alpha1.GameServerSet{},
-	}); err != nil {
+func watchWorkloads(mgr manager.Manager, c controller.Controller) (err error) {
+	if err := c.Watch(source.Kind(mgr.GetCache(), &kruiseV1beta1.StatefulSet{}, handler.TypedEnqueueRequestForOwner[*kruiseV1beta1.StatefulSet](
+		mgr.GetScheme(),
+		mgr.GetRESTMapper(),
+		&gamekruiseiov1alpha1.GameServerSet{},
+		handler.OnlyControllerOwner(),
+	))); err != nil {
 		return err
 	}
 	return nil
@@ -177,6 +196,16 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return reconcile.Result{}, err
 	}
 
+	gsm := NewGameServerSetManager(gss, r.Client, r.recorder)
+	// The serverless scenario PodProbeMarker takes effect during the Webhook phase, so need to create the PodProbeMarker in advance.
+	err, done := gsm.SyncPodProbeMarker()
+	if err != nil {
+		klog.Errorf("GameServerSet %s failed to synchronize PodProbeMarker in %s,because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
+		return reconcile.Result{}, err
+	} else if !done {
+		return reconcile.Result{}, nil
+	}
+
 	// get advanced statefulset
 	asts := &kruiseV1beta1.StatefulSet{}
 	err = r.Get(ctx, namespacedName, asts)
@@ -200,13 +229,14 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		Namespace: gss.GetNamespace(),
 		LabelSelector: labels.SelectorFromSet(map[string]string{
 			gamekruiseiov1alpha1.GameServerOwnerGssKey: gss.GetName(),
-		})})
+		}),
+	})
 	if err != nil {
 		klog.Errorf("failed to list GameServers of GameServerSet %s in %s.", gss.GetName(), gss.GetNamespace())
 		return reconcile.Result{}, err
 	}
 
-	gsm := NewGameServerSetManager(gss, asts, podList.Items, r.Client, r.recorder)
+	gsm.SyncStsAndPodList(asts, podList.Items)
 
 	// kill game servers
 	newReplicas := gsm.GetReplicasAfterKilling()
@@ -241,12 +271,6 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return reconcile.Result{}, nil
 	}
 
-	err = gsm.SyncPodProbeMarker()
-	if err != nil {
-		klog.Errorf("GameServerSet %s failed to synchronize PodProbeMarker in %s,because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
-		return reconcile.Result{}, err
-	}
-
 	// sync GameServerSet Status
 	err = gsm.SyncStatus()
 	if err != nil {
@@ -265,7 +289,12 @@ func (r *GameServerSetReconciler) SetupWithManager(mgr ctrl.Manager) (c controll
 }
 
 func (r *GameServerSetReconciler) initAsts(gss *gamekruiseiov1alpha1.GameServerSet) error {
-	asts := &kruiseV1beta1.StatefulSet{}
+	asts := &kruiseV1beta1.StatefulSet{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "StatefulSet",
+			APIVersion: "apps.kruise.io/v1beta1",
+		},
+	}
 	asts.Namespace = gss.GetNamespace()
 	asts.Name = gss.GetName()
 
