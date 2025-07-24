@@ -1,11 +1,12 @@
 package cloudprovider
 
 import (
-	"github.com/openkruise/kruise-game/cloudprovider/options"
 	"io"
 	"os"
 	"reflect"
 	"testing"
+
+	"github.com/openkruise/kruise-game/cloudprovider/options"
 )
 
 func TestParse(t *testing.T) {

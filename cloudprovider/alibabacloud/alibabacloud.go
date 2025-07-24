@@ -17,8 +17,9 @@ limitations under the License.
 package alibabacloud
 
 import (
-	"github.com/openkruise/kruise-game/cloudprovider"
 	"k8s.io/klog/v2"
+
+	"github.com/openkruise/kruise-game/cloudprovider"
 )
 
 const (

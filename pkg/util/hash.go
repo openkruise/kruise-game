@@ -18,9 +18,10 @@ package util
 
 import (
 	"fmt"
-	"github.com/davecgh/go-spew/spew"
 	"hash"
 	"hash/fnv"
+
+	"github.com/davecgh/go-spew/spew"
 )
 
 func GetHash(objectToWrite interface{}) string {
