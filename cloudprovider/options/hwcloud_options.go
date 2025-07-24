@@ -1,7 +1,12 @@
 package options
 
 type HwCloudOptions struct {
-	Enable     bool       `toml:"enable"`
+	Enable        bool          `toml:"enable"`
+	ELBOptions    ELBOptions    `toml:"elb"`
+	CCEELBOptions CCEELBOptions `toml:"cce"`
+}
+
+type CCEELBOptions struct {
 	ELBOptions ELBOptions `toml:"elb"`
 }
 
@@ -11,20 +16,26 @@ type ELBOptions struct {
 	BlockPorts []int32 `toml:"block_ports"`
 }
 
-func (o HwCloudOptions) Valid() bool {
-	elbOptions := o.ELBOptions
-	for _, blockPort := range elbOptions.BlockPorts {
-		if blockPort >= elbOptions.MaxPort || blockPort <= elbOptions.MinPort {
+func (e ELBOptions) valid(skipPortRangeCheck bool) bool {
+	for _, blockPort := range e.BlockPorts {
+		if blockPort >= e.MaxPort || blockPort <= e.MinPort {
 			return false
 		}
 	}
-	if int(elbOptions.MaxPort-elbOptions.MinPort)-len(elbOptions.BlockPorts) > 200 {
+	// old elb plugin only allow 200 ports.
+	if !skipPortRangeCheck && int(e.MaxPort-e.MinPort)-len(e.BlockPorts) > 200 {
 		return false
 	}
-	if elbOptions.MinPort <= 0 {
+	if e.MinPort <= 0 || e.MaxPort > 65535 {
 		return false
 	}
 	return true
+}
+
+func (o HwCloudOptions) Valid() bool {
+	elbOptions := o.ELBOptions
+	cceElbOptions := o.CCEELBOptions
+	return elbOptions.valid(false) && cceElbOptions.ELBOptions.valid(true)
 }
 
 func (o HwCloudOptions) Enabled() bool {
