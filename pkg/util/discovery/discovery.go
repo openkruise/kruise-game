@@ -23,7 +23,9 @@ import (
 
 	"github.com/openkruise/kruise-game/pkg/client"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
@@ -45,12 +47,7 @@ func init() {
 	_ = AddToScheme(internalScheme)
 }
 
-func DiscoverGVK(gvk schema.GroupVersionKind) bool {
-	genericClient := client.GetGenericClient()
-	if genericClient == nil {
-		return true
-	}
-	discoveryClient := genericClient.DiscoveryClient
+func discoverGVKWithClient(discoveryClient discovery.DiscoveryInterface, gvk schema.GroupVersionKind) bool {
 
 	startTime := time.Now()
 	err := retry.OnError(backOff, func(err error) bool { return true }, func() error {
@@ -67,7 +64,7 @@ func DiscoverGVK(gvk schema.GroupVersionKind) bool {
 	})
 
 	if err != nil {
-		if err == errKindNotFound {
+		if errors.IsNotFound(err) || err == errKindNotFound {
 			klog.Warningf("Not found kind %s in group version %s, waiting time %s", gvk.Kind, gvk.GroupVersion().String(), time.Since(startTime))
 			return false
 		}
@@ -77,6 +74,15 @@ func DiscoverGVK(gvk schema.GroupVersionKind) bool {
 	}
 
 	return true
+}
+
+// DiscoverGVK checks if a given GVK is discoverable from the API server
+func DiscoverGVK(gvk schema.GroupVersionKind) bool {
+	genericClient := client.GetGenericClient()
+	if genericClient == nil {
+		return true
+	}
+	return discoverGVKWithClient(genericClient.DiscoveryClient, gvk)
 }
 
 func DiscoverObject(obj runtime.Object) bool {
