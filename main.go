@@ -182,7 +182,10 @@ func main() {
 	}
 
 	// Add a readiness check that confirms the manager is ready to serve traffic if leader election is enabled.
-	var isLeader atomic.Bool
+	var (
+		isLeader                  atomic.Bool
+		isCloudManagerInitialized atomic.Bool
+	)
 	if enableLeaderElection {
 		if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 			<-mgr.Elected()
@@ -200,9 +203,8 @@ func main() {
 			// If leader election is not enabled, we can always return ready
 			return healthz.Ping(req)
 		}
-		if isLeader.Load() {
+		if isLeader.Load() && isCloudManagerInitialized.Load() {
 			// If the manager is the leader, we can return nil to indicate readiness
-			// TODO: check cloud provider manager cache initialization
 			return nil
 		}
 		return fmt.Errorf("not leader yet")
@@ -227,6 +229,7 @@ func main() {
 				<-mgr.Elected()
 			}
 			cloudProviderManager.Init(mgr.GetClient())
+			isCloudManagerInitialized.Store(true)
 		}
 	}()
 
