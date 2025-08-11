@@ -207,7 +207,7 @@ func main() {
 			// If the manager is the leader, we can return nil to indicate readiness
 			return nil
 		}
-		return fmt.Errorf("not leader yet")
+		return fmt.Errorf("not ready yet")
 	}); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)

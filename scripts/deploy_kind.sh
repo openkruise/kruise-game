@@ -17,7 +17,7 @@ pushd config/manager
 
 # if $ENABLE_HA is set, we will set replicas to 3
 if [ -n "$ENABLE_HA" ]; then
-  echo "enable HA mode"
+  echo "enable HA mode controller-manager"
   "${KUSTOMIZE}" edit set replicas controller-manager=3
   # enable leader election
   "${KUSTOMIZE}" edit add patch --kind Deployment --name controller-manager --path patches/add-leader-elect-patch.yaml
