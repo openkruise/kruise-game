@@ -249,6 +249,9 @@ func TestNlbPlugin_consSvc(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-pod",
 					Namespace: "default",
+					Labels: map[string]string{
+						ServiceProxyName: "dummy",
+					},
 					Annotations: map[string]string{
 						SlbListenerOverrideKey: "true",
 						SlbIdAnnotationKey:     "clb-xxx",
