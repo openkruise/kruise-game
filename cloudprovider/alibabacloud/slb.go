@@ -628,9 +628,12 @@ func (s *SlbPlugin) consSvc(sc *slbConfig, pod *corev1.Pod, c client.Client, ctx
 
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            pod.GetName(),
-			Namespace:       pod.GetNamespace(),
-			Annotations:     svcAnnotations,
+			Name:        pod.GetName(),
+			Namespace:   pod.GetNamespace(),
+			Annotations: svcAnnotations,
+			Labels: map[string]string{
+				ServiceProxyName: "dummy",
+			},
 			OwnerReferences: getSvcOwnerReference(c, ctx, pod, sc.isFixed),
 		},
 		Spec: corev1.ServiceSpec{

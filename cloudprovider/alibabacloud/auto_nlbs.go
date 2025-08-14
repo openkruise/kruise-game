@@ -418,6 +418,9 @@ func (a *AutoNLBsPlugin) consSvc(namespace, gssName, eipType string, svcIndex in
 			Name:        gssName + "-" + eipType + "-" + strconv.Itoa(svcIndex),
 			Namespace:   namespace,
 			Annotations: svcAnnotations,
+			Labels: map[string]string{
+				ServiceProxyName: "dummy",
+			},
 		},
 		Spec: corev1.ServiceSpec{
 			Ports: a.consSvcPorts(svcIndex, conf),

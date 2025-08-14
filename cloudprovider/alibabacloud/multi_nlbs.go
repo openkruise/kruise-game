@@ -54,6 +54,7 @@ const (
 	ProtocolTCPUDP corev1.Protocol = "TCPUDP"
 
 	PrefixReadyReadinessGate = "service.readiness.alibabacloud.com/"
+	ServiceProxyName         = "service.kubernetes.io/service-proxy-name"
 )
 
 type MultiNlbsPlugin struct {
@@ -454,6 +455,7 @@ func (m *MultiNlbsPlugin) consSvc(podLbsPorts *lbsPorts, conf *multiNLBsConfig, 
 			Annotations: svcAnnotations,
 			Labels: map[string]string{
 				ServiceBelongNetworkTypeKey: MultiNlbsNetwork,
+				ServiceProxyName:            "dummy",
 			},
 			OwnerReferences: getSvcOwnerReference(c, ctx, pod, conf.isFixed),
 		},
