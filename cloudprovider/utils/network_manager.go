@@ -19,12 +19,14 @@ package utils
 import (
 	"context"
 	"errors"
-	"github.com/openkruise/kruise-game/apis/v1alpha1"
+	"strconv"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/json"
 	log "k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strconv"
+
+	"github.com/openkruise/kruise-game/apis/v1alpha1"
 )
 
 type NetworkManager struct {

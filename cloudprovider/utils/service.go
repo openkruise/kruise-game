@@ -2,14 +2,17 @@ package utils
 
 import (
 	"context"
-	kruisePub "github.com/openkruise/kruise-api/apps/pub"
-	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
-	"github.com/openkruise/kruise-game/pkg/util"
+	"strings"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strings"
+
+	kruisePub "github.com/openkruise/kruise-api/apps/pub"
+
+	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
+	"github.com/openkruise/kruise-game/pkg/util"
 )
 
 func AllowNotReadyContainers(c client.Client, ctx context.Context, pod *corev1.Pod, svc *corev1.Service, isSvcShared bool) (bool, cperrors.PluginError) {

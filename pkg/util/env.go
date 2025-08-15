@@ -1,10 +1,11 @@
 package util
 
 import (
-	"k8s.io/klog/v2"
 	"os"
 	"strconv"
 	"time"
+
+	"k8s.io/klog/v2"
 )
 
 func GetNetworkTotalWaitTime() time.Duration {

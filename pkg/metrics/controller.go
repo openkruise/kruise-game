@@ -21,11 +21,12 @@ import (
 	"errors"
 	"sync"
 
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/klog/v2"
+
 	gamekruisev1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	kruisegamevisions "github.com/openkruise/kruise-game/pkg/client/informers/externalversions"
 	kruisegamelister "github.com/openkruise/kruise-game/pkg/client/listers/apis/v1alpha1"
-	"k8s.io/client-go/tools/cache"
-	"k8s.io/klog/v2"
 )
 
 type Controller struct {

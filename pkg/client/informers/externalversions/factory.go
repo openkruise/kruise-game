@@ -22,13 +22,14 @@ import (
 	sync "sync"
 	time "time"
 
-	versioned "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
-	apis "github.com/openkruise/kruise-game/pkg/client/informers/externalversions/apis"
-	internalinterfaces "github.com/openkruise/kruise-game/pkg/client/informers/externalversions/internalinterfaces"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	cache "k8s.io/client-go/tools/cache"
+
+	versioned "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
+	apis "github.com/openkruise/kruise-game/pkg/client/informers/externalversions/apis"
+	internalinterfaces "github.com/openkruise/kruise-game/pkg/client/informers/externalversions/internalinterfaces"
 )
 
 // SharedInformerOption defines the functional option type for SharedInformerFactory.

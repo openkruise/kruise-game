@@ -19,19 +19,19 @@ package manager
 import (
 	"context"
 
-	"github.com/openkruise/kruise-game/cloudprovider/hwcloud"
-	"github.com/openkruise/kruise-game/cloudprovider/jdcloud"
+	corev1 "k8s.io/api/core/v1"
+	log "k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	"github.com/openkruise/kruise-game/cloudprovider/alibabacloud"
 	aws "github.com/openkruise/kruise-game/cloudprovider/amazonswebservices"
+	"github.com/openkruise/kruise-game/cloudprovider/hwcloud"
+	"github.com/openkruise/kruise-game/cloudprovider/jdcloud"
 	"github.com/openkruise/kruise-game/cloudprovider/kubernetes"
 	"github.com/openkruise/kruise-game/cloudprovider/tencentcloud"
 	volcengine "github.com/openkruise/kruise-game/cloudprovider/volcengine"
-	corev1 "k8s.io/api/core/v1"
-	log "k8s.io/klog/v2"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type ProviderManager struct {
