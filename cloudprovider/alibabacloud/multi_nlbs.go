@@ -43,7 +43,8 @@ const (
 	AliasMultiNlbs   = "Multi-NLBs-Network"
 
 	// ConfigNames defined by OKG
-	NlbIdNamesConfigName = "NlbIdNames"
+	NlbIdNamesConfigName     = "NlbIdNames"
+	AllocatePolicyConfigName = "AllocatePolicy"
 
 	// service annotation defined by OKG
 	LBIDBelongIndexKey = "game.kruise.io/lb-belong-index"
@@ -388,6 +389,7 @@ type multiNLBsConfig struct {
 	protocols             []corev1.Protocol
 	isFixed               bool
 	externalTrafficPolicy corev1.ServiceExternalTrafficPolicyType
+	allocatePolicy        string
 	*nlbHealthConfig
 }
 
@@ -497,21 +499,50 @@ func (m *MultiNlbsPlugin) allocate(conf *multiNLBsConfig, nsName string) (*lbsPo
 	}
 
 	// find allocated ports
-	for i := 0; i < len(m.cache); i++ {
-		sum := 0
+	switch conf.allocatePolicy {
+	case "default":
+		for i := 0; i < len(m.cache); i++ {
+			sum := 0
+			ports = make([]int32, 0)
+			for j := 0; j < len(m.cache[i]); j++ {
+				if !m.cache[i][j] {
+					ports = append(ports, int32(j)+m.minPort)
+					sum++
+					if sum == needNum {
+						index = i
+						break
+					}
+				}
+			}
+			if index != -1 {
+				break
+			}
+		}
+	case "balanced":
+		maxAvailable := 0
+		for i := 0; i < len(m.cache); i++ {
+			sum := 0
+			for j := 0; j < len(m.cache[i]); j++ {
+				if !m.cache[i][j] {
+					sum++
+				}
+			}
+			if sum > maxAvailable {
+				maxAvailable = sum
+				index = i
+			}
+		}
+		if maxAvailable < needNum {
+			return nil, fmt.Errorf("no available ports found")
+		}
 		ports = make([]int32, 0)
-		for j := 0; j < len(m.cache[i]); j++ {
-			if !m.cache[i][j] {
+		for j := 0; j < len(m.cache[index]); j++ {
+			if !m.cache[index][j] {
 				ports = append(ports, int32(j)+m.minPort)
-				sum++
-				if sum == needNum {
-					index = i
+				if len(ports) == needNum {
 					break
 				}
 			}
-		}
-		if index != -1 {
-			break
 		}
 	}
 
@@ -560,6 +591,7 @@ func parseMultiNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*multi
 	protocols := make([]corev1.Protocol, 0)
 	isFixed := false
 	externalTrafficPolicy := corev1.ServiceExternalTrafficPolicyTypeLocal
+	allocatePolicy := "default"
 
 	for _, c := range conf {
 		switch c.Name {
@@ -608,6 +640,11 @@ func parseMultiNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*multi
 			if strings.EqualFold(c.Value, string(corev1.ServiceExternalTrafficPolicyTypeCluster)) {
 				externalTrafficPolicy = corev1.ServiceExternalTrafficPolicyTypeCluster
 			}
+		case AllocatePolicyConfigName:
+			allocatePolicy = c.Value
+			if allocatePolicy != "default" && allocatePolicy != "balanced" {
+				return nil, fmt.Errorf("invalid AllocatePolicy %s", allocatePolicy)
+			}
 		}
 	}
 
@@ -640,6 +677,7 @@ func parseMultiNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*multi
 		protocols:             protocols,
 		isFixed:               isFixed,
 		externalTrafficPolicy: externalTrafficPolicy,
+		allocatePolicy:        allocatePolicy,
 		nlbHealthConfig:       nlbHealthConfig,
 	}, nil
 }

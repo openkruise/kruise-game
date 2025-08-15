@@ -144,8 +144,9 @@ func TestAllocate(t *testing.T) {
 						"id-xx-C", "id-xx-D",
 					},
 				},
-				targetPorts: []int{80, 80},
-				protocols:   []corev1.Protocol{corev1.ProtocolTCP, corev1.ProtocolUDP},
+				targetPorts:    []int{80, 80},
+				protocols:      []corev1.Protocol{corev1.ProtocolTCP, corev1.ProtocolUDP},
+				allocatePolicy: "default",
 			},
 			nsName: "default/test-0",
 			lbsPorts: &lbsPorts{
@@ -199,8 +200,9 @@ func TestAllocate(t *testing.T) {
 						"id-xx-C", "id-xx-D",
 					},
 				},
-				targetPorts: []int{80, 80},
-				protocols:   []corev1.Protocol{corev1.ProtocolTCP, corev1.ProtocolUDP},
+				targetPorts:    []int{80, 80},
+				protocols:      []corev1.Protocol{corev1.ProtocolTCP, corev1.ProtocolUDP},
+				allocatePolicy: "default",
 			},
 			nsName: "default/test-1",
 			lbsPorts: &lbsPorts{
@@ -261,8 +263,9 @@ func TestAllocate(t *testing.T) {
 						"id-xx-C", "id-xx-D",
 					},
 				},
-				targetPorts: []int{80, 80},
-				protocols:   []corev1.Protocol{corev1.ProtocolTCP, corev1.ProtocolUDP},
+				targetPorts:    []int{80, 80},
+				protocols:      []corev1.Protocol{corev1.ProtocolTCP, corev1.ProtocolUDP},
+				allocatePolicy: "default",
 			},
 			nsName: "default/test-0",
 			lbsPorts: &lbsPorts{
@@ -277,6 +280,68 @@ func TestAllocate(t *testing.T) {
 				"default/test-0": {
 					index:      0,
 					lbIds:      []string{"id-xx-A", "id-xx-B"},
+					ports:      []int32{8000},
+					targetPort: []int{80},
+					protocols:  []corev1.Protocol{corev1.ProtocolTCP},
+				},
+			},
+		},
+		// case 3: balanced allocatePolicy
+		{
+			plugin: &MultiNlbsPlugin{
+				maxPort: int32(8001),
+				minPort: int32(8000),
+				mutex:   sync.RWMutex{},
+				podAllocate: map[string]*lbsPorts{
+					"default/test-0": {
+						index:      0,
+						lbIds:      []string{"id-xx-A", "id-xx-B"},
+						ports:      []int32{8000},
+						targetPort: []int{80},
+						protocols:  []corev1.Protocol{corev1.ProtocolTCP},
+					},
+				},
+				cache: [][]bool{{true, false}},
+			},
+			conf: &multiNLBsConfig{
+				lbNames: map[string]string{
+					"id-xx-A": "dianxin",
+					"id-xx-B": "liantong",
+					"id-xx-C": "dianxin",
+					"id-xx-D": "liantong",
+				},
+				idList: [][]string{
+					{
+						"id-xx-A", "id-xx-B",
+					},
+					{
+						"id-xx-C", "id-xx-D",
+					},
+				},
+				targetPorts:    []int{80},
+				protocols:      []corev1.Protocol{corev1.ProtocolTCP},
+				allocatePolicy: "balanced",
+			},
+			nsName: "default/test-1",
+			lbsPorts: &lbsPorts{
+				index:      1,
+				lbIds:      []string{"id-xx-C", "id-xx-D"},
+				ports:      []int32{8000},
+				targetPort: []int{80},
+				protocols:  []corev1.Protocol{corev1.ProtocolTCP},
+			},
+			cacheAfter: [][]bool{{true, false}, {true, false}},
+			podAllocateAfter: map[string]*lbsPorts{
+				"default/test-0": {
+					index:      0,
+					lbIds:      []string{"id-xx-A", "id-xx-B"},
+					ports:      []int32{8000},
+					targetPort: []int{80},
+					protocols:  []corev1.Protocol{corev1.ProtocolTCP},
+				},
+				"default/test-1": {
+					index:      1,
+					lbIds:      []string{"id-xx-C", "id-xx-D"},
 					ports:      []int32{8000},
 					targetPort: []int{80},
 					protocols:  []corev1.Protocol{corev1.ProtocolTCP},
