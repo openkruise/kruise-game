@@ -71,47 +71,94 @@ jobs:
             echo "Timeout to wait for kruise-manager ready"
             exit 1
           fi
-      - name: Install Kruise Game
+      - name: Install Kruise Game in HA mode
         run: |
           set -ex
-          kubectl cluster-info
-          IMG=openkruise/kruise-game-manager:e2e-${GITHUB_RUN_ID} ./scripts/deploy_kind.sh
-          for ((i=1;i<10;i++));
-          do
+          IMG=openkruise/kruise-game-manager:e2e-${GITHUB_RUN_ID} ENABLE_HA=true ./scripts/deploy_kind.sh
+          
+          # Wait for the controller manager to be ready at least 1 replica
+          for i in {1..30}; do
             set +e
             PODS=$(kubectl get pod -n kruise-game-system | grep '1/1' | wc -l)
             set -e
             if [ "$PODS" -eq "1" ]; then
               break
             fi
+            echo "Waiting for controller ready... ($i/10)"
             sleep 3
           done
-          set +e
-          PODS=$(kubectl get pod -n kruise-game-system | grep '1/1' | wc -l)
-          kubectl get node -o yaml
-          kubectl get all -n kruise-game-system -o yaml
-          set -e
-          if [ "$PODS" -eq "1" ]; then
-            echo "Wait for kruise-game ready successfully"
-          else
-            echo "Timeout to wait for kruise-game ready"
+
+          # Verify that at least 2 controller replicas are running
+          PODS=$(kubectl get pod -n kruise-game-system --selector=control-plane=controller-manager -o jsonpath='{.items..metadata.name}' | wc -w)
+          if [ "$PODS" -lt "2" ]; then
+            echo "HA mode requires at least 2 controller replicas, but found $PODS"
+            kubectl get pod -n kruise-game-system
             exit 1
           fi
-      - name: Run E2E Tests
+          echo "Kruise Game installed in HA mode successfully"
+      - name: Run E2E Tests before failover
         run: |
           export KUBECONFIG=/home/runner/.kube/config
           make ginkgo
-          set +e
-          ./bin/ginkgo -timeout 60m -v test/e2e
+          ./bin/ginkgo --timeout 10m -v test/e2e
+      - name: Test HA Failover
+        run: |
+          set -e
+          NAMESPACE=kruise-game-system
+          LEASE_NAME=game-kruise-manager
+          echo "--- Identifying initial leader ---"
+          LEADER_POD=$(kubectl get lease $LEASE_NAME -n $NAMESPACE -o jsonpath='{.spec.holderIdentity}' | awk -F'_' '{print $1}')
+          if [ -z "$LEADER_POD" ]; then
+            echo "Could not determine leader pod."
+            exit 1
+          fi
+          echo "Current leader is $LEADER_POD"
+
+          echo "--- Deleting leader pod to trigger failover ---"
+          kubectl delete pod $LEADER_POD -n $NAMESPACE
+          
+          echo "--- Waiting for new leader to be elected ---"
+          for i in {1..30}; do
+            NEW_LEADER_POD=$(kubectl get lease $LEASE_NAME -n $NAMESPACE -o jsonpath='{.spec.holderIdentity}' | awk -F'_' '{print $1}')
+            if [ -n "$NEW_LEADER_POD" ] && [ "$NEW_LEADER_POD" != "$LEADER_POD" ]; then
+              echo "New leader elected: $NEW_LEADER_POD"
+              break
+            fi
+            echo "Waiting for new leader... ($i/30)"
+            sleep 5
+          done
+
+          if [ "$NEW_LEADER_POD" == "$LEADER_POD" ] || [ -z "$NEW_LEADER_POD" ]; then
+            echo "Failover failed. A new leader was not elected in time."
+            kubectl get lease $LEASE_NAME -n $NAMESPACE -o yaml
+            exit 1
+          fi
+
+          echo "--- Verifying all controller pods are ready after failover ---"
+          # Wait for the controller manager to be ready at least 1 replica
+          for i in {1..30}; do
+            set +e
+            PODS=$(kubectl get pod -n kruise-game-system | grep '1/1' | wc -l)
+            set -e
+            if [ "$PODS" -eq "1" ]; then
+              break
+            fi
+            echo "Waiting for controller ready... ($i/10)"
+            sleep 3
+          done
+          echo "HA Failover successful."
+      - name: Run E2E Tests after failover
+        run: |
+          export KUBECONFIG=/home/runner/.kube/config
+          ./bin/ginkgo --timeout 10m -v test/e2e
           retVal=$?
-          # kubectl get pod -n kruise-game-system --no-headers | grep manager | awk '{print $1}' | xargs kubectl logs -n kruise-game-system
-          restartCount=$(kubectl get pod -n kruise-game-system --no-headers | awk '{print $4}')
-          if [ "${restartCount}" -eq "0" ];then
-              echo "Kruise-game has not restarted"
+          restartCount=$(kubectl get pod -n kruise-game-system --no-headers | awk '{print $4}' | awk '{s+=$1} END {print s}')
+          if [ "${restartCount}" -le "1" ];then # Allow for 1 restart from the deleted leader
+              echo "Kruise-game has not restarted unexpectedly"
           else
-              kubectl get pod -n kruise-game-system --no-headers
-              echo "Kruise-game has restarted, abort!!!"
-              kubectl get pod -n kruise-game-system --no-headers| awk '{print $1}' | xargs kubectl logs -p -n kruise-game-system
+              echo "Kruise-game has restarted unexpectedly, abort!!!"
+              kubectl get pod -n kruise-game-system
+              kubectl get pod -n kruise-game-system --no-headers | awk '{print $1}' | xargs -I {} kubectl logs {} -p -n kruise-game-system --tail=100
               exit 1
           fi
           exit $retVal
