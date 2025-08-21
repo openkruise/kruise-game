@@ -94,3 +94,9 @@ OpenKruiseGame has the following core features:
 * Join the DingTalk group (ID: 44862615) to have a discussion with core contributors to OpenKruiseGame.
 * Contact us by email at zhongwei.lzw@alibaba-inc.com.
 
+### Logging
+
+Use the `--log-format` flag to control manager log output. The default value is `console`; set `--log-format=json` for structured logs.
+`--log-format` overrides `--zap-encoder` when both are set and prints a warning.
+When `json` is selected, logs use Kibana-friendly fields (`time`, `level`, `msg`, `caller`) and output from klog and the standard library `log` is redirected to the same JSON pipeline. See [logging documentation](docs/en/logging.md) for details.
+

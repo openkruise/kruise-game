@@ -38,12 +38,17 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/client-go/rest"
+	klog "k8s.io/klog/v2"
 	elbv2api "sigs.k8s.io/aws-load-balancer-controller/apis/elbv2/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+
+	zapr "github.com/go-logr/zapr"
+	gozap "go.uber.org/zap"
+	gozapcore "go.uber.org/zap/zapcore"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
@@ -53,6 +58,7 @@ import (
 	kruisegamevisions "github.com/openkruise/kruise-game/pkg/client/informers/externalversions"
 	controller "github.com/openkruise/kruise-game/pkg/controllers"
 	"github.com/openkruise/kruise-game/pkg/externalscaler"
+	"github.com/openkruise/kruise-game/pkg/logging"
 	"github.com/openkruise/kruise-game/pkg/metrics"
 	"github.com/openkruise/kruise-game/pkg/util/client"
 	"github.com/openkruise/kruise-game/pkg/webhook"
@@ -66,6 +72,7 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 
 	apiServerSustainedQPSFlag, apiServerBurstQPSFlag int
+	logFormat                                        string
 )
 
 func init() {
@@ -80,6 +87,32 @@ func init() {
 	utilruntime.Must(ackv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(elbv2api.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
+}
+
+// configureEncoder determines the final log encoder based on flags.
+// logFormat is the value of --log-format, while zapEncoder is the value of --zap-encoder.
+// logFormatChanged and zapEncoderChanged indicate whether the respective flags were explicitly set.
+func configureEncoder(logFormat string, logFormatChanged bool, zapEncoder string, zapEncoderChanged bool, opts *zap.Options) error {
+	finalFormat := "console"
+	if logFormatChanged {
+		finalFormat = logFormat
+		if zapEncoderChanged && zapEncoder != logFormat {
+			fmt.Fprintf(os.Stderr, "WARNING: --log-format overrides --zap-encoder (%s vs %s)\n", logFormat, zapEncoder)
+		}
+	} else if zapEncoderChanged {
+		finalFormat = zapEncoder
+	}
+
+	switch finalFormat {
+	case "console":
+		// default encoder
+	case "json":
+		opts.Encoder = logging.NewKibanaJSONEncoder()
+	default:
+		return fmt.Errorf("unsupported log-format %s", finalFormat)
+	}
+
+	return nil
 }
 
 func main() {
@@ -98,6 +131,7 @@ func main() {
 		"Namespace if specified restricts the manager's cache to watch objects in the desired namespace. Defaults to all namespaces.")
 	flag.StringVar(&syncPeriodStr, "sync-period", "", "Determines the minimum frequency at which watched resources are reconciled.")
 	flag.StringVar(&scaleServerAddr, "scale-server-bind-address", ":6000", "The address the scale server endpoint binds to.")
+	flag.StringVar(&logFormat, "log-format", "console", "Log output format: 'console' or 'json'.")
 	flag.IntVar(&apiServerSustainedQPSFlag, "api-server-qps", 0, "Maximum sustained queries per second to send to the API server")
 	flag.IntVar(&apiServerBurstQPSFlag, "api-server-qps-burst", 0, "Maximum burst queries per second to send to the API server")
 
@@ -107,10 +141,38 @@ func main() {
 	opts := zap.Options{
 		Development: true,
 	}
+	opts.ZapOpts = append(opts.ZapOpts,
+		gozap.AddCaller(),
+		gozap.WrapCore(func(c gozapcore.Core) gozapcore.Core {
+			return logging.NewSourceCore(c, 2)
+		}),
+	)
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
+	var logFormatChanged, zapEncoderChanged bool
+	flag.CommandLine.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "log-format":
+			logFormatChanged = true
+		case "zap-encoder":
+			zapEncoderChanged = true
+		}
+	})
+	zapEncoder := flag.CommandLine.Lookup("zap-encoder").Value.String()
+	if err := configureEncoder(logFormat, logFormatChanged, zapEncoder, zapEncoderChanged, &opts); err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	klog.SetLogger(ctrl.Log)
+	if zl, ok := ctrl.Log.GetSink().(zapr.Underlier); ok {
+		if u := zl.GetUnderlying(); u != nil {
+			_ = gozap.ReplaceGlobals(u)
+			_ = gozap.RedirectStdLog(u)
+		}
+	}
 
 	// syncPeriod parsed
 	var syncPeriod *time.Duration
