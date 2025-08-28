@@ -56,33 +56,46 @@ OpenKruiseGame has the following core features:
 
 ### Users of OpenKruiseGame(OKG)
 
-<table style="border-collapse: collapse;">
+<table>
     <tr style="border: none;">
-        <td style="border: none;"><center><img src="./docs/images/lilith-logo.png" width="80" ></center></td>
-        <td style="border: none;"><center><img src="./docs/images/hypergryph-logo.png" width="80" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/jjworld-logo.png" width="80" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/bilibili-logo.png" width="80"> </center></td>
-        <td style="border: none;"><center><img src="./docs/images/shangyou-logo.png" width="80" ></center></td>
-        <td style="border: none;"><center><img src="./docs/images/yahaha-logo.png" width="80" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/xingzhe-logo.png" width="80" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/lilith-logo.png" width="100" alt="Lilith Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/hypergryph-logo.png" width="100" alt="Hypergryph Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/bilibili-logo.png" width="100" alt="Bilibili Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/shangyou-logo.png" width="100" alt="Shangyou Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/xingzhe-logo.png" width="100" alt="Xingzhe Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/jjworld-logo.png" width="100" alt="JJWorld Logo" /></center></td>
     </tr>
     <tr style="border: none;">
-        <td style="border: none;"><center><img src="./docs/images/juren-logo.png" width="80" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/baibian-logo.png" width="80" ></center></td>
-        <td style="border: none;"><center><img src="./docs/images/chillyroom-logo.png" width="80" ></center></td>
-        <td style="border: none;"><center><img src="./docs/images/wuduan-logo.png" width="80" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/yostar-logo.png" width="80" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/bekko-logo.png" width="80" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/xingchao-logo.png" width="80" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/juren-logo.png" width="100" alt="Juren Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/baibian-logo.png" width="100" alt="Baibian Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/chillyroom-logo.png" width="100" alt="Chillyroom Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/wuduan-logo.png" width="100" alt="Wuduan Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/xingchao-logo.png" width="100" alt="Xingchao Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/jaco-logo.png" width="100" alt="Jaco Logo" /></center></td>
     </tr>
     <tr style="border: none;">
-        <td style="border: none;"><center><img src="./docs/images/wanglong-logo.png" width="80" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/guanying-logo.png" width="80" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/booming-logo.png" width="80" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/gsshosting-logo.png" width="80" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/yongshi-logo.png" width="80" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/360-logo.png" width="80" ></center> </td>
-        <td style="border: none;"><center><img src="./docs/images/vma-logo.png" width="80" ></center> </td>
+        <td style="border: none;"><center><img src="./docs/images/wanglong-logo.png" width="100" alt="Wanglong Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/guanying-logo.png" width="100" alt="Guanying Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/booming-logo.png" width="100" alt="Booming Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/gsshosting-logo.png" width="100" alt="Gsshosting Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/yongshi-logo.png" width="100" alt="Yongshi Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/lingxi-logo.png" width="100" alt="Lingxi Logo" /></center></td>
+    </tr>
+    <tr style="border: none;">
+        <td style="border: none;"><center><img src="./docs/images/yahaha-logo.png" width="100" alt="Yahaha Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/yostar-logo.png" width="100" alt="Yostar Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/360-logo.png" width="100" alt="360 Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/vma-logo.png" width="100" alt="VMA Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/bekko-logo.png" width="100" alt="Bekko Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/goat-logo.png" width="100" alt="Goat Logo" /></center></td>
+    </tr>
+    <tr style="border: none;">
+        <td style="border: none;"><center><img src="./docs/images/paper-logo.png" width="100" alt="Paper Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/hero-logo.png" width="100" alt="Hero Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/ctw-logo.png" width="100" alt="CTW Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/leyuansu-logo.png" width="100" alt="Leyuansu Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/gale-logo.png" width="100" alt="Gale Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/dhf-logo.png" width="100" alt="DHF Logo" /></center></td>
     </tr>
 </table>
 
