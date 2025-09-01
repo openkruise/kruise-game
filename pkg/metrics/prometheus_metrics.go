@@ -28,6 +28,8 @@ func init() {
 	metrics.Registry.MustRegister(GameServerSetsReplicasCount)
 	metrics.Registry.MustRegister(GameServerDeletionPriority)
 	metrics.Registry.MustRegister(GameServerUpdatePriority)
+	metrics.Registry.MustRegister(GameServerReadyDuration)
+	metrics.Registry.MustRegister(GameServerNetworkReadyDuration)
 }
 
 var (
@@ -72,5 +74,19 @@ var (
 			Help: "The updatePriority of gameserver.)",
 		},
 		[]string{"gsName", "gsNs"},
+	)
+	GameServerReadyDuration = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "okg_gameserver_ready_duration_seconds",
+			Help: "duration seconds of gameserver from creating to ready",
+		},
+		[]string{"gsName", "gsNs", "gssName"},
+	)
+	GameServerNetworkReadyDuration = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "okg_gameserver_network_ready_duration_seconds",
+			Help: "duration seconds of gameserver from creating to network ready",
+		},
+		[]string{"gsName", "gsNs", "gssName"},
 	)
 )

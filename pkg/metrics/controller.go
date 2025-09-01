@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	gamekruisev1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	kruisegamevisions "github.com/openkruise/kruise-game/pkg/client/informers/externalversions"
@@ -117,15 +118,28 @@ func (c *Controller) recordGsWhenUpdate(oldObj, newObj interface{}) {
 
 	oldState := string(oldGs.Status.CurrentState)
 	oldOpsState := string(oldGs.Spec.OpsState)
+	oldNetworkState := string(oldGs.Status.NetworkStatus.CurrentNetworkState)
 	newState := string(newGs.Status.CurrentState)
 	newOpsState := string(newGs.Spec.OpsState)
+	newNetworkState := string(newGs.Status.NetworkStatus.CurrentNetworkState)
 
 	gssName := newGs.Labels["game.kruise.io/owner-gss"]
 
 	if oldState != newState {
 		GameServersStateCount.WithLabelValues(newState).Inc()
 		GameServersStateCount.WithLabelValues(oldState).Dec()
+
+		if newState == string(gamekruisev1alpha1.Ready) {
+			duration := time.Since(newGs.GetCreationTimestamp().Time).Seconds()
+			GameServerReadyDuration.WithLabelValues(newGs.Name, newGs.Namespace, gssName).Set(duration)
+		}
 	}
+
+	if oldNetworkState != newNetworkState && newNetworkState == string(gamekruisev1alpha1.NetworkReady) {
+		duration := time.Since(newGs.GetCreationTimestamp().Time).Seconds()
+		GameServerNetworkReadyDuration.WithLabelValues(newGs.Name, newGs.Namespace, gssName).Set(duration)
+	}
+
 	if oldOpsState != newOpsState {
 		GameServersOpsStateCount.WithLabelValues(newOpsState, gssName, newGs.Namespace).Inc()
 		GameServersOpsStateCount.WithLabelValues(oldOpsState, gssName, newGs.Namespace).Dec()
