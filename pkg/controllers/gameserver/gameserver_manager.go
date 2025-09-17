@@ -18,6 +18,11 @@ package gameserver
 
 import (
 	"context"
+	"reflect"
+	"strconv"
+	"strings"
+	"time"
+
 	kruisePub "github.com/openkruise/kruise-api/apps/pub"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
@@ -30,11 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
-	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strconv"
-	"strings"
-	"time"
 )
 
 var (
@@ -97,16 +98,24 @@ func (manager GameServerManager) SyncGsToPod() error {
 
 	newLabels := make(map[string]string)
 	newAnnotations := make(map[string]string)
-	if gs.Spec.DeletionPriority.String() != podDeletePriority {
-		newLabels[gameKruiseV1alpha1.GameServerDeletePriorityKey] = gs.Spec.DeletionPriority.String()
+	// tolerate nil pointers in spec priorities
+	var gsDpStr, gsUpStr string
+	if gs.Spec.DeletionPriority != nil {
+		gsDpStr = gs.Spec.DeletionPriority.String()
+	}
+	if gs.Spec.UpdatePriority != nil {
+		gsUpStr = gs.Spec.UpdatePriority.String()
+	}
+	if gsDpStr != podDeletePriority {
+		newLabels[gameKruiseV1alpha1.GameServerDeletePriorityKey] = gsDpStr
 		if podDeletePriority != "" {
-			manager.eventRecorder.Eventf(gs, corev1.EventTypeNormal, StateReason, "DeletionPriority turn from %s to %s ", podDeletePriority, gs.Spec.DeletionPriority.String())
+			manager.eventRecorder.Eventf(gs, corev1.EventTypeNormal, StateReason, "DeletionPriority turn from %s to %s ", podDeletePriority, gsDpStr)
 		}
 	}
-	if gs.Spec.UpdatePriority.String() != podUpdatePriority {
-		newLabels[gameKruiseV1alpha1.GameServerUpdatePriorityKey] = gs.Spec.UpdatePriority.String()
+	if gsUpStr != podUpdatePriority {
+		newLabels[gameKruiseV1alpha1.GameServerUpdatePriorityKey] = gsUpStr
 		if podUpdatePriority != "" {
-			manager.eventRecorder.Eventf(gs, corev1.EventTypeNormal, StateReason, "UpdatePriority turn from %s to %s ", podUpdatePriority, gs.Spec.UpdatePriority.String())
+			manager.eventRecorder.Eventf(gs, corev1.EventTypeNormal, StateReason, "UpdatePriority turn from %s to %s ", podUpdatePriority, gsUpStr)
 		}
 	}
 	if string(gs.Spec.OpsState) != podGsOpsState {
@@ -267,16 +276,54 @@ func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerS
 	}
 
 	if !reflect.DeepEqual(oldGsSpec, gs.Spec) || !reflect.DeepEqual(oldGsLabels, gs.GetLabels()) || !reflect.DeepEqual(oldGsAnnotations, gs.GetAnnotations()) {
-		// patch gs spec & metadata
-		patchSpec := map[string]interface{}{"spec": gs.Spec, "metadata": map[string]interface{}{"labels": gs.GetLabels(), "annotations": gs.GetAnnotations()}}
-		jsonPatchSpec, err := json.Marshal(patchSpec)
-		if err != nil {
-			return err
+		// Build a minimal patch to avoid clobbering fields updated concurrently by users/tests.
+		// Only include fields we actually changed and that the controller owns.
+		patch := make(map[string]interface{})
+
+		// Spec subfields: restrict to opsState, updatePriority, deletionPriority, networkDisabled
+		if !reflect.DeepEqual(oldGsSpec, gs.Spec) {
+			specPatch := make(map[string]interface{})
+			// opsState
+			if oldGsSpec.OpsState != gs.Spec.OpsState {
+				specPatch["opsState"] = gs.Spec.OpsState
+			}
+			// updatePriority
+			if (oldGsSpec.UpdatePriority == nil) != (gs.Spec.UpdatePriority == nil) ||
+				(oldGsSpec.UpdatePriority != nil && gs.Spec.UpdatePriority != nil && *oldGsSpec.UpdatePriority != *gs.Spec.UpdatePriority) {
+				specPatch["updatePriority"] = gs.Spec.UpdatePriority
+			}
+			// deletionPriority
+			if (oldGsSpec.DeletionPriority == nil) != (gs.Spec.DeletionPriority == nil) ||
+				(oldGsSpec.DeletionPriority != nil && gs.Spec.DeletionPriority != nil && *oldGsSpec.DeletionPriority != *gs.Spec.DeletionPriority) {
+				specPatch["deletionPriority"] = gs.Spec.DeletionPriority
+			}
+			// networkDisabled
+			if oldGsSpec.NetworkDisabled != gs.Spec.NetworkDisabled {
+				specPatch["networkDisabled"] = gs.Spec.NetworkDisabled
+			}
+			if len(specPatch) > 0 {
+				patch["spec"] = specPatch
+			}
 		}
-		err = manager.client.Patch(context.TODO(), gs, client.RawPatch(types.MergePatchType, jsonPatchSpec))
-		if err != nil && !errors.IsNotFound(err) {
-			klog.Errorf("failed to patch GameServer spec %s in %s,because of %s.", gs.GetName(), gs.GetNamespace(), err.Error())
-			return err
+
+		// Metadata changes (labels/annotations) are safe to include fully
+		if !reflect.DeepEqual(oldGsLabels, gs.GetLabels()) || !reflect.DeepEqual(oldGsAnnotations, gs.GetAnnotations()) {
+			patch["metadata"] = map[string]interface{}{
+				"labels":      gs.GetLabels(),
+				"annotations": gs.GetAnnotations(),
+			}
+		}
+
+		if len(patch) > 0 {
+			jsonPatchSpec, err := json.Marshal(patch)
+			if err != nil {
+				return err
+			}
+			err = manager.client.Patch(context.TODO(), gs, client.RawPatch(types.MergePatchType, jsonPatchSpec))
+			if err != nil && !errors.IsNotFound(err) {
+				klog.Errorf("failed to patch GameServer spec/metadata %s in %s,because of %s.", gs.GetName(), gs.GetNamespace(), err.Error())
+				return err
+			}
 		}
 	}
 
@@ -396,14 +443,22 @@ func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, 
 			var lastActionTransitionTime metav1.Time
 			sqCondition, exist := sqConditionsMap[sq.Name]
 			if !exist || ((sqCondition.Status != string(podCondition.Status) || (sqCondition.Result != podConditionMessage)) && (sqCondition.LastActionTransitionTime.IsZero() || !sq.Permanent)) {
-				// exec action
+				// exec action (only apply fields explicitly set in action)
 				for _, action := range sq.ServiceQualityAction {
 					state, err := strconv.ParseBool(string(podCondition.Status))
 					if err == nil && state == action.State && (action.Result == "" || podConditionMessage == action.Result) {
-						gs.Spec.DeletionPriority = action.DeletionPriority
-						gs.Spec.UpdatePriority = action.UpdatePriority
-						gs.Spec.OpsState = action.OpsState
-						gs.Spec.NetworkDisabled = action.NetworkDisabled
+						if action.DeletionPriority != nil {
+							gs.Spec.DeletionPriority = action.DeletionPriority
+						}
+						if action.UpdatePriority != nil {
+							gs.Spec.UpdatePriority = action.UpdatePriority
+						}
+						if action.OpsState != "" {
+							gs.Spec.OpsState = action.OpsState
+						}
+						if action.NetworkDisabled {
+							gs.Spec.NetworkDisabled = action.NetworkDisabled
+						}
 						gs.SetLabels(util.MergeMapString(gs.GetLabels(), action.Labels))
 						gs.SetAnnotations(util.MergeMapString(gs.GetAnnotations(), action.Annotations))
 						lastActionTransitionTime = timeNow
