@@ -1,6 +1,7 @@
 package testcase
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/onsi/ginkgo"
@@ -8,6 +9,7 @@ import (
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/test/e2e/client"
 	"github.com/openkruise/kruise-game/test/e2e/framework"
+	corev1 "k8s.io/api/core/v1"
 )
 
 func RunTestCases(f *framework.Framework) {
@@ -97,32 +99,40 @@ func RunTestCases(f *framework.Framework) {
 			gomega.Expect(err).To(gomega.BeNil())
 		})
 
-		ginkgo.It("networkDisabled toggles", func() {
-			gss, err := f.DeployGameServerSet()
-			gomega.Expect(err).To(gomega.BeNil())
+		ginkgo.Describe("network control", func() {
+			ginkgo.It("disables NodePort traffic when networkDisabled is true", func() {
+				networkConf := []gameKruiseV1alpha1.NetworkConfParams{
+					{Name: "PortProtocols", Value: "8080/TCP"},
+				}
+				ports := []corev1.ContainerPort{{ContainerPort: 8080}}
+				gss, err := f.DeployGameServerSetWithNetwork("Kubernetes-NodePort", networkConf, ports)
+				gomega.Expect(err).To(gomega.BeNil())
 
-			err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
-			gomega.Expect(err).To(gomega.BeNil())
+				err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
+				gomega.Expect(err).To(gomega.BeNil())
 
-			target := client.GameServerSet + "-0"
+				target := fmt.Sprintf("%s-0", client.GameServerSet)
 
-			_, err = f.PatchGameServerSpec(target, map[string]interface{}{"networkDisabled": true})
-			gomega.Expect(err).To(gomega.BeNil())
-			gomega.Expect(f.WaitForGsNetworkDisabled(target, true)).To(gomega.BeNil())
+				gomega.Expect(f.WaitForNodePortServiceSelector(target, false)).To(gomega.BeNil())
+				gomega.Expect(f.WaitForGsDesiredNetworkState(target, gameKruiseV1alpha1.NetworkReady)).To(gomega.BeNil())
 
-			gs, err := f.GetGameServer(target)
-			gomega.Expect(err).To(gomega.BeNil())
-			gomega.Expect(gs.Spec.NetworkDisabled).NotTo(gomega.BeNil())
-			gomega.Expect(*gs.Spec.NetworkDisabled).To(gomega.BeTrue())
+				_, err = f.PatchGameServerSpec(target, map[string]interface{}{"networkDisabled": true})
+				gomega.Expect(err).To(gomega.BeNil())
+				gomega.Expect(f.WaitForGsNetworkDisabled(target, true)).To(gomega.BeNil())
+				gomega.Expect(f.WaitForGsDesiredNetworkState(target, gameKruiseV1alpha1.NetworkNotReady)).To(gomega.BeNil())
+				gomega.Expect(f.WaitForNodePortServiceSelector(target, true)).To(gomega.BeNil())
 
-			_, err = f.PatchGameServerSpec(target, map[string]interface{}{"networkDisabled": false})
-			gomega.Expect(err).To(gomega.BeNil())
-			gomega.Expect(f.WaitForGsNetworkDisabled(target, false)).To(gomega.BeNil())
+				_, err = f.PatchGameServerSpec(target, map[string]interface{}{"networkDisabled": false})
+				gomega.Expect(err).To(gomega.BeNil())
+				gomega.Expect(f.WaitForGsNetworkDisabled(target, false)).To(gomega.BeNil())
+				gomega.Expect(f.WaitForGsDesiredNetworkState(target, gameKruiseV1alpha1.NetworkReady)).To(gomega.BeNil())
+				gomega.Expect(f.WaitForNodePortServiceSelector(target, false)).To(gomega.BeNil())
 
-			gs, err = f.GetGameServer(target)
-			gomega.Expect(err).To(gomega.BeNil())
-			gomega.Expect(gs.Spec.NetworkDisabled).NotTo(gomega.BeNil())
-			gomega.Expect(*gs.Spec.NetworkDisabled).To(gomega.BeFalse())
+				gs, err := f.GetGameServer(target)
+				gomega.Expect(err).To(gomega.BeNil())
+				gomega.Expect(gs.Spec.NetworkDisabled).NotTo(gomega.BeNil())
+				gomega.Expect(*gs.Spec.NetworkDisabled).To(gomega.BeFalse())
+			})
 		})
 
 		ginkgo.It("GameServer lifecycle(DeleteGameServerReclaimPolicy)", func() {
