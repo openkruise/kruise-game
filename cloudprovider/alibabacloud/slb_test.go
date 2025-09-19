@@ -17,6 +17,7 @@ limitations under the License.
 package alibabacloud
 
 import (
+	"context"
 	"reflect"
 	"sync"
 	"testing"
@@ -287,5 +288,210 @@ func TestInitLbCache(t *testing.T) {
 	}
 	if !reflect.DeepEqual(actualPodAllocate, test.podAllocate) {
 		t.Errorf("podAllocate expect %v, but actully got %v", test.podAllocate, actualPodAllocate)
+	}
+}
+
+func TestConsSvc(t *testing.T) {
+	tests := []struct {
+		name        string
+		sc          *slbConfig
+		pod         *corev1.Pod
+		setup       func(*SlbPlugin)
+		expectErr   bool
+		validateSvc func(*testing.T, *corev1.Service)
+	}{
+		{
+			name: "basic service construction",
+			sc: &slbConfig{
+				lbIds:                     []string{"lb-123"},
+				targetPorts:               []int{80},
+				protocols:                 []corev1.Protocol{corev1.ProtocolTCP},
+				isFixed:                   false,
+				externalTrafficPolicyType: corev1.ServiceExternalTrafficPolicyTypeCluster,
+				lBHealthCheckSwitch:       "on",
+				lBHealthCheckType:         "tcp",
+				lBHealthCheckFlag:         "off",
+			},
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "default",
+				},
+			},
+			setup: func(s *SlbPlugin) {
+				s.minPort = 10000
+				s.maxPort = 11000
+				s.cache = make(map[string]portAllocated)
+				s.podAllocate = make(map[string]string)
+			},
+			expectErr: false,
+			validateSvc: func(t *testing.T, svc *corev1.Service) {
+				if svc.Name != "test-pod" {
+					t.Errorf("expected service name 'test-pod', got '%s'", svc.Name)
+				}
+				if len(svc.Spec.Ports) != 1 {
+					t.Errorf("expected 1 port, got %d", len(svc.Spec.Ports))
+				}
+				if svc.Spec.Ports[0].Port < 10000 || svc.Spec.Ports[0].Port > 11000 {
+					t.Errorf("port %d is out of range", svc.Spec.Ports[0].Port)
+				}
+				if svc.Spec.Ports[0].TargetPort.IntValue() != 80 {
+					t.Errorf("expected target port 80, got %d", svc.Spec.Ports[0].TargetPort.IntValue())
+				}
+				if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
+					t.Errorf("expected service type LoadBalancer, got %s", svc.Spec.Type)
+				}
+				if svc.Annotations[SlbIdAnnotationKey] == "" {
+					t.Error("expected SlbIdAnnotationKey to be set")
+				}
+			},
+		},
+		{
+			name: "service construction with existing allocation",
+			sc: &slbConfig{
+				lbIds:                     []string{"lb-123"},
+				targetPorts:               []int{8080},
+				protocols:                 []corev1.Protocol{corev1.ProtocolTCP},
+				isFixed:                   false,
+				externalTrafficPolicyType: corev1.ServiceExternalTrafficPolicyTypeLocal,
+				lBHealthCheckSwitch:       "off",
+				lBHealthCheckFlag:         "on",
+			},
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod-2",
+					Namespace: "default",
+				},
+			},
+			setup: func(s *SlbPlugin) {
+				s.minPort = 10000
+				s.maxPort = 11000
+				s.cache = map[string]portAllocated{
+					"lb-123": {
+						10240: true,
+						10241: false,
+					},
+				}
+				s.podAllocate = map[string]string{
+					"default/test-pod-2": "lb-123:10240",
+				}
+			},
+			expectErr: false,
+			validateSvc: func(t *testing.T, svc *corev1.Service) {
+				if svc.Spec.ExternalTrafficPolicy != corev1.ServiceExternalTrafficPolicyTypeLocal {
+					t.Errorf("expected ExternalTrafficPolicy Local, got %s", svc.Spec.ExternalTrafficPolicy)
+				}
+				if svc.Annotations[LBHealthCheckFlagAnnotationKey] != "on" {
+					t.Errorf("expected health check flag 'on', got '%s'", svc.Annotations[LBHealthCheckFlagAnnotationKey])
+				}
+				// Should use the already allocated port
+				if len(svc.Spec.Ports) > 0 && svc.Spec.Ports[0].Port != 10240 {
+					t.Errorf("expected port 10240 (pre-allocated), got %d", svc.Spec.Ports[0].Port)
+				}
+			},
+		},
+		{
+			name: "TCP/UDP protocol service",
+			sc: &slbConfig{
+				lbIds:                     []string{"lb-456"},
+				targetPorts:               []int{53},
+				protocols:                 []corev1.Protocol{ProtocolTCPUDP},
+				isFixed:                   false,
+				externalTrafficPolicyType: corev1.ServiceExternalTrafficPolicyTypeCluster,
+				lBHealthCheckSwitch:       "on",
+				lBHealthCheckType:         "http",
+				lBHealthCheckFlag:         "off",
+			},
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dns-pod",
+					Namespace: "kube-system",
+				},
+			},
+			setup: func(s *SlbPlugin) {
+				s.minPort = 30000
+				s.maxPort = 32767
+				s.cache = make(map[string]portAllocated)
+				s.podAllocate = make(map[string]string)
+			},
+			expectErr: false,
+			validateSvc: func(t *testing.T, svc *corev1.Service) {
+				// Should create both TCP and UDP ports
+				if len(svc.Spec.Ports) != 2 {
+					t.Errorf("expected 2 ports for TCPUDP protocol, got %d", len(svc.Spec.Ports))
+				}
+				if len(svc.Spec.Ports) >= 2 {
+					if svc.Spec.Ports[0].Protocol != corev1.ProtocolTCP {
+						t.Errorf("first port should be TCP, got %s", svc.Spec.Ports[0].Protocol)
+					}
+					if svc.Spec.Ports[1].Protocol != corev1.ProtocolUDP {
+						t.Errorf("second port should be UDP, got %s", svc.Spec.Ports[1].Protocol)
+					}
+					if svc.Spec.Ports[0].Port != svc.Spec.Ports[1].Port {
+						t.Error("TCP and UDP ports should have the same port number")
+					}
+				}
+			},
+		},
+		{
+			name: "no available ports",
+			sc: &slbConfig{
+				lbIds:                     []string{"lb-789"},
+				targetPorts:               []int{80},
+				protocols:                 []corev1.Protocol{corev1.ProtocolTCP},
+				isFixed:                   false,
+				externalTrafficPolicyType: corev1.ServiceExternalTrafficPolicyTypeCluster,
+				lBHealthCheckSwitch:       "on",
+				lBHealthCheckType:         "tcp",
+				lBHealthCheckFlag:         "off",
+			},
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod-3",
+					Namespace: "default",
+				},
+			},
+			setup: func(s *SlbPlugin) {
+				s.minPort = 100
+				s.maxPort = 100
+				s.cache = map[string]portAllocated{
+					"lb-789": {
+						100: true, // Only available port is taken
+					},
+				}
+				s.podAllocate = make(map[string]string)
+			},
+			expectErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			slb := &SlbPlugin{
+				mutex: sync.RWMutex{},
+			}
+
+			if tt.setup != nil {
+				tt.setup(slb)
+			}
+
+			svc, err := slb.consSvc(tt.sc, tt.pod, nil, context.Background())
+
+			if tt.expectErr {
+				if err == nil {
+					t.Error("expected error but got none")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+
+			if tt.validateSvc != nil {
+				tt.validateSvc(t, svc)
+			}
+		})
 	}
 }
