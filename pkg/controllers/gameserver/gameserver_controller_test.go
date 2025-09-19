@@ -129,7 +129,7 @@ func TestGameServerReconcile(t *testing.T) {
 					DeletionPriority: &deletionPriority,
 					UpdatePriority:   &updatePriority,
 					OpsState:         gameKruiseV1alpha1.None,
-					NetworkDisabled:  false,
+					NetworkDisabled:  ptr.To(false),
 				}
 				return gs
 			},

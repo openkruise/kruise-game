@@ -35,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -129,10 +130,11 @@ func (manager GameServerManager) SyncGsToPod() error {
 			manager.eventRecorder.Eventf(gs, eventType, StateReason, "OpsState turn from %s to %s ", podGsOpsState, string(gs.Spec.OpsState))
 		}
 	}
-	if podNetworkDisabled != strconv.FormatBool(gs.Spec.NetworkDisabled) {
-		newLabels[gameKruiseV1alpha1.GameServerNetworkDisabled] = strconv.FormatBool(gs.Spec.NetworkDisabled)
+	currentNetworkDisabled := strconv.FormatBool(ptr.Deref(gs.Spec.NetworkDisabled, false))
+	if podNetworkDisabled != currentNetworkDisabled {
+		newLabels[gameKruiseV1alpha1.GameServerNetworkDisabled] = currentNetworkDisabled
 		if podNetworkDisabled != "" {
-			manager.eventRecorder.Eventf(gs, corev1.EventTypeNormal, StateReason, "NetworkDisabled turn from %s to %s ", podNetworkDisabled, strconv.FormatBool(gs.Spec.NetworkDisabled))
+			manager.eventRecorder.Eventf(gs, corev1.EventTypeNormal, StateReason, "NetworkDisabled turn from %s to %s ", podNetworkDisabled, currentNetworkDisabled)
 		}
 	}
 
@@ -298,7 +300,9 @@ func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerS
 				specPatch["deletionPriority"] = gs.Spec.DeletionPriority
 			}
 			// networkDisabled
-			if oldGsSpec.NetworkDisabled != gs.Spec.NetworkDisabled {
+			oldNetworkDisabled := ptr.Deref(oldGsSpec.NetworkDisabled, false)
+			newNetworkDisabled := ptr.Deref(gs.Spec.NetworkDisabled, false)
+			if (oldGsSpec.NetworkDisabled == nil) != (gs.Spec.NetworkDisabled == nil) || oldNetworkDisabled != newNetworkDisabled {
 				specPatch["networkDisabled"] = gs.Spec.NetworkDisabled
 			}
 			if len(specPatch) > 0 {
@@ -456,8 +460,8 @@ func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, 
 						if action.OpsState != "" {
 							gs.Spec.OpsState = action.OpsState
 						}
-						if action.NetworkDisabled {
-							gs.Spec.NetworkDisabled = action.NetworkDisabled
+						if action.NetworkDisabled != nil {
+							gs.Spec.NetworkDisabled = ptr.To(ptr.Deref(action.NetworkDisabled, false))
 						}
 						gs.SetLabels(util.MergeMapString(gs.GetLabels(), action.Labels))
 						gs.SetAnnotations(util.MergeMapString(gs.GetAnnotations(), action.Annotations))

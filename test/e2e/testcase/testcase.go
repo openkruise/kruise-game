@@ -97,6 +97,34 @@ func RunTestCases(f *framework.Framework) {
 			gomega.Expect(err).To(gomega.BeNil())
 		})
 
+		ginkgo.It("networkDisabled toggles", func() {
+			gss, err := f.DeployGameServerSet()
+			gomega.Expect(err).To(gomega.BeNil())
+
+			err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
+			gomega.Expect(err).To(gomega.BeNil())
+
+			target := client.GameServerSet + "-0"
+
+			_, err = f.PatchGameServerSpec(target, map[string]interface{}{"networkDisabled": true})
+			gomega.Expect(err).To(gomega.BeNil())
+			gomega.Expect(f.WaitForGsNetworkDisabled(target, true)).To(gomega.BeNil())
+
+			gs, err := f.GetGameServer(target)
+			gomega.Expect(err).To(gomega.BeNil())
+			gomega.Expect(gs.Spec.NetworkDisabled).NotTo(gomega.BeNil())
+			gomega.Expect(*gs.Spec.NetworkDisabled).To(gomega.BeTrue())
+
+			_, err = f.PatchGameServerSpec(target, map[string]interface{}{"networkDisabled": false})
+			gomega.Expect(err).To(gomega.BeNil())
+			gomega.Expect(f.WaitForGsNetworkDisabled(target, false)).To(gomega.BeNil())
+
+			gs, err = f.GetGameServer(target)
+			gomega.Expect(err).To(gomega.BeNil())
+			gomega.Expect(gs.Spec.NetworkDisabled).NotTo(gomega.BeNil())
+			gomega.Expect(*gs.Spec.NetworkDisabled).To(gomega.BeFalse())
+		})
+
 		ginkgo.It("GameServer lifecycle(DeleteGameServerReclaimPolicy)", func() {
 
 			// Deploy a gss, and the ReclaimPolicy is Delete

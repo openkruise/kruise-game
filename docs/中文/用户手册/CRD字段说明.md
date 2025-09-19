@@ -217,7 +217,8 @@ type GameServerSpec struct {
    DeletionPriority *intstr.IntOrString `json:"deletionPriority,omitempty"`
 
    // 是否进行网络隔离、切断接入层网络，默认为false
-   NetworkDisabled  bool                `json:"networkDisabled,omitempty"`
+   // 可选布尔值；当为 nil 时沿用 GameServer 模板（默认为 false）。
+   NetworkDisabled  *bool               `json:"networkDisabled,omitempty"`
    
    // 使对应的GameServer Containers字段与GameServerSetSpec中GameServerTemplate定义的字段不同，意味着该GameServer可以拥有独立的参数配置。
    // 当前支持更改 Image 与 Resources

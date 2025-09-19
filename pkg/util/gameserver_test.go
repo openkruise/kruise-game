@@ -425,7 +425,7 @@ func TestInitGameServer(t *testing.T) {
 					},
 				},
 				Spec: gameKruiseV1alpha1.GameServerSpec{
-					NetworkDisabled:  false,
+					NetworkDisabled:  ptr.To(false),
 					OpsState:         gameKruiseV1alpha1.None,
 					UpdatePriority:   &updatePriority,
 					DeletionPriority: &deletionPriority,

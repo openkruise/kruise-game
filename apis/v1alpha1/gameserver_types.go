@@ -42,7 +42,7 @@ type GameServerSpec struct {
 	OpsState         OpsState            `json:"opsState,omitempty"`
 	UpdatePriority   *intstr.IntOrString `json:"updatePriority,omitempty"`
 	DeletionPriority *intstr.IntOrString `json:"deletionPriority,omitempty"`
-	NetworkDisabled  bool                `json:"networkDisabled,omitempty"`
+	NetworkDisabled  *bool               `json:"networkDisabled,omitempty"`
 	// Containers can be used to make the corresponding GameServer container fields
 	// different from the fields defined by GameServerTemplate in GameServerSetSpec.
 	Containers []GameServerContainer `json:"containers,omitempty"`

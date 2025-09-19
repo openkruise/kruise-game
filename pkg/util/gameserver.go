@@ -290,7 +290,7 @@ func InitGameServer(gss *gameKruiseV1alpha1.GameServerSet, name string) *gameKru
 	gs.SetAnnotations(gsAnnotations)
 
 	// set NetWork
-	gs.Spec.NetworkDisabled = false
+	gs.Spec.NetworkDisabled = ptr.To(false)
 
 	// set OpsState
 	gs.Spec.OpsState = gameKruiseV1alpha1.None

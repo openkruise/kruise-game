@@ -272,6 +272,11 @@ func (in *GameServerSpec) DeepCopyInto(out *GameServerSpec) {
 		*out = new(intstr.IntOrString)
 		**out = **in
 	}
+	if in.NetworkDisabled != nil {
+		in, out := &in.NetworkDisabled, &out.NetworkDisabled
+		*out = new(bool)
+		**out = **in
+	}
 	if in.Containers != nil {
 		in, out := &in.Containers, &out.Containers
 		*out = make([]GameServerContainer, len(*in))
