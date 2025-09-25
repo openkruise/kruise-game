@@ -28,6 +28,10 @@ jobs:
         uses: actions/setup-go@v3
         with:
           go-version: ${{ env.GO_VERSION }}
+      - name: Prepare audit policy
+        run: |
+          mkdir -p /tmp/kind-audit
+          cp test/audit/policy.yaml /tmp/kind-audit/policy.yaml
       - name: Setup Kind Cluster
         uses: helm/kind-action@v1.3.0
         with:
@@ -35,6 +39,11 @@ jobs:
           cluster_name: ${{ env.KIND_CLUSTER_NAME }}
           config: ./test/kind-conf.yaml
           version: ${{ env.KIND_VERSION }}
+      - name: Ensure audit log file exists and is world-readable
+        run: |
+          sudo mkdir -p /tmp/kind-audit || true
+          sudo touch /tmp/kind-audit/audit.log || true
+          sudo chmod 0644 /tmp/kind-audit/audit.log || true
       - name: Build image
         run: |
           export IMAGE="openkruise/kruise-game-manager:e2e-${GITHUB_RUN_ID}"
@@ -97,21 +106,59 @@ jobs:
             echo "Timeout to wait for kruise-game ready"
             exit 1
           fi
+      - name: Verify Kind Cluster
+        run: |
+          set -euo pipefail
+          echo "=== Verifying Kind cluster ==="
+          kind get clusters
+          kubectl config use-context kind-${KIND_CLUSTER_NAME}
+          kubectl cluster-info --request-timeout=15s
+          kubectl get nodes
       - name: Run E2E Tests
         run: |
+          echo "=== Switching to Kind context ==="
           export KUBECONFIG=/home/runner/.kube/config
+          kubectl config use-context kind-${KIND_CLUSTER_NAME}
+
+          echo "=== Verifying current context ==="
+          kubectl config current-context
+
+          echo "=== Checking cluster status ==="
+          kubectl cluster-info
+          kubectl get nodes
+
+          echo "=== Building ginkgo ==="
           make ginkgo
-          set +e
-          ./bin/ginkgo -timeout 60m -v test/e2e
-          retVal=$?
-          # kubectl get pod -n kruise-game-system --no-headers | grep manager | awk '{print $1}' | xargs kubectl logs -n kruise-game-system
+
+          echo "=== Running tests with verbose output ==="
+          EXIT_CODE=0
+          ./bin/ginkgo --timeout 60m -v --trace --progress test/e2e || EXIT_CODE=$?
+
+          echo "=== Collecting diagnostics ==="
+          kubectl get gss -A || true
+          kubectl get pods -n e2e-test || true
+          kubectl get events -n e2e-test || true
+
           restartCount=$(kubectl get pod -n kruise-game-system --no-headers | awk '{print $4}')
-          if [ "${restartCount}" -eq "0" ];then
-              echo "Kruise-game has not restarted"
-          else
+          if [ "${restartCount}" -ne "0" ]; then
               kubectl get pod -n kruise-game-system --no-headers
               echo "Kruise-game has restarted, abort!!!"
-              kubectl get pod -n kruise-game-system --no-headers| awk '{print $1}' | xargs kubectl logs -p -n kruise-game-system
+              kubectl get pod -n kruise-game-system --no-headers | awk '{print $1}' | xargs kubectl logs -p -n kruise-game-system
               exit 1
+          else
+              echo "Kruise-game has not restarted"
           fi
-          exit $retVal
+
+          exit ${EXIT_CODE:-0}
+      - name: Make audit logs readable
+        if: always()
+        run: |
+          sudo chmod -R a+r /tmp/kind-audit || chmod -R a+r /tmp/kind-audit || true
+          ls -l /tmp/kind-audit || true
+      - name: Upload audit logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kind-audit-logs-1.26
+          path: /tmp/kind-audit
+          if-no-files-found: ignore
