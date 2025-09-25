@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -585,8 +586,9 @@ func TestSyncGsToPod(t *testing.T) {
 			t.Errorf("expect DeletionPriority is %s ,but actually is %s", test.gs.Spec.DeletionPriority.String(), pod.Labels[gameKruiseV1alpha1.GameServerDeletePriorityKey])
 		}
 
-		if pod.Labels[gameKruiseV1alpha1.GameServerNetworkDisabled] != strconv.FormatBool(test.gs.Spec.NetworkDisabled) {
-			t.Errorf("expect NetworkDisabled is %s ,but actually is %s", strconv.FormatBool(test.gs.Spec.NetworkDisabled), pod.Labels[gameKruiseV1alpha1.GameServerNetworkDisabled])
+		expectNetworkDisabled := strconv.FormatBool(ptr.Deref(test.gs.Spec.NetworkDisabled, false))
+		if pod.Labels[gameKruiseV1alpha1.GameServerNetworkDisabled] != expectNetworkDisabled {
+			t.Errorf("expect NetworkDisabled is %s ,but actually is %s", expectNetworkDisabled, pod.Labels[gameKruiseV1alpha1.GameServerNetworkDisabled])
 		}
 
 		for gsKey, gsValue := range test.gs.GetAnnotations() {

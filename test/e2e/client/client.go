@@ -145,3 +145,7 @@ func (client *Client) GetPod(podName string) (*corev1.Pod, error) {
 func (client *Client) DeletePod(podName string) error {
 	return client.kubeClint.CoreV1().Pods(Namespace).Delete(context.TODO(), podName, metav1.DeleteOptions{})
 }
+
+func (client *Client) GetService(name string) (*corev1.Service, error) {
+	return client.kubeClint.CoreV1().Services(Namespace).Get(context.TODO(), name, metav1.GetOptions{})
+}

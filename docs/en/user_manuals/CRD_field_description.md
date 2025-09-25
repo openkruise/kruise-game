@@ -256,7 +256,8 @@ type GameServerSpec struct {
 
    // Whether to perform network isolation and cut off the access layer network
    // Default is false
-   NetworkDisabled  bool                `json:"networkDisabled,omitempty"`
+   // Optional override; when nil, inherit from GameServer template (defaults to false).
+   NetworkDisabled  *bool               `json:"networkDisabled,omitempty"`
    
    // Containers can be used to make the corresponding GameServer container fields
    // different from the fields defined by GameServerTemplate in GameServerSetSpec.
@@ -307,4 +308,3 @@ type GameServerStatus struct {
     LastTransitionTime metav1.Time         `json:"lastTransitionTime,omitempty"`
 }
 ```
-

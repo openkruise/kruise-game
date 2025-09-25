@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 )
 
 type Framework struct {
@@ -82,6 +83,22 @@ func (f *Framework) DeployGameServerSet() (*gamekruiseiov1alpha1.GameServerSet, 
 	return f.client.CreateGameServerSet(gss)
 }
 
+func (f *Framework) DeployGameServerSetWithNetwork(networkType string, conf []gamekruiseiov1alpha1.NetworkConfParams, ports []corev1.ContainerPort) (*gamekruiseiov1alpha1.GameServerSet, error) {
+	gss := f.client.DefaultGameServerSet()
+	gss.Spec.Network = &gamekruiseiov1alpha1.Network{
+		NetworkType: networkType,
+		NetworkConf: conf,
+	}
+	if len(ports) > 0 && len(gss.Spec.GameServerTemplate.Spec.Containers) > 0 {
+		gss.Spec.GameServerTemplate.Spec.Containers[0].Ports = append(gss.Spec.GameServerTemplate.Spec.Containers[0].Ports, ports...)
+	}
+	return f.client.CreateGameServerSet(gss)
+}
+
+func (f *Framework) GetGameServer(name string) (*gamekruiseiov1alpha1.GameServer, error) {
+	return f.client.GetGameServer(name)
+}
+
 func (f *Framework) DeployGameServerSetWithReclaimPolicy(reclaimPolicy gamekruiseiov1alpha1.GameServerReclaimPolicy) (*gamekruiseiov1alpha1.GameServerSet, error) {
 	gss := f.client.DefaultGameServerSet()
 	gss.Spec.GameServerTemplate.ReclaimPolicy = reclaimPolicy
@@ -137,6 +154,35 @@ func (f *Framework) GameServerScale(gss *gamekruiseiov1alpha1.GameServerSet, des
 		return nil, err
 	}
 	return f.client.PatchGameServerSet(data)
+}
+
+// PatchGssSpec applies a generic spec-only merge patch using a map of fields.
+func (f *Framework) PatchGssSpec(specFields map[string]interface{}) (*gamekruiseiov1alpha1.GameServerSet, error) {
+	patch := map[string]interface{}{"spec": specFields}
+	data, err := json.Marshal(patch)
+	if err != nil {
+		return nil, err
+	}
+	return f.client.PatchGameServerSet(data)
+}
+
+// PatchGss applies a generic merge patch to the GameServerSet resource.
+func (f *Framework) PatchGss(patch map[string]interface{}) (*gamekruiseiov1alpha1.GameServerSet, error) {
+	data, err := json.Marshal(patch)
+	if err != nil {
+		return nil, err
+	}
+	return f.client.PatchGameServerSet(data)
+}
+
+// PatchGameServerSpec applies a merge patch to GameServer.spec using provided fields.
+func (f *Framework) PatchGameServerSpec(gsName string, specFields map[string]interface{}) (*gamekruiseiov1alpha1.GameServer, error) {
+	patch := map[string]interface{}{"spec": specFields}
+	data, err := json.Marshal(patch)
+	if err != nil {
+		return nil, err
+	}
+	return f.client.PatchGameServer(gsName, data)
 }
 
 func (f *Framework) ImageUpdate(gss *gamekruiseiov1alpha1.GameServerSet, name, image string) (*gamekruiseiov1alpha1.GameServerSet, error) {
@@ -367,4 +413,86 @@ func (f *Framework) WaitForGsUpdatePriorityUpdated(gsName string, updatePriority
 			}
 			return false, nil
 		})
+}
+
+func (f *Framework) WaitForGsDesiredNetworkState(gsName string, desired gamekruiseiov1alpha1.NetworkState) error {
+	return wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
+			gs, err := f.client.GetGameServer(gsName)
+			if err != nil {
+				return false, err
+			}
+			if gs.Status.NetworkStatus.DesiredNetworkState == desired {
+				return true, nil
+			}
+			return false, nil
+		})
+}
+
+func (f *Framework) WaitForNodePortServiceSelector(gsName string, disabled bool) error {
+	const (
+		activeKey   = "statefulset.kubernetes.io/pod-name"
+		disabledKey = "game.kruise.io/svc-selector-disabled"
+	)
+	return wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
+			svc, err := f.client.GetService(gsName)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					return false, nil
+				}
+				return false, err
+			}
+			selector := svc.Spec.Selector
+			_, hasActive := selector[activeKey]
+			disabledVal, hasDisabled := selector[disabledKey]
+			if disabled {
+				if !hasActive && hasDisabled && disabledVal == gsName {
+					return true, nil
+				}
+				return false, nil
+			}
+			if hasActive && selector[activeKey] == gsName && !hasDisabled {
+				return true, nil
+			}
+			return false, nil
+		})
+}
+
+func (f *Framework) WaitForGsNetworkDisabled(gsName string, want bool) error {
+	var lastPodValue, lastSpecValue string
+	var lastSpecNil bool
+	var lastPodErr, lastGsErr error
+	wantStr := strconv.FormatBool(want)
+
+	err := wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
+			specMatched := false
+			if gs, err0 := f.client.GetGameServer(gsName); err0 == nil {
+				lastSpecValue = strconv.FormatBool(ptr.Deref(gs.Spec.NetworkDisabled, false))
+				lastSpecNil = gs.Spec.NetworkDisabled == nil
+				lastGsErr = nil
+				if lastSpecValue == wantStr {
+					specMatched = true
+				}
+			} else {
+				lastGsErr = err0
+			}
+
+			if pod, err1 := f.client.GetPod(gsName); err1 == nil {
+				lastPodValue = pod.GetLabels()[gamekruiseiov1alpha1.GameServerNetworkDisabled]
+				lastPodErr = nil
+				if specMatched && lastPodValue == wantStr {
+					return true, nil
+				}
+			} else {
+				lastPodErr = err1
+			}
+			return false, nil
+		})
+	if err != nil {
+		return fmt.Errorf("WaitForGsNetworkDisabled timeout: want=%s lastPod=%s lastSpec=%s lastSpecNil=%t podErr=%v gsErr=%v",
+			wantStr, lastPodValue, lastSpecValue, lastSpecNil, lastPodErr, lastGsErr)
+	}
+	return nil
 }
