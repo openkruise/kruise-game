@@ -2,6 +2,40 @@ kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
   - role: control-plane
+    # Mount audit policy and audit log directory into the control-plane node
+    extraMounts:
+      # Host path where CI/local will place the policy file
+      - hostPath: /tmp/kind-audit/policy.yaml
+        containerPath: /etc/kubernetes/audit/policy.yaml
+        readOnly: true
+      # Host directory to collect audit logs written by kube-apiserver
+      - hostPath: /tmp/kind-audit
+        containerPath: /var/log/kubernetes/audit
+        readOnly: false
   - role: worker
   - role: worker
   - role: worker
+
+# Configure kube-apiserver with audit flags and volumes
+kubeadmConfigPatches:
+  - |
+    kind: ClusterConfiguration
+    apiServer:
+      extraArgs:
+        audit-policy-file: /etc/kubernetes/audit/policy.yaml
+        audit-log-path: /var/log/kubernetes/audit/audit.log
+        audit-log-format: json
+        audit-log-maxage: "1"
+        audit-log-maxbackup: "1"
+        audit-log-maxsize: "100"
+      extraVolumes:
+        - name: audit-policy
+          hostPath: /etc/kubernetes/audit/policy.yaml
+          mountPath: /etc/kubernetes/audit/policy.yaml
+          pathType: File
+          readOnly: true
+        - name: audit-log
+          hostPath: /var/log/kubernetes/audit
+          mountPath: /var/log/kubernetes/audit
+          pathType: DirectoryOrCreate
+          readOnly: false

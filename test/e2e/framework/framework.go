@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +25,8 @@ import (
 )
 
 type Framework struct {
-	client *client.Client
+	client    *client.Client
+	testStart time.Time
 }
 
 func NewFrameWork(config *restclient.Config) *Framework {
@@ -32,6 +34,28 @@ func NewFrameWork(config *restclient.Config) *Framework {
 	kubeClient := clientset.NewForConfigOrDie(config)
 	return &Framework{
 		client: client.NewKubeClient(kruisegameClient, kubeClient),
+	}
+}
+
+// MarkTestStart records the approximate start time of the current test.
+func (f *Framework) MarkTestStart() { f.testStart = time.Now() }
+
+// DumpAuditIfFailed prints a trimmed audit log snippet for the test namespace when the test fails.
+func (f *Framework) DumpAuditIfFailed() {
+	const auditFile = "/tmp/kind-audit/audit.log"
+	if _, err := os.Stat(auditFile); err != nil {
+		return
+	}
+	// Primary: events since test start
+	limit := 400
+	snippet := FilterAuditLog(auditFile, f.testStart, client.Namespace, limit)
+	// Fallback: if nothing matched (e.g., clock skew, strict filters), show a shorter tail
+	if snippet == "" {
+		limit = 200
+		snippet = FilterAuditLog(auditFile, time.Time{}, client.Namespace, limit)
+	}
+	if snippet != "" {
+		fmt.Printf("\n===== AUDIT (last %d matching entries since %s) =====\n%s\n===== END AUDIT =====\n", limit, f.testStart.Format(time.RFC3339), snippet)
 	}
 }
 
@@ -184,7 +208,6 @@ func (f *Framework) PatchGameServerSpec(gsName string, specFields map[string]int
 	}
 	return f.client.PatchGameServer(gsName, data)
 }
-
 func (f *Framework) ImageUpdate(gss *gamekruiseiov1alpha1.GameServerSet, name, image string) (*gamekruiseiov1alpha1.GameServerSet, error) {
 	var newContainers []corev1.Container
 	for _, c := range gss.Spec.GameServerTemplate.Spec.Containers {
@@ -282,9 +305,105 @@ func (f *Framework) WaitForUpdated(gss *gamekruiseiov1alpha1.GameServerSet, name
 		})
 }
 
-func (f *Framework) ExpectGssCorrect(gss *gamekruiseiov1alpha1.GameServerSet, expectIndex []int) error {
+// WaitForGssCounts waits until both Pod and GameServer counts equal desired.
+func (f *Framework) WaitForGssCounts(gss *gamekruiseiov1alpha1.GameServerSet, desired int) error {
+	gssName := gss.GetName()
+	labelSelector := labels.SelectorFromSet(map[string]string{
+		gamekruiseiov1alpha1.GameServerOwnerGssKey: gssName,
+	}).String()
+	return wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
+			podList, err := f.client.GetPodList(labelSelector)
+			if err != nil {
+				return false, nil
+			}
+			if len(podList.Items) != desired {
+				return false, nil
+			}
+			gsList, err := f.client.GetGameServerList(labelSelector)
+			if err != nil {
+				return false, nil
+			}
+			if len(gsList.Items) != desired {
+				return false, nil
+			}
+			return true, nil
+		})
+}
 
-	if err := f.WaitForGsCreated(gss); err != nil {
+// WaitForGssObservedGeneration waits until status.observedGeneration catches up with metadata.generation.
+func (f *Framework) WaitForGssObservedGeneration() error {
+	return f.WaitForGss(func(g *gamekruiseiov1alpha1.GameServerSet) (bool, error) {
+		return g.Status.ObservedGeneration == g.Generation, nil
+	})
+}
+
+// WaitForReplicasConverge waits until gss.Spec.Replicas equals desired and
+// on timeout returns a detailed snapshot of last observed state to aid debugging.
+func (f *Framework) WaitForReplicasConverge(gss *gamekruiseiov1alpha1.GameServerSet, desired int) error {
+	gssName := gss.GetName()
+	labelSelector := labels.SelectorFromSet(map[string]string{
+		gamekruiseiov1alpha1.GameServerOwnerGssKey: gssName,
+	}).String()
+	var lastSpecReplicas int
+	var lastStatusReplicas int
+	var lastCurrentReplicas int
+	var lastPodCount, lastGsCount int
+	var lastPodOrdinals []int
+	err := wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
+			// Fetch latest GSS
+			g, err := f.client.GetGameServerSet()
+			if err != nil {
+				return false, nil
+			}
+			if g.Spec.Replicas != nil {
+				lastSpecReplicas = int(*g.Spec.Replicas)
+			}
+			lastStatusReplicas = int(g.Status.Replicas)
+			lastCurrentReplicas = int(g.Status.CurrentReplicas)
+			// Fetch Pods and GameServers for context
+			if podList, err := f.client.GetPodList(labelSelector); err == nil {
+				lastPodCount = len(podList.Items)
+				lastPodOrdinals = util.GetIndexListFromPodList(podList.Items)
+			}
+			if gsList, err := f.client.GetGameServerList(labelSelector); err == nil {
+				lastGsCount = len(gsList.Items)
+			}
+			return lastSpecReplicas == desired, nil
+		})
+	if err != nil {
+		return fmt.Errorf(
+			"WaitForReplicasConverge timeout: want=%d spec=%d status.replicas=%d status.current=%d pods=%d gs=%d ordinals=%v",
+			desired, lastSpecReplicas, lastStatusReplicas, lastCurrentReplicas, lastPodCount, lastGsCount, lastPodOrdinals,
+		)
+	}
+	return nil
+}
+
+// GetGameServerSet fetches the current GameServerSet from cluster.
+func (f *Framework) GetGameServerSet() (*gamekruiseiov1alpha1.GameServerSet, error) {
+	return f.client.GetGameServerSet()
+}
+
+// WaitForGssReplicas waits until .spec.replicas equals the desired value.
+// WaitForGss fetches GSS periodically and evaluates a predicate until it returns true.
+func (f *Framework) WaitForGss(predicate func(*gamekruiseiov1alpha1.GameServerSet) (bool, error)) error {
+	return wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
+			gss, err := f.client.GetGameServerSet()
+			if err != nil {
+				return false, err
+			}
+			return predicate(gss)
+		})
+}
+
+func (f *Framework) ExpectGssCorrect(gss *gamekruiseiov1alpha1.GameServerSet, expectIndex []int) error {
+	// First wait until the number of objects matches the expected replica count
+	// (avoids relying on spec.replicas which may be delayed).
+	desired := len(expectIndex)
+	if err := f.WaitForGssCounts(gss, desired); err != nil {
 		return err
 	}
 
@@ -293,17 +412,38 @@ func (f *Framework) ExpectGssCorrect(gss *gamekruiseiov1alpha1.GameServerSet, ex
 		gamekruiseiov1alpha1.GameServerOwnerGssKey: gssName,
 	}).String()
 
-	podList, err := f.client.GetPodList(labelSelector)
+	// capture last observed snapshot for better error messages
+	var lastPodIndexes []int
+	var lastPodCount, lastGsCount int
+
+	// Then poll only for whether the ordinals match (while ensuring the counts remain consistent).
+	err := wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
+			podList, err := f.client.GetPodList(labelSelector)
+			if err != nil {
+				return false, nil
+			}
+			lastPodCount = len(podList.Items)
+			lastPodIndexes = util.GetIndexListFromPodList(podList.Items)
+
+			gsList, err := f.client.GetGameServerList(labelSelector)
+			if err != nil {
+				return false, nil
+			}
+			lastGsCount = len(gsList.Items)
+
+			// ensure the counts still match the expected value
+			if lastPodCount != desired || lastGsCount != desired {
+				return false, nil
+			}
+			if util.IsSliceEqual(expectIndex, lastPodIndexes) {
+				return true, nil
+			}
+			return false, nil
+		})
 	if err != nil {
-		return err
+		return fmt.Errorf("ExpectGssCorrect timeout: desired=%d expectedOrdinals=%v lastPodOrdinals=%v lastPodCount=%d lastGsCount=%d", desired, expectIndex, lastPodIndexes, lastPodCount, lastGsCount)
 	}
-
-	podIndexList := util.GetIndexListFromPodList(podList.Items)
-
-	if !util.IsSliceEqual(expectIndex, podIndexList) {
-		return fmt.Errorf("current pods and expected pods do not correspond, actual podIndexList: %v", podIndexList)
-	}
-
 	return nil
 }
 
@@ -320,6 +460,61 @@ func (f *Framework) WaitForGsOpsStateUpdate(gsName string, opsState string) erro
 			}
 			return false, nil
 		})
+}
+
+// WaitForGsSpecOpsState waits until GameServer.spec.opsState reaches the desired value.
+func (f *Framework) WaitForGsSpecOpsState(gsName string, opsState string) error {
+	return wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
+			gs, err := f.client.GetGameServer(gsName)
+			if err != nil {
+				return false, err
+			}
+			if string(gs.Spec.OpsState) == opsState {
+				return true, nil
+			}
+			return false, nil
+		})
+}
+
+// WaitForPodOpsStateOrDeleted waits until the pod label opsState equals the target or the pod is deleted.
+func (f *Framework) WaitForPodOpsStateOrDeleted(gsName string, opsState string) error {
+	var lastPodOpsState, lastPodPhase, lastPodUID, lastGsSpecOps string
+	var lastPodErr, lastGsErr error
+	var lastDeletionTimestamp string
+	err := wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (done bool, err error) {
+			if pod, err0 := f.client.GetPod(gsName); err0 == nil {
+				lastPodOpsState = pod.GetLabels()[gamekruiseiov1alpha1.GameServerOpsStateKey]
+				lastPodPhase = string(pod.Status.Phase)
+				lastPodUID = string(pod.UID)
+				if pod.DeletionTimestamp != nil {
+					lastDeletionTimestamp = pod.DeletionTimestamp.Time.Format(time.RFC3339)
+				} else {
+					lastDeletionTimestamp = "<nil>"
+				}
+				if lastPodOpsState == opsState {
+					return true, nil
+				}
+			} else {
+				if apierrors.IsNotFound(err0) {
+					return true, nil
+				}
+				lastPodErr = err0
+			}
+
+			if gs, err1 := f.client.GetGameServer(gsName); err1 == nil {
+				lastGsSpecOps = string(gs.Spec.OpsState)
+			} else {
+				lastGsErr = err1
+			}
+			return false, nil
+		})
+	if err != nil {
+		return fmt.Errorf("WaitForPodOpsStateOrDeleted timeout: wantOps=%s lastPodOps=%s lastPodPhase=%s lastPodUID=%s lastPodDeletionTs=%s lastGsSpecOps=%s podErr=%v gsErr=%v",
+			opsState, lastPodOpsState, lastPodPhase, lastPodUID, lastDeletionTimestamp, lastGsSpecOps, lastPodErr, lastGsErr)
+	}
+	return nil
 }
 
 func (f *Framework) WaitForGsDeletionPriorityUpdated(gsName string, deletionPriority string) error {
