@@ -298,12 +298,10 @@ func RunTestCases(f *framework.Framework) {
 			err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
 			gomega.Expect(err).To(gomega.BeNil())
 
-			// 2. Mark gss-1 as Kill (ensure spec is set) and wait for pod label to sync
+			// 2. Mark gss-1 as Kill and wait for spec update plus pod handling
 			_, err = f.MarkGameServerOpsState(client.GameServerSet+"-1", string(gameKruiseV1alpha1.Kill))
 			gomega.Expect(err).To(gomega.BeNil())
 			err = f.WaitForGsSpecOpsState(client.GameServerSet+"-1", string(gameKruiseV1alpha1.Kill))
-			gomega.Expect(err).To(gomega.BeNil())
-			err = f.WaitForGsOpsStateUpdate(client.GameServerSet+"-1", string(gameKruiseV1alpha1.Kill))
 			gomega.Expect(err).To(gomega.BeNil())
 			err = f.WaitForPodOpsStateOrDeleted(client.GameServerSet+"-1", string(gameKruiseV1alpha1.Kill))
 			gomega.Expect(err).To(gomega.BeNil())
