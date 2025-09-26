@@ -169,9 +169,21 @@ func (manager *GameServerSetManager) GameServerScale() error {
 		gssReserveIds = newReserveIds
 	}
 	gssAnnotations := make(map[string]string)
-	gssAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] = util.OrdinalSetToString(gssReserveIds)
-	patchGss := map[string]interface{}{"spec": map[string]interface{}{"reserveGameServerIds": util.OrdinalSetToIntStrSlice(gssReserveIds)}, "metadata": map[string]map[string]string{"annotations": gssAnnotations}}
-	patchGssBytes, _ := json.Marshal(patchGss)
+	annReserve := util.GetReserveOrdinalIntSet(gss.Spec.ReserveGameServerIds)
+	if gss.Spec.ScaleStrategy.ScaleDownStrategyType == gameKruiseV1alpha1.ReserveIdsScaleDownStrategyType {
+		annReserve = gssReserveIds
+	}
+	gssAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] = util.OrdinalSetToString(annReserve)
+
+	gssPatch := map[string]interface{}{
+		"metadata": map[string]map[string]string{"annotations": gssAnnotations},
+	}
+	if gss.Spec.ScaleStrategy.ScaleDownStrategyType == gameKruiseV1alpha1.ReserveIdsScaleDownStrategyType {
+		gssPatch["spec"] = map[string]interface{}{
+			"reserveGameServerIds": util.OrdinalSetToIntStrSlice(gssReserveIds),
+		}
+	}
+	patchGssBytes, _ := json.Marshal(gssPatch)
 	err = c.Patch(ctx, gss, client.RawPatch(types.MergePatchType, patchGssBytes))
 	if err != nil {
 		klog.Errorf("failed to patch GameServerSet %s in %s,because of %s.", gss.GetName(), gss.GetNamespace(), err.Error())
