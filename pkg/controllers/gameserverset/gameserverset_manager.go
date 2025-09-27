@@ -165,23 +165,33 @@ func (manager *GameServerSetManager) GameServerScale() error {
 		return err
 	}
 
+	origGssReserveIds := gssReserveIds.Clone()
 	if gss.Spec.ScaleStrategy.ScaleDownStrategyType == gameKruiseV1alpha1.ReserveIdsScaleDownStrategyType {
 		gssReserveIds = newReserveIds
 	}
-	gssAnnotations := make(map[string]string)
+
+	patchAnnotations := map[string]string{}
 	annReserve := util.GetReserveOrdinalIntSet(gss.Spec.ReserveGameServerIds)
 	if gss.Spec.ScaleStrategy.ScaleDownStrategyType == gameKruiseV1alpha1.ReserveIdsScaleDownStrategyType {
 		annReserve = gssReserveIds
 	}
-	gssAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] = util.OrdinalSetToString(annReserve)
-
-	gssPatch := map[string]interface{}{
-		"metadata": map[string]map[string]string{"annotations": gssAnnotations},
+	annReserveStr := util.OrdinalSetToString(annReserve)
+	currentAnnotations := gss.GetAnnotations()
+	if currentAnnotations == nil || currentAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] != annReserveStr {
+		patchAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] = annReserveStr
 	}
-	if gss.Spec.ScaleStrategy.ScaleDownStrategyType == gameKruiseV1alpha1.ReserveIdsScaleDownStrategyType {
+
+	gssPatch := map[string]interface{}{}
+	if len(patchAnnotations) > 0 {
+		gssPatch["metadata"] = map[string]map[string]string{"annotations": patchAnnotations}
+	}
+	if gss.Spec.ScaleStrategy.ScaleDownStrategyType == gameKruiseV1alpha1.ReserveIdsScaleDownStrategyType && !origGssReserveIds.Equal(gssReserveIds) {
 		gssPatch["spec"] = map[string]interface{}{
 			"reserveGameServerIds": util.OrdinalSetToIntStrSlice(gssReserveIds),
 		}
+	}
+	if len(gssPatch) == 0 {
+		return nil
 	}
 	patchGssBytes, _ := json.Marshal(gssPatch)
 	err = c.Patch(ctx, gss, client.RawPatch(types.MergePatchType, patchGssBytes))
