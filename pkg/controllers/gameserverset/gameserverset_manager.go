@@ -172,14 +172,9 @@ func (manager *GameServerSetManager) GameServerScale() error {
 	}
 
 	patchAnnotations := map[string]string{}
-	annReserve := util.GetReserveOrdinalIntSet(gss.Spec.ReserveGameServerIds)
-	if gss.Spec.ScaleStrategy.ScaleDownStrategyType == gameKruiseV1alpha1.ReserveIdsScaleDownStrategyType {
-		annReserve = gssSpecReservedIds
-	}
-	annReserveStr := util.OrdinalSetToString(annReserve)
-	currentAnnotations := gss.GetAnnotations()
-	if currentAnnotations == nil || currentAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] != annReserveStr {
-		patchAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] = annReserveStr
+	newGssAnnotationReservedIdsStr := util.OrdinalSetToString(gssSpecReservedIds)
+	if gssAnnotations == nil || gssAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] != newGssAnnotationReservedIdsStr {
+		patchAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] = newGssAnnotationReservedIdsStr
 	}
 
 	gssPatch := map[string]interface{}{}
