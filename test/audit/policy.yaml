@@ -1,0 +1,31 @@
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+  # For kruise-game controller on pods in tests: capture bodies to debug patch failures
+  - level: RequestResponse
+    users: ["system:serviceaccount:kruise-game-system:kruise-game-controller-manager"]
+    verbs: ["update", "patch"]
+    resources:
+      - group: ""
+        resources: ["pods", "pods/status"]
+    omitStages: ["RequestReceived"]
+
+  # High-signal: record full request/response bodies for changes to our CRDs and ASTS
+  - level: RequestResponse
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+    resources:
+      - group: "game.kruise.io"
+        resources: ["gameserversets", "gameservers", "gameserversets/scale", "gameservers/scale"]
+      - group: "apps.kruise.io"
+        resources: ["statefulsets", "statefulsets/scale"]
+    omitStages: ["RequestReceived"]
+
+  # Metadata-only for pods and leases (labels/status changes, leader election)
+  - level: Metadata
+    verbs: ["create", "update", "patch", "delete"]
+    resources:
+      - group: ""
+        resources: ["pods", "pods/status"]
+      - group: "coordination.k8s.io"
+        resources: ["leases"]
+    omitStages: ["RequestReceived"]

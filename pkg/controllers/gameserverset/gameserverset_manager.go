@@ -18,6 +18,10 @@ package gameserverset
 
 import (
 	"context"
+	"sort"
+	"strconv"
+	"sync"
+
 	kruisePub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
@@ -33,9 +37,6 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sort"
-	"strconv"
-	"sync"
 
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
@@ -134,18 +135,18 @@ func (manager *GameServerSetManager) GameServerScale() error {
 
 	currentReplicas := int(*asts.Spec.Replicas)
 	expectedReplicas := int(*gss.Spec.Replicas)
-	as := gss.GetAnnotations()
-	specReserveIds := util.GetReserveOrdinalIntSet(asts.Spec.ReserveOrdinals)
-	reserveIds := util.GetReserveOrdinalIntSet(
-		util.StringToIntStrSlice(as[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ","))
-	notExistIds := util.GetSetInANotInB(specReserveIds, reserveIds)
-	gssReserveIds := util.GetReserveOrdinalIntSet(gss.Spec.ReserveGameServerIds)
+	gssAnnotations := gss.GetAnnotations()
+	astsSpecReservedOrdinals := util.GetReserveOrdinalIntSet(asts.Spec.ReserveOrdinals)
+	gssAnnotationsReservedIds := util.GetReserveOrdinalIntSet(
+		util.StringToIntStrSlice(gssAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ","))
+	astsImplicitReservedIds := util.GetSetInANotInB(astsSpecReservedOrdinals, gssAnnotationsReservedIds)
+	gssSpecReservedIds := util.GetReserveOrdinalIntSet(gss.Spec.ReserveGameServerIds)
 
 	klog.Infof("GameServers %s/%s already has %d replicas, expect to have %d replicas; With newExplicit: %v; oldExplicit: %v; oldImplicit: %v; total pods num: %d",
-		gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas, gssReserveIds, reserveIds, notExistIds, len(podList))
+		gss.GetNamespace(), gss.GetName(), currentReplicas, expectedReplicas, gssSpecReservedIds, gssAnnotationsReservedIds, astsImplicitReservedIds, len(podList))
 	manager.eventRecorder.Eventf(gss, corev1.EventTypeNormal, ScaleReason, "scale from %d to %d", currentReplicas, expectedReplicas)
 
-	newManageIds, newReserveIds := computeToScaleGs(gssReserveIds, reserveIds, notExistIds, expectedReplicas, podList)
+	newManageIds, newReserveIds := computeToScaleGs(gssSpecReservedIds, gssAnnotationsReservedIds, astsImplicitReservedIds, expectedReplicas, podList)
 
 	if gss.Spec.GameServerTemplate.ReclaimPolicy == gameKruiseV1alpha1.DeleteGameServerReclaimPolicy {
 		err := SyncGameServer(gss, c, newManageIds, util.GetIndexSetFromPodList(podList))
@@ -165,13 +166,30 @@ func (manager *GameServerSetManager) GameServerScale() error {
 		return err
 	}
 
+	origGssSpecReservedIds := gssSpecReservedIds.Clone()
 	if gss.Spec.ScaleStrategy.ScaleDownStrategyType == gameKruiseV1alpha1.ReserveIdsScaleDownStrategyType {
-		gssReserveIds = newReserveIds
+		gssSpecReservedIds = newReserveIds
 	}
-	gssAnnotations := make(map[string]string)
-	gssAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] = util.OrdinalSetToString(gssReserveIds)
-	patchGss := map[string]interface{}{"spec": map[string]interface{}{"reserveGameServerIds": util.OrdinalSetToIntStrSlice(gssReserveIds)}, "metadata": map[string]map[string]string{"annotations": gssAnnotations}}
-	patchGssBytes, _ := json.Marshal(patchGss)
+
+	patchAnnotations := map[string]string{}
+	newGssAnnotationReservedIdsStr := util.OrdinalSetToString(gssSpecReservedIds)
+	if gssAnnotations == nil || gssAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] != newGssAnnotationReservedIdsStr {
+		patchAnnotations[gameKruiseV1alpha1.GameServerSetReserveIdsKey] = newGssAnnotationReservedIdsStr
+	}
+
+	gssPatch := map[string]interface{}{}
+	if len(patchAnnotations) > 0 {
+		gssPatch["metadata"] = map[string]map[string]string{"annotations": patchAnnotations}
+	}
+	if gss.Spec.ScaleStrategy.ScaleDownStrategyType == gameKruiseV1alpha1.ReserveIdsScaleDownStrategyType && !origGssSpecReservedIds.Equal(gssSpecReservedIds) {
+		gssPatch["spec"] = map[string]interface{}{
+			"reserveGameServerIds": util.OrdinalSetToIntStrSlice(gssSpecReservedIds),
+		}
+	}
+	if len(gssPatch) == 0 {
+		return nil
+	}
+	patchGssBytes, _ := json.Marshal(gssPatch)
 	err = c.Patch(ctx, gss, client.RawPatch(types.MergePatchType, patchGssBytes))
 	if err != nil {
 		klog.Errorf("failed to patch GameServerSet %s in %s,because of %s.", gss.GetName(), gss.GetNamespace(), err.Error())
@@ -182,17 +200,17 @@ func (manager *GameServerSetManager) GameServerScale() error {
 }
 
 // computeToScaleGs is to compute what the id list the pods should be existed in cluster, and what the asts reserve id list should be.
-// reserveIds is the explicit id list.
-// notExistIds is the implicit id list.
-// gssReserveIds is the newest explicit id list.
+// gssSpecReservedIds is the newest explicit id list.
+// gssAnnotationsReservedIds is the previous explicit id list.
+// astsImplicitReservedIds is the implicit id list.
 // pods is the pods that managed by gss now.
-func computeToScaleGs(gssReserveIds, reserveIds, notExistIds sets.Set[int], expectedReplicas int, pods []corev1.Pod) (workloadManageIds sets.Set[int], newReverseIds sets.Set[int]) {
+func computeToScaleGs(gssSpecReservedIds, gssAnnotationsReservedIds, astsImplicitReservedIds sets.Set[int], expectedReplicas int, pods []corev1.Pod) (workloadManageIds sets.Set[int], newReserveIds sets.Set[int]) {
 	// 1. Get newest implicit list & explicit.
-	newAddExplicit := util.GetSetInANotInB(gssReserveIds, reserveIds)
-	newDeleteExplicit := util.GetSetInANotInB(reserveIds, gssReserveIds)
-	newImplicit := util.GetSetInANotInB(notExistIds, newAddExplicit)
+	newAddExplicit := util.GetSetInANotInB(gssSpecReservedIds, gssAnnotationsReservedIds)
+	newDeleteExplicit := util.GetSetInANotInB(gssAnnotationsReservedIds, gssSpecReservedIds)
+	newImplicit := util.GetSetInANotInB(astsImplicitReservedIds, newAddExplicit)
 	newImplicit = newImplicit.Union(newDeleteExplicit)
-	newExplicit := gssReserveIds
+	newExplicit := gssSpecReservedIds
 
 	// 2. Remove the pods ids is in newExplicit.
 	workloadManageIds = sets.New[int]()

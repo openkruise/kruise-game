@@ -216,7 +216,6 @@ func TestInitAsts(t *testing.T) {
 	}
 }
 
-
 func TestGameServerSetController_ASTS_Management(t *testing.T) {
 	tests := []struct {
 		name            string
