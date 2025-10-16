@@ -81,7 +81,7 @@ func (client *Client) DefaultGameServerSet() *gameKruiseV1alpha1.GameServerSet {
 						Containers: []corev1.Container{
 							{
 								Name:  GameContainerName,
-								Image: "nginx:1.9.7",
+								Image: "nginx:1.25",
 							},
 						},
 					},
