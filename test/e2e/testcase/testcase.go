@@ -205,11 +205,11 @@ func RunTestCases(f *framework.Framework) {
 			gomega.Expect(err).To(gomega.BeNil())
 
 			// 2. Only set reserve = "3-4"
-			_, err = f.PatchGssSpec(map[string]interface{}{
+			gss, err = f.PatchGssSpec(map[string]interface{}{
 				"reserveGameServerIds": []intstr.IntOrString{intstr.FromString("3-4")},
 			})
 			gomega.Expect(err).To(gomega.BeNil())
-			gomega.Expect(f.WaitForGssObservedGeneration()).To(gomega.BeNil())
+			gomega.Expect(f.WaitForGssObservedGeneration(gss.Generation)).To(gomega.BeNil())
 
 			// 3. Assert final set is {0,1,2,5,6}, replicas still 5
 			err = f.ExpectGssCorrect(gss, []int{0, 1, 2, 5, 6})
@@ -225,11 +225,11 @@ func RunTestCases(f *framework.Framework) {
 			_, err = f.GameServerScale(gss, 5, nil)
 			gomega.Expect(err).To(gomega.BeNil())
 
-			_, err = f.PatchGssSpec(map[string]interface{}{
+			gss, err = f.PatchGssSpec(map[string]interface{}{
 				"reserveGameServerIds": []intstr.IntOrString{intstr.FromString("3-4")},
 			})
 			gomega.Expect(err).To(gomega.BeNil())
-			gomega.Expect(f.WaitForGssObservedGeneration()).To(gomega.BeNil())
+			gomega.Expect(f.WaitForGssObservedGeneration(gss.Generation)).To(gomega.BeNil())
 
 			// 2. Scale down to 3 and extend reserve to 3-6 simultaneously
 			gss, err = f.PatchGssSpec(map[string]interface{}{
@@ -237,7 +237,7 @@ func RunTestCases(f *framework.Framework) {
 				"reserveGameServerIds": []intstr.IntOrString{intstr.FromString("3-6")},
 			})
 			gomega.Expect(err).To(gomega.BeNil())
-			gomega.Expect(f.WaitForGssObservedGeneration()).To(gomega.BeNil())
+			gomega.Expect(f.WaitForGssObservedGeneration(gss.Generation)).To(gomega.BeNil())
 
 			// 3. Assert final set is {0,1,2}
 			err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
@@ -259,7 +259,7 @@ func RunTestCases(f *framework.Framework) {
 				},
 			})
 			gomega.Expect(err).To(gomega.BeNil())
-			gomega.Expect(f.WaitForGssObservedGeneration()).To(gomega.BeNil())
+			gomega.Expect(f.WaitForGssObservedGeneration(gss.Generation)).To(gomega.BeNil())
 
 			// 2. Scale down to 3 and assert set {0,1,2}
 			gss, err = f.GameServerScale(gss, 3, nil)
@@ -285,7 +285,7 @@ func RunTestCases(f *framework.Framework) {
 				"reserveGameServerIds": []intstr.IntOrString{intstr.FromInt(3)},
 			})
 			gomega.Expect(err).To(gomega.BeNil())
-			gomega.Expect(f.WaitForGssObservedGeneration()).To(gomega.BeNil())
+			gomega.Expect(f.WaitForGssObservedGeneration(gss.Generation)).To(gomega.BeNil())
 			err = f.ExpectGssCorrect(gss, []int{0, 1, 2, 4})
 			gomega.Expect(err).To(gomega.BeNil())
 		})

@@ -331,10 +331,16 @@ func (f *Framework) WaitForGssCounts(gss *gamekruiseiov1alpha1.GameServerSet, de
 		})
 }
 
-// WaitForGssObservedGeneration waits until status.observedGeneration catches up with metadata.generation.
-func (f *Framework) WaitForGssObservedGeneration() error {
+// WaitForGssObservedGeneration waits until status.observedGeneration reaches at least the targetGeneration.
+func (f *Framework) WaitForGssObservedGeneration(targetGeneration int64) error {
 	return f.WaitForGss(func(g *gamekruiseiov1alpha1.GameServerSet) (bool, error) {
-		return g.Status.ObservedGeneration == g.Generation, nil
+		if g.Generation < targetGeneration {
+			return false, nil
+		}
+		if g.Status.ObservedGeneration < targetGeneration {
+			return false, nil
+		}
+		return true, nil
 	})
 }
 
