@@ -27,6 +27,8 @@ jobs:
           submodules: true
           fetch-depth: 0
           fetch-tags: true
+      - name: Ensure tags are available
+        run: git fetch --force --tags
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
