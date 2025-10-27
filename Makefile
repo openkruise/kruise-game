@@ -1,6 +1,9 @@
 
 # Image URL to use all building/pushing images targets
 IMG ?= kruise-game-manager:test
+# Compute version metadata from git when available. Fallback to dev-<sha> via helper script.
+VERSION ?= $(shell ./hack/compute-version.sh 2>/dev/null || git describe --tags --dirty --always 2>/dev/null || echo dev)
+LDFLAGS ?= -X github.com/openkruise/kruise-game/pkg/version.Version=$(VERSION)
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.30.0
 
@@ -63,15 +66,15 @@ test: manifests generate fmt vet envtest ## Run tests.
 
 .PHONY: build
 build: generate fmt vet ## Build manager binary.
-	go build -o bin/manager main.go
+	go build -ldflags "$(LDFLAGS)" -o bin/manager main.go
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
-	go run ./main.go
+	go run -ldflags "$(LDFLAGS)" ./main.go
 
 .PHONY: docker-build
 docker-build: ## Build docker images with the manager.
-	docker build -t ${IMG} .
+	docker build --build-arg LDFLAGS="$(LDFLAGS)" -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker images with the manager.

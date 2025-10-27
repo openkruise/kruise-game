@@ -30,6 +30,12 @@ func RunTestCases(f *framework.Framework) {
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		})
 
+		// Run logging smoke test first for fast feedback
+		RunLoggingSmokeTest(f)
+
+		// Run HA deployment update test (only in HA mode)
+		RunHADeploymentUpdateTest(f)
+
 		ginkgo.It("scale", func() {
 
 			// deploy

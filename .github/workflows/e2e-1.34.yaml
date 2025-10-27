@@ -25,10 +25,19 @@ jobs:
       - uses: actions/checkout@v5
         with:
           submodules: true
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Ensure tags are available
+        run: git fetch --force --tags
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
+      - name: Determine build metadata
+        run: |
+          VERSION=$(./hack/compute-version.sh)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "LDFLAGS=-X github.com/openkruise/kruise-game/pkg/version.Version=$VERSION" >> "$GITHUB_ENV"
         # Prepare audit policy before cluster creation so extraMounts can find it
       - name: Prepare audit policy
         run: |
@@ -50,7 +59,7 @@ jobs:
       - name: Build image
         run: |
           export IMAGE="openkruise/kruise-game-manager:e2e-${GITHUB_RUN_ID}"
-          docker build --pull --no-cache . -t $IMAGE
+          docker build --pull --no-cache --build-arg LDFLAGS="$LDFLAGS" . -t $IMAGE
           kind load docker-image --name=${KIND_CLUSTER_NAME} $IMAGE || { echo >&2 "kind not installed or error loading image: $IMAGE"; exit 1; }
       - name: Install Cert-Manager
         run: |

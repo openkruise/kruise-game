@@ -77,7 +77,7 @@ func newReconciler(mgr manager.Manager) reconcile.Reconciler {
 
 func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	// Create a new controller
-	klog.Info("Starting GameServer Controller")
+	klog.InfoS("Starting controller", "event", "controller.start", "controller", "gameserver", "workers", concurrentReconciles)
 	c, err := controller.New("gameserver-controller", mgr, controller.Options{Reconciler: r, MaxConcurrentReconciles: concurrentReconciles})
 	if err != nil {
 		klog.Error(err)
