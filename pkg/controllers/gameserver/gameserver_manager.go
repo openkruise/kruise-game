@@ -268,7 +268,7 @@ func (manager GameServerManager) SyncPodToGs(gss *gameKruiseV1alpha1.GameServerS
 	podGsState := gameKruiseV1alpha1.GameServerState(podLabels[gameKruiseV1alpha1.GameServerStateKey])
 
 	// sync Service Qualities
-	sqConditions := syncServiceQualities(gss.Spec.ServiceQualities, pod.Status.Conditions, gs)
+	sqConditions := syncServiceQualities(gss.Spec.ServiceQualities, pod.Status.Conditions, gs, manager.eventRecorder)
 
 	// sync Metadata from Gss
 	if isNeedToSyncMetadata(gss, gs) {
@@ -427,7 +427,7 @@ func desiredNetworkState(disabled bool) gameKruiseV1alpha1.NetworkState {
 	return gameKruiseV1alpha1.NetworkReady
 }
 
-func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, podConditions []corev1.PodCondition, gs *gameKruiseV1alpha1.GameServer) []gameKruiseV1alpha1.ServiceQualityCondition {
+func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, podConditions []corev1.PodCondition, gs *gameKruiseV1alpha1.GameServer, eventRecorder record.EventRecorder) []gameKruiseV1alpha1.ServiceQualityCondition {
 	var newGsConditions []gameKruiseV1alpha1.ServiceQualityCondition
 	sqConditionsMap := make(map[string]gameKruiseV1alpha1.ServiceQualityCondition)
 	for _, sqc := range gs.Status.ServiceQualitiesCondition {
@@ -451,20 +451,65 @@ func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, 
 				for _, action := range sq.ServiceQualityAction {
 					state, err := strconv.ParseBool(string(podCondition.Status))
 					if err == nil && state == action.State && (action.Result == "" || podConditionMessage == action.Result) {
+						// Apply GameServerSpec fields with template support
+						// DeletionPriority: support template variable
 						if action.DeletionPriority != nil {
-							gs.Spec.DeletionPriority = action.DeletionPriority
+							dpStr := action.DeletionPriority.String()
+							if strings.Contains(dpStr, "{{") {
+								// Contains template, need to render and validate
+								parsedDP, err := util.ParseIntOrStringFromTemplate(dpStr, podConditionMessage)
+								if err != nil {
+									eventRecorder.Eventf(gs, corev1.EventTypeWarning, "InvalidDeletionPriority",
+										"Failed to parse DeletionPriority template '%s' with result '%s': %v", dpStr, podConditionMessage, err)
+								} else {
+									gs.Spec.DeletionPriority = parsedDP
+								}
+							} else {
+								// No template, use directly
+								gs.Spec.DeletionPriority = action.DeletionPriority
+							}
 						}
+						// UpdatePriority: support template variable
 						if action.UpdatePriority != nil {
-							gs.Spec.UpdatePriority = action.UpdatePriority
+							upStr := action.UpdatePriority.String()
+							if strings.Contains(upStr, "{{") {
+								// Contains template, need to render and validate
+								parsedUP, err := util.ParseIntOrStringFromTemplate(upStr, podConditionMessage)
+								if err != nil {
+									eventRecorder.Eventf(gs, corev1.EventTypeWarning, "InvalidUpdatePriority",
+										"Failed to parse UpdatePriority template '%s' with result '%s': %v", upStr, podConditionMessage, err)
+								} else {
+									gs.Spec.UpdatePriority = parsedUP
+								}
+							} else {
+								// No template, use directly
+								gs.Spec.UpdatePriority = action.UpdatePriority
+							}
 						}
 						if action.OpsState != "" {
-							gs.Spec.OpsState = action.OpsState
+							// Support template in OpsState
+							renderedOpsState := util.RenderTemplate(string(action.OpsState), podConditionMessage)
+							gs.Spec.OpsState = gameKruiseV1alpha1.OpsState(renderedOpsState)
 						}
 						if action.NetworkDisabled != nil {
 							gs.Spec.NetworkDisabled = ptr.To(ptr.Deref(action.NetworkDisabled, false))
 						}
-						gs.SetLabels(util.MergeMapString(gs.GetLabels(), action.Labels))
-						gs.SetAnnotations(util.MergeMapString(gs.GetAnnotations(), action.Annotations))
+						// Apply Labels with template support
+						if len(action.Labels) > 0 {
+							renderedLabels := make(map[string]string)
+							for k, v := range action.Labels {
+								renderedLabels[k] = util.RenderTemplate(v, podConditionMessage)
+							}
+							gs.SetLabels(util.MergeMapString(gs.GetLabels(), renderedLabels))
+						}
+						// Apply Annotations with template support
+						if len(action.Annotations) > 0 {
+							renderedAnnotations := make(map[string]string)
+							for k, v := range action.Annotations {
+								renderedAnnotations[k] = util.RenderTemplate(v, podConditionMessage)
+							}
+							gs.SetAnnotations(util.MergeMapString(gs.GetAnnotations(), renderedAnnotations))
+						}
 						lastActionTransitionTime = timeNow
 					}
 				}
