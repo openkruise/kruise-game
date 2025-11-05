@@ -433,7 +433,7 @@ func TestSyncServiceQualities(t *testing.T) {
 	}
 
 	for i, test := range tests {
-		actualNewSqConditions := syncServiceQualities(test.serviceQualities, test.podConditions, test.gs)
+		actualNewSqConditions := syncServiceQualities(test.serviceQualities, test.podConditions, test.gs, nil)
 		expectSpec := test.spec
 		expectNewSqConditions := test.newSqConditions
 		if !reflect.DeepEqual(test.gs.Spec, expectSpec) {
@@ -469,6 +469,244 @@ func TestSyncServiceQualities(t *testing.T) {
 				t.Errorf("case %d: expect sq condition %s exist, but actually not", i, expectNewSqCondition.Name)
 			}
 		}
+	}
+}
+
+// TestSyncServiceQualities_WithTemplate tests template variable support in ServiceQualityAction
+func TestSyncServiceQualities_WithTemplate(t *testing.T) {
+	fakeProbeTime := metav1.Now()
+
+	tests := []struct {
+		name                   string
+		serviceQualities       []gameKruiseV1alpha1.ServiceQuality
+		podConditions          []corev1.PodCondition
+		gs                     *gameKruiseV1alpha1.GameServer
+		expectOpsState         gameKruiseV1alpha1.OpsState
+		expectLabels           map[string]string
+		expectAnnotations      map[string]string
+		expectUpdatePriority   *intstr.IntOrString
+		expectDeletionPriority *intstr.IntOrString
+	}{
+		{
+			name: "template in annotations and labels",
+			serviceQualities: []gameKruiseV1alpha1.ServiceQuality{
+				{
+					Name:      "player-count",
+					Permanent: false,
+					ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{
+						{
+							State: true,
+							Annotations: map[string]string{
+								"player-count": "{{.Result}}",
+								"info":         "players-{{.Result}}",
+							},
+							Labels: map[string]string{
+								"count": "{{.Result}}",
+							},
+						},
+					},
+				},
+			},
+			podConditions: []corev1.PodCondition{
+				{
+					Type:          "game.kruise.io/player-count",
+					Status:        corev1.ConditionTrue,
+					Message:       "42",
+					LastProbeTime: fakeProbeTime,
+				},
+			},
+			gs: &gameKruiseV1alpha1.GameServer{
+				Spec:   gameKruiseV1alpha1.GameServerSpec{},
+				Status: gameKruiseV1alpha1.GameServerStatus{},
+			},
+			expectAnnotations: map[string]string{
+				"player-count": "42",
+				"info":         "players-42",
+			},
+			expectLabels: map[string]string{
+				"count": "42",
+			},
+		},
+		{
+			name: "template with conditional in OpsState",
+			serviceQualities: []gameKruiseV1alpha1.ServiceQuality{
+				{
+					Name:      "health-check",
+					Permanent: false,
+					ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{
+						{
+							State: true,
+							GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
+								OpsState: "{{if eq .Result \"0\"}}WaitToBeDeleted{{else}}None{{end}}",
+							},
+							Labels: map[string]string{
+								"status": "{{if eq .Result \"0\"}}empty{{else}}active{{end}}",
+							},
+						},
+					},
+				},
+			},
+			podConditions: []corev1.PodCondition{
+				{
+					Type:          "game.kruise.io/health-check",
+					Status:        corev1.ConditionTrue,
+					Message:       "0",
+					LastProbeTime: fakeProbeTime,
+				},
+			},
+			gs: &gameKruiseV1alpha1.GameServer{
+				Spec:   gameKruiseV1alpha1.GameServerSpec{},
+				Status: gameKruiseV1alpha1.GameServerStatus{},
+			},
+			expectOpsState: gameKruiseV1alpha1.WaitToDelete,
+			expectLabels: map[string]string{
+				"status": "empty",
+			},
+		},
+		{
+			name: "template with comparison gt",
+			serviceQualities: []gameKruiseV1alpha1.ServiceQuality{
+				{
+					Name:      "load-check",
+					Permanent: false,
+					ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{
+						{
+							State: true,
+							Labels: map[string]string{
+								"load-level": "{{if gt .Result \"80\"}}high{{else}}normal{{end}}",
+							},
+						},
+					},
+				},
+			},
+			podConditions: []corev1.PodCondition{
+				{
+					Type:          "game.kruise.io/load-check",
+					Status:        corev1.ConditionTrue,
+					Message:       "85",
+					LastProbeTime: fakeProbeTime,
+				},
+			},
+			gs: &gameKruiseV1alpha1.GameServer{
+				Spec:   gameKruiseV1alpha1.GameServerSpec{},
+				Status: gameKruiseV1alpha1.GameServerStatus{},
+			},
+			expectLabels: map[string]string{
+				"load-level": "high",
+			},
+		},
+		{
+			name: "template in UpdatePriority",
+			serviceQualities: []gameKruiseV1alpha1.ServiceQuality{
+				{
+					Name:      "player-priority",
+					Permanent: false,
+					ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{
+						{
+							State: true,
+							GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
+								// Template: player count as update priority
+								UpdatePriority: func() *intstr.IntOrString {
+									v := intstr.FromString("{{.Result}}")
+									return &v
+								}(),
+							},
+						},
+					},
+				},
+			},
+			podConditions: []corev1.PodCondition{
+				{
+					Type:          "game.kruise.io/player-priority",
+					Status:        corev1.ConditionTrue,
+					Message:       "75",
+					LastProbeTime: fakeProbeTime,
+				},
+			},
+			gs: &gameKruiseV1alpha1.GameServer{
+				Spec:   gameKruiseV1alpha1.GameServerSpec{},
+				Status: gameKruiseV1alpha1.GameServerStatus{},
+			},
+			expectUpdatePriority: func() *intstr.IntOrString {
+				v := intstr.FromInt(75)
+				return &v
+			}(),
+		},
+		{
+			name: "template in DeletionPriority with formula",
+			serviceQualities: []gameKruiseV1alpha1.ServiceQuality{
+				{
+					Name:      "player-based-deletion",
+					Permanent: false,
+					ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{
+						{
+							State: true,
+							GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
+								// Template: 0 players -> priority 1, else 100
+								DeletionPriority: func() *intstr.IntOrString {
+									v := intstr.FromString("{{if eq .Result \"0\"}}1{{else}}100{{end}}")
+									return &v
+								}(),
+							},
+						},
+					},
+				},
+			},
+			podConditions: []corev1.PodCondition{
+				{
+					Type:          "game.kruise.io/player-based-deletion",
+					Status:        corev1.ConditionTrue,
+					Message:       "0",
+					LastProbeTime: fakeProbeTime,
+				},
+			},
+			gs: &gameKruiseV1alpha1.GameServer{
+				Spec:   gameKruiseV1alpha1.GameServerSpec{},
+				Status: gameKruiseV1alpha1.GameServerStatus{},
+			},
+			expectDeletionPriority: func() *intstr.IntOrString {
+				v := intstr.FromInt(1)
+				return &v
+			}(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			syncServiceQualities(tt.serviceQualities, tt.podConditions, tt.gs, nil)
+
+			if tt.expectOpsState != "" && tt.gs.Spec.OpsState != tt.expectOpsState {
+				t.Errorf("expect OpsState %v but got %v", tt.expectOpsState, tt.gs.Spec.OpsState)
+			}
+
+			for k, v := range tt.expectLabels {
+				if tt.gs.GetLabels()[k] != v {
+					t.Errorf("expect label %s=%v but got %v", k, v, tt.gs.GetLabels()[k])
+				}
+			}
+
+			for k, v := range tt.expectAnnotations {
+				if tt.gs.GetAnnotations()[k] != v {
+					t.Errorf("expect annotation %s=%v but got %v", k, v, tt.gs.GetAnnotations()[k])
+				}
+			}
+
+			if tt.expectUpdatePriority != nil {
+				if tt.gs.Spec.UpdatePriority == nil {
+					t.Errorf("expect UpdatePriority %v but got nil", tt.expectUpdatePriority)
+				} else if tt.gs.Spec.UpdatePriority.String() != tt.expectUpdatePriority.String() {
+					t.Errorf("expect UpdatePriority %v but got %v", tt.expectUpdatePriority, tt.gs.Spec.UpdatePriority)
+				}
+			}
+
+			if tt.expectDeletionPriority != nil {
+				if tt.gs.Spec.DeletionPriority == nil {
+					t.Errorf("expect DeletionPriority %v but got nil", tt.expectDeletionPriority)
+				} else if tt.gs.Spec.DeletionPriority.String() != tt.expectDeletionPriority.String() {
+					t.Errorf("expect DeletionPriority %v but got %v", tt.expectDeletionPriority, tt.gs.Spec.DeletionPriority)
+				}
+			}
+		})
 	}
 }
 
