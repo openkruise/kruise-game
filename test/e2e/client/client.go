@@ -37,6 +37,11 @@ func NewKubeClient(kruisegameClient kruisegameclientset.Interface, kubeClint cli
 	}
 }
 
+// GetKubeClient returns the Kubernetes clientset for accessing core APIs.
+func (client *Client) GetKubeClient() clientset.Interface {
+	return client.kubeClint
+}
+
 func (client *Client) CreateNamespace() error {
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{

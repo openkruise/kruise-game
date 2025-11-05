@@ -37,6 +37,11 @@ func NewFrameWork(config *restclient.Config) *Framework {
 	}
 }
 
+// KubeClientSet returns the Kubernetes clientset for accessing core APIs.
+func (f *Framework) KubeClientSet() clientset.Interface {
+	return f.client.GetKubeClient()
+}
+
 // MarkTestStart records the approximate start time of the current test.
 func (f *Framework) MarkTestStart() { f.testStart = time.Now() }
 

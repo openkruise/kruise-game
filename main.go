@@ -27,6 +27,7 @@ import (
 	"time"
 
 	ackv1alpha1 "github.com/aws-controllers-k8s/elbv2-controller/apis/v1alpha1"
+	"github.com/go-logr/logr"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	"google.golang.org/grpc"
@@ -42,7 +43,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
@@ -53,6 +53,7 @@ import (
 	kruisegamevisions "github.com/openkruise/kruise-game/pkg/client/informers/externalversions"
 	controller "github.com/openkruise/kruise-game/pkg/controllers"
 	"github.com/openkruise/kruise-game/pkg/externalscaler"
+	"github.com/openkruise/kruise-game/pkg/logging"
 	"github.com/openkruise/kruise-game/pkg/metrics"
 	"github.com/openkruise/kruise-game/pkg/util/client"
 	"github.com/openkruise/kruise-game/pkg/webhook"
@@ -89,6 +90,8 @@ func main() {
 	var namespace string
 	var syncPeriodStr string
 	var scaleServerAddr string
+	logOptions := logging.NewOptions()
+	logOptions.AddFlags(flag.CommandLine)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8082", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
@@ -104,13 +107,18 @@ func main() {
 	// Add cloud provider flags
 	cloudprovider.InitCloudProviderFlags()
 
-	opts := zap.Options{
-		Development: true,
-	}
-	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	logResult, err := logOptions.Apply(flag.CommandLine)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+
+	setupLog = ctrl.Log.WithName("setup")
+	if logResult.Warning != "" {
+		setupLog.Info(logResult.Warning)
+	}
 
 	// syncPeriod parsed
 	var syncPeriod *time.Duration
@@ -204,7 +212,7 @@ func main() {
 			return healthz.Ping(req)
 		}
 		if isLeader.Load() && isCloudManagerInitialized.Load() {
-			// If the manager is the leader, we can return nil to indicate readiness
+			// If the manager is the leader and initialized, we can return nil to indicate readiness
 			return nil
 		}
 		return fmt.Errorf("not ready yet")
@@ -213,7 +221,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	setupLog.Info("setup controllers")
+	setupLog.Info("setup controllers", "event", "controller.setup")
 	if err = controller.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
@@ -221,11 +229,11 @@ func main() {
 
 	signal := ctrl.SetupSignalHandler()
 	go func() {
-		setupLog.Info("waiting for cache sync to init cloud provider manager")
+		setupLog.Info("waiting for cache sync to init cloud provider manager", "event", "cache.wait_for_sync")
 		if mgr.GetCache().WaitForCacheSync(signal) {
-			setupLog.Info("cache synced, cloud provider manager start to init")
+			setupLog.Info("cache synced, cloud provider manager start to init", "event", "cache.synced")
 			if enableLeaderElection {
-				setupLog.Info("waiting for leader election to init cloud provider manager")
+				setupLog.Info("waiting for leader election to init cloud provider manager", "event", "leader_election.wait_for_leadership")
 				<-mgr.Elected()
 			}
 			cloudProviderManager.Init(mgr.GetClient())
@@ -258,7 +266,18 @@ func main() {
 		}
 	}()
 
-	setupLog.Info("starting kruise-game-manager")
+	logServiceReadySummary(setupLog, serviceSummary{
+		MetricsAddr:     metricsAddr,
+		HealthAddr:      probeAddr,
+		Namespace:       namespace,
+		SyncPeriodRaw:   syncPeriodStr,
+		LeaderElection:  enableLeaderElection,
+		LogFormat:       logResult.Format,
+		LogJSONPreset:   logResult.JSONPreset,
+		ScaleServerAddr: scaleServerAddr,
+	})
+
+	setupLog.Info("starting kruise-game-manager", "event", "service.start")
 
 	if err := mgr.Start(signal); err != nil {
 		setupLog.Error(err, "problem running manager")
@@ -282,4 +301,44 @@ func getCacheNamespacesFromFlag(ns string) map[string]cache.Config {
 	return map[string]cache.Config{
 		ns: {},
 	}
+}
+
+type serviceSummary struct {
+	MetricsAddr     string
+	HealthAddr      string
+	Namespace       string
+	SyncPeriodRaw   string
+	LeaderElection  bool
+	LogFormat       string
+	LogJSONPreset   logging.JSONPreset
+	ScaleServerAddr string
+}
+
+func logServiceReadySummary(logger logr.Logger, summary serviceSummary) {
+	fields := []interface{}{
+		"event", "service.ready",
+		"leader_election", summary.LeaderElection,
+	}
+	if summary.MetricsAddr != "" {
+		fields = append(fields, "metrics.bind_address", summary.MetricsAddr)
+	}
+	if summary.HealthAddr != "" {
+		fields = append(fields, "healthz.bind_address", summary.HealthAddr)
+	}
+	if summary.Namespace != "" {
+		fields = append(fields, "namespace_scope", summary.Namespace)
+	}
+	if summary.SyncPeriodRaw != "" {
+		fields = append(fields, "sync_period", summary.SyncPeriodRaw)
+	}
+	if summary.LogFormat != "" {
+		fields = append(fields, "log.format", summary.LogFormat)
+	}
+	if summary.LogJSONPreset != "" {
+		fields = append(fields, "log.json_preset", string(summary.LogJSONPreset))
+	}
+	if summary.ScaleServerAddr != "" {
+		fields = append(fields, "scale_server.bind_address", summary.ScaleServerAddr)
+	}
+	logger.Info("service configuration snapshot", fields...)
 }

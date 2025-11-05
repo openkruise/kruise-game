@@ -24,3 +24,5 @@ testbin/*
 *.swo
 *~
 .vscode
+
+log_debug
