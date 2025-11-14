@@ -12,6 +12,7 @@ import (
 	"github.com/openkruise/kruise-game/test/e2e/framework"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 )
 
 func RunTestCases(f *framework.Framework) {
@@ -98,21 +99,295 @@ func RunTestCases(f *framework.Framework) {
 			gomega.Expect(err).To(gomega.BeNil())
 		})
 
-		ginkgo.It("service qualities", func() {
+		ginkgo.Describe("service qualities with opsState and metadata", func() {
 
-			// deploy
-			gss, err := f.DeployGssWithServiceQualities()
-			gomega.Expect(err).To(gomega.BeNil())
+			ginkgo.BeforeEach(func() {
+				f.MarkTestStart()
+			})
 
-			err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
-			gomega.Expect(err).To(gomega.BeNil())
+			ginkgo.AfterEach(func() {
+				gomega.Expect(f.AfterEach()).Should(gomega.BeNil())
+				if ginkgo.CurrentGinkgoTestDescription().Failed {
+					f.DumpAuditIfFailed()
+				}
+			})
 
-			err = f.WaitForGsUpdatePriorityUpdated(gss.GetName()+"-0", "20")
-			gomega.Expect(err).To(gomega.BeNil())
-			err = f.WaitForGsUpdatePriorityUpdated(gss.GetName()+"-1", "20")
-			gomega.Expect(err).To(gomega.BeNil())
-			err = f.WaitForGsUpdatePriorityUpdated(gss.GetName()+"-2", "20")
-			gomega.Expect(err).To(gomega.BeNil())
+			ginkgo.It("service qualities update opsState and metadata", func() {
+				// deploy basic gss
+				gss, err := f.DeployGameServerSet()
+				gomega.Expect(err).To(gomega.BeNil())
+
+				err = f.WaitForGsCreated(gss)
+				gomega.Expect(err).To(gomega.BeNil())
+
+				// patch serviceQualities with opsState and metadata actions
+				up := intstr.FromInt(20)
+				dp := intstr.FromInt(10)
+				serviceQualities := []gameKruiseV1alpha1.ServiceQuality{
+					{
+						Name:          "health-check",
+						ContainerName: "game-server",
+						Probe: corev1.Probe{
+							ProbeHandler: corev1.ProbeHandler{
+								Exec: &corev1.ExecAction{
+									Command: []string{"/bin/sh", "-c", "exit 0"},
+								},
+							},
+							PeriodSeconds:    5,
+							FailureThreshold: 1,
+						},
+						Permanent: false,
+						ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{
+							{
+								State: true,
+								GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
+									OpsState:         gameKruiseV1alpha1.Maintaining,
+									UpdatePriority:   &up,
+									DeletionPriority: &dp,
+									NetworkDisabled:  ptr.To(false),
+								},
+								Labels: map[string]string{
+									"sq-status":  "healthy",
+									"test-label": "success",
+								},
+								Annotations: map[string]string{
+									"sq-note":        "probe-passed",
+									"test-timestamp": "updated",
+								},
+							},
+							{
+								State: false,
+								GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
+									OpsState: gameKruiseV1alpha1.None,
+								},
+								Labels: map[string]string{
+									"sq-status": "unhealthy",
+								},
+								Annotations: map[string]string{
+									"sq-note": "probe-failed",
+								},
+							},
+						},
+					},
+				}
+
+				_, err = f.PatchGssSpec(map[string]interface{}{
+					"serviceQualities": serviceQualities,
+				})
+				gomega.Expect(err).To(gomega.BeNil())
+
+				// wait for probe to execute
+				time.Sleep(15 * time.Second)
+
+				// verify opsState is set to Maintaining for all GameServers
+				err = f.WaitForGsSpecOpsState(gss.GetName()+"-0", string(gameKruiseV1alpha1.Maintaining))
+				gomega.Expect(err).To(gomega.BeNil())
+				err = f.WaitForGsSpecOpsState(gss.GetName()+"-1", string(gameKruiseV1alpha1.Maintaining))
+				gomega.Expect(err).To(gomega.BeNil())
+				err = f.WaitForGsSpecOpsState(gss.GetName()+"-2", string(gameKruiseV1alpha1.Maintaining))
+				gomega.Expect(err).To(gomega.BeNil())
+
+				// verify priorities are updated
+				err = f.WaitForGsUpdatePriorityUpdated(gss.GetName()+"-0", "20")
+				gomega.Expect(err).To(gomega.BeNil())
+				err = f.WaitForGsUpdatePriorityUpdated(gss.GetName()+"-1", "20")
+				gomega.Expect(err).To(gomega.BeNil())
+				err = f.WaitForGsUpdatePriorityUpdated(gss.GetName()+"-2", "20")
+				gomega.Expect(err).To(gomega.BeNil())
+
+				err = f.WaitForGsDeletionPriorityUpdated(gss.GetName()+"-0", "10")
+				gomega.Expect(err).To(gomega.BeNil())
+				err = f.WaitForGsDeletionPriorityUpdated(gss.GetName()+"-1", "10")
+				gomega.Expect(err).To(gomega.BeNil())
+				err = f.WaitForGsDeletionPriorityUpdated(gss.GetName()+"-2", "10")
+				gomega.Expect(err).To(gomega.BeNil())
+
+				// verify labels are set
+				gs0, err := f.GetGameServer(gss.GetName() + "-0")
+				gomega.Expect(err).To(gomega.BeNil())
+				gomega.Expect(gs0.GetLabels()["sq-status"]).To(gomega.Equal("healthy"))
+				gomega.Expect(gs0.GetLabels()["test-label"]).To(gomega.Equal("success"))
+
+				// verify annotations are set
+				gomega.Expect(gs0.GetAnnotations()["sq-note"]).To(gomega.Equal("probe-passed"))
+				gomega.Expect(gs0.GetAnnotations()["test-timestamp"]).To(gomega.Equal("updated"))
+
+				// verify networkDisabled is set
+				err = f.WaitForGsNetworkDisabled(gss.GetName()+"-0", false)
+				gomega.Expect(err).To(gomega.BeNil())
+			})
+
+			ginkgo.It("service qualities with multiple probes", func() {
+				// deploy gss with 2 replicas
+				gss, err := f.DeployGameServerSet()
+				gomega.Expect(err).To(gomega.BeNil())
+
+				_, err = f.GameServerScale(gss, 2, nil)
+				gomega.Expect(err).To(gomega.BeNil())
+
+				err = f.WaitForGssCounts(gss, 2)
+				gomega.Expect(err).To(gomega.BeNil())
+
+				// patch with multiple serviceQualities
+				serviceQualities := []gameKruiseV1alpha1.ServiceQuality{
+					{
+						Name:          "always-pass",
+						ContainerName: "game-server",
+						Probe: corev1.Probe{
+							ProbeHandler: corev1.ProbeHandler{
+								Exec: &corev1.ExecAction{
+									Command: []string{"/bin/sh", "-c", "exit 0"},
+								},
+							},
+							PeriodSeconds:    5,
+							FailureThreshold: 1,
+						},
+						Permanent: false,
+						ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{
+							{
+								State: true,
+								GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
+									OpsState: gameKruiseV1alpha1.Allocated,
+								},
+								Labels: map[string]string{
+									"probe-1": "passed",
+								},
+							},
+						},
+					},
+					{
+						Name:          "check-path",
+						ContainerName: "game-server",
+						Probe: corev1.Probe{
+							ProbeHandler: corev1.ProbeHandler{
+								Exec: &corev1.ExecAction{
+									Command: []string{"/bin/sh", "-c", "test -d /tmp && echo 'ok' || exit 1"},
+								},
+							},
+							PeriodSeconds:    5,
+							FailureThreshold: 1,
+						},
+						Permanent: false,
+						ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{
+							{
+								State:  true,
+								Result: "ok",
+								Annotations: map[string]string{
+									"path-check": "success",
+								},
+							},
+						},
+					},
+				}
+
+				_, err = f.PatchGssSpec(map[string]interface{}{
+					"serviceQualities": serviceQualities,
+				})
+				gomega.Expect(err).To(gomega.BeNil())
+
+				// wait for probes to execute
+				time.Sleep(15 * time.Second)
+
+				// verify first probe sets opsState to Allocated
+				err = f.WaitForGsSpecOpsState(gss.GetName()+"-0", string(gameKruiseV1alpha1.Allocated))
+				gomega.Expect(err).To(gomega.BeNil())
+				err = f.WaitForGsSpecOpsState(gss.GetName()+"-1", string(gameKruiseV1alpha1.Allocated))
+				gomega.Expect(err).To(gomega.BeNil())
+
+				// verify labels and annotations from both probes
+				gs0, err := f.GetGameServer(gss.GetName() + "-0")
+				gomega.Expect(err).To(gomega.BeNil())
+				gomega.Expect(gs0.GetLabels()["probe-1"]).To(gomega.Equal("passed"))
+				gomega.Expect(gs0.GetAnnotations()["path-check"]).To(gomega.Equal("success"))
+
+				gs1, err := f.GetGameServer(gss.GetName() + "-1")
+				gomega.Expect(err).To(gomega.BeNil())
+				gomega.Expect(gs1.GetLabels()["probe-1"]).To(gomega.Equal("passed"))
+				gomega.Expect(gs1.GetAnnotations()["path-check"]).To(gomega.Equal("success"))
+			})
+
+			ginkgo.It("service qualities with permanent flag", func() {
+				// deploy gss with 1 replica
+				gss, err := f.DeployGameServerSet()
+				gomega.Expect(err).To(gomega.BeNil())
+
+				_, err = f.GameServerScale(gss, 1, nil)
+				gomega.Expect(err).To(gomega.BeNil())
+
+				err = f.WaitForGssCounts(gss, 1)
+				gomega.Expect(err).To(gomega.BeNil())
+
+				// patch with permanent serviceQuality
+				serviceQualities := []gameKruiseV1alpha1.ServiceQuality{
+					{
+						Name:          "permanent-check",
+						ContainerName: "game-server",
+						Probe: corev1.Probe{
+							ProbeHandler: corev1.ProbeHandler{
+								Exec: &corev1.ExecAction{
+									Command: []string{"/bin/sh", "-c", "exit 0"},
+								},
+							},
+							PeriodSeconds:    3,
+							FailureThreshold: 1,
+						},
+						Permanent: true,
+						ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{
+							{
+								State: true,
+								GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
+									OpsState: gameKruiseV1alpha1.Maintaining,
+								},
+								Labels: map[string]string{
+									"permanent-action": "applied",
+								},
+							},
+						},
+					},
+				}
+
+				_, err = f.PatchGssSpec(map[string]interface{}{
+					"serviceQualities": serviceQualities,
+				})
+				gomega.Expect(err).To(gomega.BeNil())
+
+				gsName := gss.GetName() + "-0"
+
+				// wait for first probe execution
+				time.Sleep(10 * time.Second)
+
+				// verify action was applied
+				err = f.WaitForGsSpecOpsState(gsName, string(gameKruiseV1alpha1.Maintaining))
+				gomega.Expect(err).To(gomega.BeNil())
+
+				gs, err := f.GetGameServer(gsName)
+				gomega.Expect(err).To(gomega.BeNil())
+				gomega.Expect(gs.GetLabels()["permanent-action"]).To(gomega.Equal("applied"))
+
+				// record LastActionTransitionTime
+				initialTransitionTime := gs.Status.ServiceQualitiesCondition[0].LastActionTransitionTime
+
+				// manually change opsState to verify permanent flag behavior
+				_, err = f.PatchGameServerSpec(gsName, map[string]interface{}{
+					"opsState": string(gameKruiseV1alpha1.None),
+				})
+				gomega.Expect(err).To(gomega.BeNil())
+
+				err = f.WaitForGsSpecOpsState(gsName, string(gameKruiseV1alpha1.None))
+				gomega.Expect(err).To(gomega.BeNil())
+
+				// wait for more probe cycles
+				time.Sleep(15 * time.Second)
+
+				// verify opsState remains as we set it (action not reapplied due to Permanent=true)
+				gs, err = f.GetGameServer(gsName)
+				gomega.Expect(err).To(gomega.BeNil())
+				gomega.Expect(gs.Spec.OpsState).To(gomega.Equal(gameKruiseV1alpha1.None))
+
+				// verify LastActionTransitionTime hasn't changed
+				currentTransitionTime := gs.Status.ServiceQualitiesCondition[0].LastActionTransitionTime
+				gomega.Expect(currentTransitionTime).To(gomega.Equal(initialTransitionTime))
+			})
 		})
 
 		ginkgo.Describe("network control", func() {
