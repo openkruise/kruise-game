@@ -10,7 +10,7 @@ on:
 
 env:
   # Common versions
-  GO_VERSION: '1.22'
+  GO_VERSION: '1.23.4'
   KIND_VERSION: 'v0.22.0'
   KIND_IMAGE: 'kindest/node:v1.30.8'
   KIND_CLUSTER_NAME: 'ci-testing'
@@ -34,14 +34,15 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - name: Determine build metadata
         run: |
-          VERSION=$(./hack/compute-version.sh)
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "LDFLAGS=-X github.com/openkruise/kruise-game/pkg/version.Version=$VERSION" >> "$GITHUB_ENV"
+          echo "::group::Determine build metadata"
+          bash ./scripts/ci/determine-build-metadata.sh
+          echo "::endgroup::"
         # Prepare audit policy before cluster creation so extraMounts can find it
       - name: Prepare audit policy
         run: |
-          mkdir -p /tmp/kind-audit
-          cp test/audit/policy.yaml /tmp/kind-audit/policy.yaml
+          echo "::group::Prepare audit policy"
+          bash ./scripts/ci/prepare-kind-audit.sh
+          echo "::endgroup::"
       - name: Setup Kind Cluster
         uses: helm/kind-action@v1.12.0
         with:
@@ -51,49 +52,29 @@ jobs:
           version: ${{ env.KIND_VERSION }}
       - name: Ensure audit log file exists and is world-readable
         run: |
-          sudo mkdir -p /tmp/kind-audit
-          sudo touch /tmp/kind-audit/audit.log
-          sudo chmod 0644 /tmp/kind-audit/audit.log
+          echo "::group::Ensure audit log file"
+          bash ./scripts/ci/ensure-audit-log.sh
+          echo "::endgroup::"
       - name: Build image
         run: |
-          export IMAGE="openkruise/kruise-game-manager:e2e-${GITHUB_RUN_ID}"
-          docker build --pull --no-cache --build-arg LDFLAGS="$LDFLAGS" . -t $IMAGE
-          kind load docker-image --name=${KIND_CLUSTER_NAME} $IMAGE || { echo >&2 "kind not installed or error loading image: $IMAGE"; exit 1; }
+          echo "::group::Build manager image"
+          bash ./scripts/ci/build-manager-image.sh
+          echo "::endgroup::"
       - name: Install Cert-Manager
         run: |
-          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/${{ env.CERT_MANAGER_VERSION }}/cert-manager.yaml
-          kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=180s
+          echo "::group::Install Cert-Manager"
+          bash ./scripts/ci/install-cert-manager.sh
+          echo "::endgroup::"
       - name: Install Kruise
         run: |
-          set -ex
-          kubectl cluster-info
-          make helm
-          helm repo add openkruise https://openkruise.github.io/charts/ || true
-          helm repo update
-          helm install kruise openkruise/kruise --version 1.8.0
-          for ((i=1;i<10;i++));
-          do
-            set +e
-            PODS=$(kubectl get pod -n kruise-system | grep '1/1' | grep kruise-controller-manager | wc -l)
-            set -e
-            if [ "$PODS" -eq "2" ]; then
-              break
-            fi
-            sleep 3
-          done
-          set +e
-          PODS=$(kubectl get pod -n kruise-system | grep '1/1' | grep kruise-controller-manager | wc -l)
-          set -e
-          if [ "$PODS" -eq "2" ]; then
-            echo "Wait for kruise-manager ready successfully"
-          else
-            echo "Timeout to wait for kruise-manager ready"
-            exit 1
-          fi
+          echo "::group::Install Kruise"
+          bash ./scripts/ci/install-kruise.sh
+          echo "::endgroup::"
       - name: Install Kruise Game in HA mode
         run: |
+          echo "::group::Install Kruise Game"
           set -ex
-          IMG=openkruise/kruise-game-manager:e2e-${GITHUB_RUN_ID} ENABLE_HA=true ./scripts/deploy_kind.sh
+          IMG=${E2E_IMAGE} ENABLE_HA=true ./scripts/deploy_kind.sh
           
           # Wait for the controller manager to be ready at least 1 replica
           for i in {1..30}; do
@@ -115,40 +96,24 @@ jobs:
             exit 1
           fi
           echo "Kruise Game installed in HA mode successfully"
+          echo "::endgroup::"
       - name: Verify Kind Cluster
         run: |
-          set -euo pipefail
-          echo "=== Verifying Kind cluster ==="
-          kind get clusters
-          kubectl config use-context kind-${KIND_CLUSTER_NAME}
-          kubectl cluster-info --request-timeout=15s
-          kubectl get nodes
+          echo "::group::Verify Kind cluster"
+          bash ./scripts/ci/verify-kind-cluster.sh
+          echo "::endgroup::"
       - name: Run E2E Tests before failover
+        env:
+          E2E_ARTIFACT_ROOT: /tmp/e2e-artifacts
+          E2E_ARTIFACT_SUFFIX: before-ha
+          E2E_AUDIT_LOG_PATH: /tmp/kind-audit/audit.log
         run: |
-          echo "=== Switching to Kind context ==="
-          kubectl config use-context kind-${KIND_CLUSTER_NAME}
-          
-          echo "=== Verifying current context ==="
-          kubectl config current-context
-          
-          echo "=== Checking cluster status ==="
-          kubectl cluster-info
-          kubectl get nodes
-          
-          echo "=== Building ginkgo ==="
-          make ginkgo
-          
-          echo "=== Running tests with verbose output ==="
-          ./bin/ginkgo --timeout 10m -v --trace --progress test/e2e || EXIT_CODE=$?
-          
-          echo "=== Collecting diagnostics ==="
-          kubectl get gss -A
-          kubectl get pods -n e2e-test
-          kubectl get events -n e2e-test
-          
-          exit ${EXIT_CODE:-0}
+          echo "::group::Run E2E tests (before failover)"
+          bash ./scripts/ci/run-e2e-tests.sh
+          echo "::endgroup::"
       - name: Test HA Failover
         run: |
+          echo "::group::Test HA failover"
           set -e
           NAMESPACE=kruise-game-system
           LEASE_NAME=game-kruise-manager
@@ -193,30 +158,32 @@ jobs:
             sleep 3
           done
           echo "HA Failover successful."
+          echo "::endgroup::"
       - name: Run E2E Tests after failover
+        env:
+          E2E_ARTIFACT_ROOT: /tmp/e2e-artifacts
+          E2E_ARTIFACT_SUFFIX: after-ha
+          E2E_AUDIT_LOG_PATH: /tmp/kind-audit/audit.log
+          E2E_GINKGO_FLAGS: "-v"
+          E2E_MAX_RESTARTS: "1"
         run: |
-          export KUBECONFIG=/home/runner/.kube/config
-          ./bin/ginkgo --timeout 10m -v test/e2e
-          retVal=$?
-          restartCount=$(kubectl get pod -n kruise-game-system --no-headers | awk '{print $4}' | awk '{s+=$1} END {print s}')
-          if [ "${restartCount}" -le "1" ];then # Allow for 1 restart from the deleted leader
-              echo "Kruise-game has not restarted unexpectedly"
-          else
-              echo "Kruise-game has restarted unexpectedly, abort!!!"
-              kubectl get pod -n kruise-game-system
-              kubectl get pod -n kruise-game-system --no-headers | awk '{print $1}' | xargs -I {} kubectl logs {} -p -n kruise-game-system --tail=100
-              exit 1
-          fi
-          exit $retVal
-      - name: Make audit logs readable
+          echo "::group::Run E2E tests (after failover)"
+          bash ./scripts/ci/run-e2e-tests.sh
+          echo "::endgroup::"
+      - name: Collect Additional Diagnostics
         if: always()
+        env:
+          E2E_ARTIFACT_ROOT: /tmp/e2e-artifacts
         run: |
-          sudo chmod -R a+r /tmp/kind-audit || true
-          ls -l /tmp/kind-audit || true
-      - name: Upload audit logs artifact
+          echo "::group::Collect E2E diagnostics"
+          bash ./scripts/ci/collect-e2e-artifacts.sh
+          echo "::endgroup::"
+      - name: Upload E2E Test Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kind-audit-logs-1.30
-          path: /tmp/kind-audit
-          if-no-files-found: ignore
+          name: e2e-test-artifacts-${{ env.KIND_VERSION }}
+          path: /tmp/e2e-artifacts
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 6

@@ -2,9 +2,12 @@ package webhook
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 
+	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/testr"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -320,6 +323,64 @@ func TestGetPodFromRequest(t *testing.T) {
 		expect := test.pod
 		if !reflect.DeepEqual(actual, expect) {
 			t.Errorf("case %d: expect pod %v, but actually got %v", i, expect, actual)
+		}
+	}
+}
+
+func TestDeriveNetworkStatusLabel(t *testing.T) {
+	logger := testr.New(t)
+	ctx := logr.NewContext(context.Background(), logger)
+	tests := []struct {
+		name            string
+		annotationState gameKruiseV1alpha1.NetworkState
+		annotationRaw   string
+		want            string
+	}{
+		{
+			name:            "ready state",
+			annotationState: gameKruiseV1alpha1.NetworkReady,
+			want:            "ready",
+		},
+		{
+			name:            "waiting state",
+			annotationState: gameKruiseV1alpha1.NetworkWaiting,
+			want:            "waiting",
+		},
+		{
+			name:          "invalid json",
+			annotationRaw: "not-json",
+			want:          "",
+		},
+		{
+			name: "missing annotation",
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "default",
+				Name:      "demo",
+			},
+		}
+		if tt.annotationState != "" || tt.annotationRaw != "" {
+			if pod.Annotations == nil {
+				pod.Annotations = make(map[string]string)
+			}
+			if tt.annotationRaw != "" {
+				pod.Annotations[gameKruiseV1alpha1.GameServerNetworkStatus] = tt.annotationRaw
+			} else {
+				payload, err := json.Marshal(gameKruiseV1alpha1.NetworkStatus{CurrentNetworkState: tt.annotationState})
+				if err != nil {
+					t.Fatalf("failed to marshal annotation for %s: %v", tt.name, err)
+				}
+				pod.Annotations[gameKruiseV1alpha1.GameServerNetworkStatus] = string(payload)
+			}
+		}
+
+		if got := deriveNetworkStatusLabel(ctx, pod); got != tt.want {
+			t.Errorf("deriveNetworkStatusLabel() for %s = %q, want %q", tt.name, got, tt.want)
 		}
 	}
 }

@@ -135,6 +135,9 @@ func (cfg JSONConfig) resourceKeyValues() []interface{} {
 	if cfg.Resource.ServiceName != "" {
 		kv = append(kv, "service.name", cfg.Resource.ServiceName)
 	}
+	if cfg.Resource.Namespace != "" {
+		kv = append(kv, "service.namespace", cfg.Resource.Namespace)
+	}
 	if cfg.Resource.ServiceVersion != "" {
 		kv = append(kv, "service.version", cfg.Resource.ServiceVersion)
 	}
@@ -160,4 +163,11 @@ func ResourceKeyValues() []interface{} {
 	out := make([]interface{}, len(values))
 	copy(out, values)
 	return out
+}
+
+// ResourceMetadataSnapshot returns the current JSON logging resource metadata.
+// It is safe for consumers like tracing to reuse so resource attributes match.
+func ResourceMetadataSnapshot() ResourceMetadata {
+	cfg := currentJSONConfig()
+	return cfg.Resource
 }

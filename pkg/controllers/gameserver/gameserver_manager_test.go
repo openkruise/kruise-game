@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/go-logr/logr/testr"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
@@ -560,9 +561,10 @@ func TestSyncGsToPod(t *testing.T) {
 			client:     c,
 			gameServer: test.gs,
 			pod:        test.pod,
+			logger:     testr.New(t),
 		}
 
-		if err := manager.SyncGsToPod(); err != nil {
+		if err := manager.SyncGsToPod(context.TODO()); err != nil {
 			t.Error(err)
 		}
 
@@ -749,6 +751,7 @@ func TestSyncNetworkStatus(t *testing.T) {
 			client:     c,
 			gameServer: test.gs,
 			pod:        test.pod,
+			logger:     testr.New(t),
 		}
 
 		actual := manager.syncNetworkStatus()
@@ -807,7 +810,7 @@ func TestSyncPodContainers(t *testing.T) {
 
 	for i, test := range tests {
 		expect := test.newContainers
-		manager := &GameServerManager{}
+		manager := &GameServerManager{logger: testr.New(t)}
 		actual := manager.syncPodContainers(test.gsContainers, test.podContainers)
 		if !reflect.DeepEqual(expect, actual) {
 			t.Errorf("case %d: expect newContainers %v, but actually got %v", i, expect, actual)
@@ -938,9 +941,10 @@ func TestSyncPodToGs(t *testing.T) {
 			client:     c,
 			gameServer: test.gs,
 			pod:        test.pod,
+			logger:     testr.New(t),
 		}
 
-		if err := manager.SyncPodToGs(test.gss); err != nil {
+		if err := manager.SyncPodToGs(context.TODO(), test.gss); err != nil {
 			t.Error(err)
 		}
 

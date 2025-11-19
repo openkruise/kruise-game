@@ -2,24 +2,29 @@ package alibabacloud
 
 import (
 	"context"
+	"reflect"
+	"sync"
+	"testing"
+
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
-	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sync"
-	"testing"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestNLBAllocateDeAllocate(t *testing.T) {
 	test := struct {
-		lbIds  []string
-		nlb    *NlbPlugin
-		num    int
-		podKey string
+		lbIds []string
+		nlb   *NlbPlugin
+		num   int
 	}{
 		lbIds: []string{"xxx-A"},
 		nlb: &NlbPlugin{
@@ -29,13 +34,15 @@ func TestNLBAllocateDeAllocate(t *testing.T) {
 			podAllocate: make(map[string]string),
 			mutex:       sync.RWMutex{},
 		},
-		podKey: "xxx/xxx",
-		num:    3,
+		num: 3,
 	}
 
-	lbId, ports := test.nlb.allocate(test.lbIds, test.num, test.podKey)
-	if _, exist := test.nlb.podAllocate[test.podKey]; !exist {
-		t.Errorf("podAllocate[%s] is empty after allocated", test.podKey)
+	ctx := context.Background()
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "xxx", Namespace: "xxx"}}
+	podKey := pod.Namespace + "/" + pod.Name
+	lbId, ports := test.nlb.allocate(ctx, pod, test.lbIds, test.num)
+	if _, exist := test.nlb.podAllocate[podKey]; !exist {
+		t.Errorf("podAllocate[%s] is empty after allocated", podKey)
 	}
 	for _, port := range ports {
 		if port > test.nlb.maxPort || port < test.nlb.minPort {
@@ -45,14 +52,14 @@ func TestNLBAllocateDeAllocate(t *testing.T) {
 			t.Errorf("Allocate port %d failed", port)
 		}
 	}
-	test.nlb.deAllocate(test.podKey)
+	test.nlb.deAllocate(podKey)
 	for _, port := range ports {
 		if test.nlb.cache[lbId][port] == true {
 			t.Errorf("deAllocate port %d failed", port)
 		}
 	}
-	if _, exist := test.nlb.podAllocate[test.podKey]; exist {
-		t.Errorf("podAllocate[%s] is not empty after deallocated", test.podKey)
+	if _, exist := test.nlb.podAllocate[podKey]; exist {
+		t.Errorf("podAllocate[%s] is not empty after deallocated", podKey)
 	}
 }
 
@@ -330,4 +337,137 @@ func TestNlbPlugin_consSvc(t *testing.T) {
 			t.Errorf("consSvc() = %v, want %v", got, tt.want)
 		}
 	}
+}
+
+func TestNlbSpanAttrsCloudProvider(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name:      "test-pod",
+		Namespace: "default",
+	}}
+	attrs := nlbSpanAttrs(pod)
+	if val, ok := attrStringValueByKey(attrs, attribute.Key("cloud.provider")); !ok || val != "alibaba_cloud" {
+		t.Fatalf("expected cloud.provider=alibaba_cloud, got %q (ok=%v)", val, ok)
+	}
+}
+
+func TestAllocateNLBPortsSpanAttributes(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	prevProvider := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	defer otel.SetTracerProvider(prevProvider)
+
+	plugin := &NlbPlugin{
+		maxPort:     110,
+		minPort:     100,
+		cache:       make(map[string]portAllocated),
+		podAllocate: make(map[string]string),
+	}
+	ctx := context.Background()
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "test-pod", Namespace: "default"}}
+
+	lbID, ports := plugin.allocate(ctx, pod, []string{"lb-a"}, 1)
+	if lbID == "" {
+		t.Fatalf("expected an lbID to be allocated")
+	}
+	if len(ports) != 1 {
+		t.Fatalf("expected 1 allocated port, got %d", len(ports))
+	}
+
+	spans := recorder.Ended()
+	var allocateSpan sdktrace.ReadOnlySpan
+	for _, span := range spans {
+		if span.Name() == "allocate nlb ports" {
+			allocateSpan = span
+			break
+		}
+	}
+	if allocateSpan == nil {
+		t.Fatalf("allocate nlb ports span not recorded")
+	}
+
+	attrs := allocateSpan.Attributes()
+	if lbIDs, ok := attrStringSliceValueByKey(attrs, nlbAttrLBIDsKey); !ok || len(lbIDs) == 0 || lbIDs[0] != "lb-a" {
+		t.Fatalf("expected attribute %s to include lb-a", nlbAttrLBIDsKey)
+	}
+	if val, ok := attrStringValueByKey(attrs, attribute.Key("cloud.provider")); !ok || val != "alibaba_cloud" {
+		t.Fatalf("expected cloud.provider=alibaba_cloud, got %q (ok=%v)", val, ok)
+	}
+}
+
+func TestNlbHealthCheckAttrs(t *testing.T) {
+	cfg := &nlbHealthConfig{
+		lBHealthCheckFlag:           "off",
+		lBHealthCheckType:           "http",
+		lBHealthCheckConnectPort:    "7001",
+		lBHealthCheckConnectTimeout: "15",
+		lBHealthCheckInterval:       "20",
+		lBHealthCheckUri:            "/healthz",
+		lBHealthCheckDomain:         "demo.kruise.io",
+		lBHealthCheckMethod:         "get",
+		lBHealthyThreshold:          "6",
+		lBUnhealthyThreshold:        "4",
+	}
+	attrs := nlbHealthCheckAttrs(cfg)
+	testCases := map[attribute.Key]string{
+		nlbAttrHealthCheckFlagKey:     "off",
+		nlbAttrHealthCheckTypeKey:     "http",
+		nlbAttrHealthCheckPortKey:     "7001",
+		nlbAttrHealthCheckTimeoutKey:  "15",
+		nlbAttrHealthCheckIntervalKey: "20",
+		nlbAttrHealthCheckURIKey:      "/healthz",
+		nlbAttrHealthCheckDomainKey:   "demo.kruise.io",
+		nlbAttrHealthCheckMethodKey:   "get",
+		nlbAttrHealthyThresholdKey:    "6",
+		nlbAttrUnhealthyThresholdKey:  "4",
+	}
+	for key, expected := range testCases {
+		if val, ok := attrStringValueByKey(attrs, key); !ok || val != expected {
+			t.Fatalf("expected %s=%s, got %q (ok=%v)", key, expected, val, ok)
+		}
+	}
+
+	defaultCfg := &nlbHealthConfig{
+		lBHealthCheckFlag:           "on",
+		lBHealthCheckType:           "tcp",
+		lBHealthCheckConnectPort:    "0",
+		lBHealthCheckConnectTimeout: "5",
+		lBHealthCheckInterval:       "10",
+		lBHealthyThreshold:          "3",
+		lBUnhealthyThreshold:        "2",
+	}
+	attrs = nlbHealthCheckAttrs(defaultCfg)
+	if _, ok := attrStringValueByKey(attrs, nlbAttrHealthCheckURIKey); ok {
+		t.Fatalf("expected URI attribute to be omitted when empty")
+	}
+	if _, ok := attrStringValueByKey(attrs, nlbAttrHealthCheckDomainKey); ok {
+		t.Fatalf("expected domain attribute to be omitted when empty")
+	}
+	if _, ok := attrStringValueByKey(attrs, nlbAttrHealthCheckMethodKey); ok {
+		t.Fatalf("expected method attribute to be omitted when empty")
+	}
+}
+
+func attrStringValueByKey(attrs []attribute.KeyValue, key attribute.Key) (string, bool) {
+	for _, attr := range attrs {
+		if attr.Key == key {
+			if attr.Value.Type() != attribute.STRING {
+				return "", false
+			}
+			return attr.Value.AsString(), true
+		}
+	}
+	return "", false
+}
+
+func attrStringSliceValueByKey(attrs []attribute.KeyValue, key attribute.Key) ([]string, bool) {
+	for _, attr := range attrs {
+		if attr.Key == key {
+			if attr.Value.Type() != attribute.STRINGSLICE {
+				return nil, false
+			}
+			return attr.Value.AsStringSlice(), true
+		}
+	}
+	return nil, false
 }

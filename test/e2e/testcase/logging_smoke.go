@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/onsi/ginkgo"
@@ -59,6 +60,8 @@ func RunLoggingSmokeTest(f *framework.Framework) {
 			logPlainPath      string
 			logJSONPath       string
 			logPlainAfterPath string
+			originalArgs      []string
+			currentArgs       []string
 		)
 
 		ginkgo.BeforeEach(func() {
@@ -69,6 +72,25 @@ func RunLoggingSmokeTest(f *framework.Framework) {
 		})
 
 		ginkgo.It("should switch log format from console to JSON and back", func() {
+			validateTracingArgs := func(args []string) {
+				requiredPrefixes := []string{
+					"--enable-tracing",
+					"--otel-collector-endpoint",
+					"--otel-sampling-rate",
+				}
+				for _, prefix := range requiredPrefixes {
+					found := false
+					for _, arg := range args {
+						if strings.HasPrefix(arg, prefix) {
+							found = true
+							break
+						}
+					}
+					gomega.Expect(found).To(gomega.BeTrue(),
+						fmt.Sprintf("controller args must contain %s to keep tracing enabled", prefix))
+				}
+			}
+
 			ginkgo.By("Step 1: Collecting baseline logs in console format")
 			err := framework.CollectManagerLogs(ctx, f.KubeClientSet(), managerNamespace, managerLabelSelector, logSinceDuration, logPlainPath)
 			gomega.Expect(err).NotTo(gomega.HaveOccurred(), "should collect baseline console logs")
@@ -78,6 +100,12 @@ func RunLoggingSmokeTest(f *framework.Framework) {
 			gomega.Expect(err).NotTo(gomega.HaveOccurred(), "should backup deployment template")
 			gomega.Expect(backupTemplate).NotTo(gomega.BeEmpty(), "backup template should not be empty")
 
+			ginkgo.By("Step 2.1: Capturing current controller args")
+			originalArgs, err = framework.GetDeploymentContainerArgs(ctx, f.KubeClientSet(), managerNamespace, managerDeployment, managerContainer)
+			gomega.Expect(err).NotTo(gomega.HaveOccurred(), "should fetch current controller args")
+			currentArgs = append([]string(nil), originalArgs...)
+			validateTracingArgs(currentArgs)
+
 			ginkgo.By("Ensuring Deployment strategy permits leader handover during rollout")
 			err = framework.EnsureDeploymentRollingStrategy(ctx, f.KubeClientSet(), managerNamespace, managerDeployment)
 			gomega.Expect(err).NotTo(gomega.HaveOccurred(), "should patch deployment strategy to maxUnavailable=100%%")
@@ -85,22 +113,31 @@ func RunLoggingSmokeTest(f *framework.Framework) {
 			// Diagnostic: snapshot before patch
 			_, _ = framework.DumpDeployment(ctx, f.KubeClientSet(), managerNamespace, managerDeployment, "before-patch")
 
+			switchLogFormat := func(format string, diagnosticPrefix string) {
+				ginkgo.By(fmt.Sprintf("Patching Deployment to use %s log format", format))
+				updatedArgs := framework.ReplaceLogFormatArg(currentArgs, format)
+				validateTracingArgs(updatedArgs)
+				err := framework.PatchDeploymentArgs(ctx, f.KubeClientSet(), managerNamespace, managerDeployment, managerContainer, updatedArgs)
+				gomega.Expect(err).NotTo(gomega.HaveOccurred(), fmt.Sprintf("should switch to %s logging", format))
+
+				_, _ = framework.DumpDeployment(ctx, f.KubeClientSet(), managerNamespace, managerDeployment, diagnosticPrefix)
+
+				ginkgo.By(fmt.Sprintf("Waiting for Deployment to roll out with %s logging", format))
+				err = framework.WaitForDeploymentRollout(ctx, f.KubeClientSet(), managerNamespace, managerDeployment, rolloutTimeout)
+				gomega.Expect(err).NotTo(gomega.HaveOccurred(), fmt.Sprintf("deployment should roll out with %s logging", format))
+
+				currentArgs = updatedArgs
+			}
+
 			// Ensure restore on exit
 			defer func() {
 				// Diagnostic: snapshot before restore
 				_, _ = framework.DumpDeployment(ctx, f.KubeClientSet(), managerNamespace, managerDeployment, "before-restore")
 
-				ginkgo.By("Step 8: Switching back to console log format")
-				consoleArgs := []string{
-					"--provider-config=/etc/kruise-game/config.toml",
-					"--api-server-qps=5",
-					"--api-server-qps-burst=10",
-					"--enable-cert-generation=false",
-					"--leader-elect=true",
-					"--log-format=console",
-				}
-				err := framework.PatchDeploymentArgs(ctx, f.KubeClientSet(), managerNamespace, managerDeployment, managerContainer, consoleArgs)
-				gomega.Expect(err).NotTo(gomega.HaveOccurred(), "should switch back to console logging")
+				ginkgo.By("Step 8: Restoring original Deployment args")
+				err := framework.PatchDeploymentArgs(ctx, f.KubeClientSet(), managerNamespace, managerDeployment, managerContainer, originalArgs)
+				gomega.Expect(err).NotTo(gomega.HaveOccurred(), "should restore original controller args")
+				currentArgs = append([]string(nil), originalArgs...)
 
 				// Diagnostic: snapshot after restore
 				_, _ = framework.DumpDeployment(ctx, f.KubeClientSet(), managerNamespace, managerDeployment, "after-restore")
@@ -114,24 +151,8 @@ func RunLoggingSmokeTest(f *framework.Framework) {
 				gomega.Expect(err).NotTo(gomega.HaveOccurred(), "should collect logs after restore")
 			}()
 
-			ginkgo.By("Step 3: Patching Deployment to use JSON log format")
-			jsonArgs := []string{
-				"--provider-config=/etc/kruise-game/config.toml",
-				"--api-server-qps=5",
-				"--api-server-qps-burst=10",
-				"--enable-cert-generation=false",
-				"--leader-elect=true",
-				"--log-format=json",
-			}
-			err = framework.PatchDeploymentArgs(ctx, f.KubeClientSet(), managerNamespace, managerDeployment, managerContainer, jsonArgs)
-			gomega.Expect(err).NotTo(gomega.HaveOccurred(), "should patch deployment args")
-
-			// Diagnostic: snapshot after patch
-			_, _ = framework.DumpDeployment(ctx, f.KubeClientSet(), managerNamespace, managerDeployment, "after-patch")
-
-			ginkgo.By("Step 4: Waiting for Deployment to roll out with JSON logging")
-			err = framework.WaitForDeploymentRollout(ctx, f.KubeClientSet(), managerNamespace, managerDeployment, rolloutTimeout)
-			gomega.Expect(err).NotTo(gomega.HaveOccurred(), "deployment should roll out with JSON logging")
+			ginkgo.By("Step 3: Switching Deployment to JSON log format")
+			switchLogFormat("json", "after-patch")
 
 			// Give pods time to generate logs
 			time.Sleep(10 * time.Second)

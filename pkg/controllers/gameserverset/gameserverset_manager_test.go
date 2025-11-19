@@ -3,6 +3,11 @@ package gameserverset
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"strconv"
+	"testing"
+
+	"github.com/go-logr/logr/testr"
 	appspub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
@@ -16,11 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
-	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"strconv"
-	"testing"
 
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
@@ -555,6 +557,7 @@ func TestIsNeedToScale(t *testing.T) {
 			manager := &GameServerSetManager{
 				gameServerSet: test.gss,
 				asts:          test.asts,
+				logger:        testr.New(t),
 			}
 			actual := manager.IsNeedToScale()
 			if actual != test.result {
@@ -911,9 +914,10 @@ func TestGameServerScale(t *testing.T) {
 				podList:       test.podList,
 				eventRecorder: recorder,
 				client:        c,
+				logger:        testr.New(t),
 			}
 
-			if err := manager.GameServerScale(); err != nil {
+			if err := manager.GameServerScale(context.Background()); err != nil {
 				t.Error(err)
 			}
 
@@ -1052,7 +1056,7 @@ func TestSyncGameServer(t *testing.T) {
 			objs = append(objs, gs)
 		}
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
-		if err := SyncGameServer(test.gss, c, test.newManageIds, test.oldManageIds); err != nil {
+		if err := SyncGameServer(context.Background(), testr.New(t), test.gss, c, test.newManageIds, test.oldManageIds); err != nil {
 			t.Error(err)
 		}
 
@@ -1268,6 +1272,7 @@ func TestNumberToKill(t *testing.T) {
 			asts:          test.asts,
 			gameServerSet: test.gss,
 			client:        c,
+			logger:        testr.New(t),
 		}
 		actual := manager.GetReplicasAfterKilling()
 		expect := test.number
@@ -1361,9 +1366,10 @@ func TestGameServerSetManager_UpdateWorkload(t *testing.T) {
 			asts:          test.asts,
 			eventRecorder: recorder,
 			client:        c,
+			logger:        testr.New(t),
 		}
 
-		if err := manager.UpdateWorkload(); err != nil {
+		if err := manager.UpdateWorkload(context.Background()); err != nil {
 			t.Error(err)
 		}
 
@@ -1674,9 +1680,11 @@ func TestGameServerSetManager_SyncPodProbeMarker(t *testing.T) {
 			gameServerSet: gss,
 			client:        c,
 			eventRecorder: recorder,
+			logger:        testr.New(t),
 		}
 
-		err, done := manager.SyncPodProbeMarker()
+		ctx := context.Background()
+		err, done := manager.SyncPodProbeMarker(ctx)
 		if err != nil {
 			t.Errorf("SyncPodProbeMarker failed: %s", err.Error())
 		} else if done != test.expectedDone {

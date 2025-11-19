@@ -1,5 +1,5 @@
 # Build the manager binary
-FROM golang:1.22.12 AS builder
+FROM golang:1.23.4 AS builder
 ARG LDFLAGS=" -s -w"
 
 WORKDIR /workspace
