@@ -13,7 +13,7 @@ The controller manager binary already contains log, trace, and metric instrument
    - --enable-tracing=true                # enable span export + remote logs
    - --otel-collector-endpoint=otel-collector.observability.svc.cluster.local:4317
    - --otel-sampling-rate=1.0             # tune down only if needed
-   - --log-format=json                    # required for structured logs
+   - --log-format=json                    # <optional> set stdout/stderr log format
    ```
 3. Make sure the Downward API injects namespace/pod metadata:
 
@@ -50,13 +50,12 @@ The controller manager binary already contains log, trace, and metric instrument
   - `game.kruise.io.game_server_set.name`
   - `game.kruise.io.network.status` (e.g., `waiting`, `ready`, `error`)
 - `GameServerManager` writes a `game.kruise.io/traceparent` annotation onto Pods. The admission webhook reads it, links its own span to the reconcile trace, and records the network plugin it invoked.
-- Cloud provider plugins (Alibaba NLB, Kubernetes NodePort/HostPort) wrap every allocate/deallocate/service operation in spans so you can inspect external API latency or errors per plugin.
+- Cloud provider plugins (Alibaba NLB, Kubernetes NodePort/HostPort) wrap every allocate/deallocate/service operation in spans so you can inspect latency or errors per plugin.
 
 **Operational tips**
 
-- Startup emits a `controller-startup-test` span. If you do not see it in Tempo/Grafana after enabling tracing, verify connectivity to the collector.
 - Spans fall back to a no-op provider when OTLP dialing fails; the controller logs `Tracing initialization failed, using no-op tracer` in that case.
-- Search for traces by `game.kruise.io.network.plugin.name`, `cloud.provider`, or `k8s.namespace.name`—the collector adds these attributes via the `k8sattributes` processor.
+- Search for traces & logs by attributes like `game.kruise.io.game_server.name`, `game.kruise.io.network.plugin.name`, `cloud.provider`, or `k8s.namespace.name`, you can find them at `pkg/tracing/attributes.go`.
 
 ## 4. Metrics
 
@@ -97,28 +96,142 @@ You can reuse the sample stack from `test/e2e/manifests` (namespace `observabili
 - `01-otel-collector.yaml`: local stack (Tempo/Loki/Prometheus inside the cluster).
 - `01-otel-collector-grafana.yaml`: dual-write stack that mirrors everything to Grafana Cloud via OTLP / Prometheus Remote Write while keeping the local sinks.
 
-- **Receivers**: OTLP gRPC/HTTP (`traces`, `logs`), Prometheus scrape of the controller (`prometheus/native`), and the `spanmetrics` connector output.
+- **Receivers**:
+  - OTLP gRPC/HTTP (`traces`, `logs`)
+  - Prometheus scrape of the controller (`prometheus/native`)
+  - `spanmetrics` connector (receives spans from `traces/network` pipeline and generates RED metrics)
+
 - **Processors**:
-  - `k8sattributes` injects namespace/pod/node labels for all signals.
-  - `transform/log_trace_labels` copies `trace_id`/`span_id` into log attributes so Loki can pivot back to traces.
-  - `tail_sampling` keeps error/slow traces while sampling everything else probabilistically.
-  - `filter/network_only` feeds only network plugin spans into the spanmetrics connector.
+  - `k8sattributes`: Injects `k8s.pod.ip`/`k8s.pod.uid` labels for all signals.
+  - `transform/log_trace_labels`: Copies `trace_id`/`span_id` into log attributes so Loki can pivot back to traces.
+  - `tail_sampling`: Keeps error/slow traces while sampling everything else probabilistically.
+  - `filter/network_only`: Feeds only network plugin spans into the spanmetrics connector to avoid noise.
+
 - **Pipelines**:
-  - `traces/network` → `spanmetrics` → Prometheus (`:8889`)
-  - `metrics/native` → Prometheus + remote write
+  - `traces/network` → `filter/network_only` → `spanmetrics connector` (Generates metrics)
+  - `metrics/network` (Source: spanmetrics) → `prometheus/local` (:8889) + `prometheusremotewrite` (Cloud)
+  - `metrics/native` (Source: controller :8080) → `prometheus/local` (:8889) + `prometheusremotewrite` (Cloud)
   - `traces/storage` → Tempo + Grafana Cloud
   - `logs` → Loki + Grafana Cloud
+
 - **Exports**:
-  - Local exporters: `otlp/tempo`, `otlphttp/loki`, `prometheus/local` (served on `:8889` for both native and spanmetrics) and the collector’s own telemetry endpoint on `:8888`.
-  - Grafana Cloud exporters (in the dual-write manifest and the spec contract): `otlphttp/grafana_cloud` plus `prometheusremotewrite/grafana_cloud`, authenticated via the basic-auth extensions.
-- **Config contract**: `specs/002-opentelemetry-tracing/contracts/otel-collector-config.yaml` mirrors the dual-write setup and serves as a reference for production manifests.
+  - **Local (Pull)**: `prometheus/local` exposes **aggregated metrics** (both native and span-derived) on `:8889` for the local Prometheus to scrape.
+  - **Local (Push)**: `otlp/tempo` and `otlphttp/loki` push directly to local storage backends.
+  - **Cloud (Push)**: `otlphttp/grafana_cloud` and `prometheusremotewrite/grafana_cloud` push data to Grafana Cloud endpoints.
+  - **Self-Monitoring**: The collector exposes its own telemetry on `:8888`.
+
+```mermaid
+graph LR
+    classDef metrics fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
+    classDef traces fill:#fce4ec,stroke:#880e4f,stroke-width:2px;
+    classDef logs fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px;
+    classDef store fill:#fff3e0,stroke:#e65100,stroke-width:2px,stroke-dasharray: 5 5;
+    classDef cloud fill:#f3e5f5,stroke:#4a148c,stroke-width:2px,stroke-dasharray: 5 5;
+
+    subgraph Sources [Telemetry Sources]
+        direction TB
+        CM[Controller Manager]
+        CM_Metrics[Native Metrics :8080]:::metrics
+        CM_Trace[OTLP Trace]:::traces
+        CM_Log[OTLP Log]:::logs
+        
+        CM --> CM_Metrics
+        CM --> CM_Trace
+        CM --> CM_Log
+    end
+
+    subgraph Collector [OTel Collector]
+        
+        subgraph Receivers [Receivers]
+            direction TB
+            Receiver_Prom[Prometheus/Native]:::metrics
+            Receiver_OTLP[OTLP Receiver]:::traces
+        end
+
+        subgraph Processors [Processors & Connectors]
+            direction TB
+            Processor_Filter[Filter: Network Only]:::traces
+            Connector_SpanMetrics[Connector: SpanMetrics]:::metrics
+        end
+        
+        subgraph Pipelines [Pipelines]
+            direction TB
+            Pipeline_Native[Metrics: Native]:::metrics
+            Pipeline_Network[Metrics: Network]:::metrics
+            Pipeline_Trace[Traces: Storage]:::traces
+            Pipeline_Log[Logs]:::logs
+        end
+
+        subgraph Exporters [Exporters]
+            direction TB
+            Exporter_PromLocal[Prometheus Local :8889]:::metrics
+            Exporter_RemoteWrite[Remote Write]:::metrics
+            Exporter_Tempo[OTLP Tempo]:::traces
+            Exporter_Loki[OTLP Loki]:::logs
+            Exporter_CloudOTLP[OTLP Grafana]:::traces
+        end
+    end
+
+    subgraph Storage [Storage Backends]
+        direction TB
+        
+        subgraph Local_Cluster [Local Cluster]
+            LocalProm[Local Prometheus]:::store
+            Tempo[Tempo]:::store
+            Loki[Loki]:::store
+        end
+
+        subgraph Cloud_Platform [Grafana Cloud]
+            GC_Prom[Hosted Prometheus]:::cloud
+            GC_OTLP[Hosted OTLP - Trace/Log]:::cloud
+        end
+    end
+
+    %% 1. Sources -> Receivers
+    CM_Metrics -->|Scrape| Receiver_Prom
+    CM_Trace -->|gRPC| Receiver_OTLP
+    CM_Log -->|gRPC| Receiver_OTLP
+
+    %% 2. Receivers -> Pipelines / Processors
+    Receiver_Prom --> Pipeline_Native
+    Receiver_OTLP --> Pipeline_Trace
+    Receiver_OTLP --> Pipeline_Log
+    
+    Receiver_OTLP --> Processor_Filter --> Connector_SpanMetrics
+    Connector_SpanMetrics --> Pipeline_Network
+
+    %% 3. Pipelines -> Exporters
+    
+    %% Metrics Flow
+    Pipeline_Native --> Exporter_PromLocal
+    Pipeline_Network --> Exporter_PromLocal
+    Pipeline_Native --> Exporter_RemoteWrite
+    Pipeline_Network --> Exporter_RemoteWrite
+
+    %% Trace Flow
+    Pipeline_Trace --> Exporter_Tempo
+    Pipeline_Trace --> Exporter_CloudOTLP
+
+    %% Log Flow
+    Pipeline_Log --> Exporter_Loki
+    Pipeline_Log --> Exporter_CloudOTLP
+
+    %% 4. Exporters -> Storage
+    Exporter_PromLocal -->|Scrape| LocalProm
+    Exporter_RemoteWrite -->|Push| GC_Prom
+    
+    Exporter_Tempo -->|Push| Tempo
+    Exporter_Loki -->|Push| Loki
+    
+    Exporter_CloudOTLP -->|Push| GC_OTLP
+```
 
 **Operational checklist**
 
 1. `kubectl logs -n observability deploy/otel-collector` should show the health endpoint (`0.0.0.0:13133`) reporting `PASS`.
 2. Prometheus must scrape both the controller service (`kruise-game-controller-manager-metrics-service:http-metrics`) and the collector’s `:8888`/`:8889` endpoints.
 3. Ensure Tempo/Loki services are reachable from Grafana. Exemplars require Tempo + Prometheus 2.44+.
-4. Use `test/e2e/debug-otel-collector.sh` when running the provided e2e tests; it validates OTLP connectivity and spanmetrics output.
+
 
 ## 6. Troubleshooting
 

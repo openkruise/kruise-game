@@ -17,7 +17,7 @@ data:
         static_configs:
           - targets: ['otel-collector.observability.svc.cluster.local:8888']
 
-      - job_name: 'otel-collector-spanmetrics'
+      - job_name: 'okg-metrics'
         static_configs:
           - targets: ['otel-collector.observability.svc.cluster.local:8889']
 
