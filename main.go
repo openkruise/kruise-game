@@ -30,8 +30,6 @@ import (
 	"github.com/go-logr/logr"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -130,24 +128,6 @@ func main() {
 		setupLog.Info("Tracing initialization failed, using no-op tracer", tracing.FieldError, err.Error())
 	} else if tracingOptions.Enabled {
 		setupLog.Info("Tracing initialized successfully", tracing.FieldCollector, tracingOptions.CollectorEndpoint)
-
-		// Send a hello-world trace to verify the pipeline
-		func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			tracer := otel.Tracer("okg-controller-manager")
-			_, span := tracer.Start(ctx, "controller-startup-test")
-			span.SetAttributes(
-				attribute.String("test.type", "smoke-test"),
-				attribute.String("test.purpose", "verify-tracing-pipeline"),
-			)
-			setupLog.Info("Sent hello-world trace span", tracing.FieldSpanName, "controller-startup-test")
-			span.End()
-
-			// Give exporter time to send the span
-			time.Sleep(2 * time.Second)
-		}()
 
 		// Register shutdown hook
 		defer func() {

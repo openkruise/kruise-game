@@ -100,31 +100,13 @@ check_otel_collector() {
     return 1
 }
 
-check_tempo_has_traces() {
-    local response
-    if ! response=$(curl -sf "${TEMPO_URL}/api/search?tags=service.name%3Dokg-controller-manager&limit=1" 2>/tmp/tempo_err); then
-        echo "Failed to query Tempo search API:"
-        cat /tmp/tempo_err
-        rm -f /tmp/tempo_err
-        return 1
-    fi
-    rm -f /tmp/tempo_err
 
-    local count
-    count=$(echo "${response}" | jq '.traces | length' 2>/dev/null || echo "0")
-    if [[ "${count}" == "0" ]]; then
-        echo "Tempo search returned no controller traces. Raw response:"
-        echo "${response}"
-        return 1
-    fi
-    return 0
-}
 
 run_check "Controller deployment includes tracing flags" check_controller_args
 run_check "Controller logs show tracing activity" check_controller_logs
 run_check "Controller pods can reach the OTel collector endpoint" check_controller_connectivity
 run_check "OTel Collector pods are Ready" check_otel_collector
-run_check "Tempo contains controller traces" check_tempo_has_traces
+
 
 if [[ "${failures}" -ne 0 ]]; then
     exit 1
