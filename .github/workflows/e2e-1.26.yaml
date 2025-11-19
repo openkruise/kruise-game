@@ -64,6 +64,53 @@ jobs:
           echo "::group::Install Cert-Manager"
           bash ./scripts/ci/install-cert-manager.sh
           echo "::endgroup::"
+      - name: Deploy Observability Infrastructure
+        run: |
+          echo "::group::Deploy observability stack"
+          set -ex
+          echo "=== Deploying observability stack for tracing E2E tests ==="
+          cd test/e2e
+          
+          # Deploy the stack (script will not exit on pod failures)
+          ./setup-k8s-observability.sh deploy
+          
+          echo ""
+          echo "=== Checking deployment status ==="
+          kubectl get pods -n observability -o wide
+          
+          # Check if OTel Collector is running properly
+          OTEL_READY=$(kubectl get pods -n observability -l app=otel-collector -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null || echo "false")
+          
+          if [ "$OTEL_READY" != "true" ]; then
+            echo ""
+            echo "❌ ERROR: OTel Collector is not ready!"
+            echo ""
+            echo "=== Running comprehensive diagnostics ==="
+            ./debug-otel-collector.sh observability || true
+            echo ""
+            echo "=== Extracting error keywords from logs ==="
+            kubectl logs -n observability -l app=otel-collector --tail=200 2>&1 | grep -E -i "error|fatal|panic|fail|invalid" | head -50 || echo "No obvious errors found"
+            echo ""
+            echo "=== Checking previous logs if pod restarted ==="
+            kubectl logs -n observability -l app=otel-collector --previous --tail=100 2>&1 || echo "No previous logs available"
+            exit 1
+          fi
+          
+          # Check other components (warnings only, don't fail)
+          for component in tempo loki prometheus; do
+            READY=$(kubectl get pods -n observability -l app=$component -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null || echo "false")
+            if [ "$READY" != "true" ]; then
+              echo "⚠️  WARNING: $component is not ready, but continuing..."
+            else
+              echo "✅ $component is ready"
+            fi
+          done
+          
+          echo ""
+          echo "=== Final observability stack status ==="
+          kubectl get pods -n observability
+          echo "✅ Observability stack deployment completed"
+          echo "::endgroup::"
       - name: Install Kruise
         run: |
           echo "::group::Install Kruise"
@@ -74,7 +121,11 @@ jobs:
           echo "::group::Install Kruise Game"
           set -ex
           kubectl cluster-info
-          IMG=${E2E_IMAGE} ./scripts/deploy_kind.sh
+          IMG=${E2E_IMAGE} \
+          ENABLE_TRACING=true \
+          OTEL_COLLECTOR_ENDPOINT=otel-collector.observability.svc.cluster.local:4317 \
+          OTEL_SAMPLING_RATE=1.0 \
+          ./scripts/deploy_kind.sh
           for ((i=1;i<10;i++));
           do
             set +e
@@ -102,6 +153,178 @@ jobs:
           echo "::group::Verify Kind cluster"
           bash ./scripts/ci/verify-kind-cluster.sh
           echo "::endgroup::"
+      - name: Setup Port Forwards for Observability
+        run: |
+          echo "::group::Setup observability port-forwards"
+          set -x  # Enable command echoing for debugging
+          echo "=== Setting up port forwards for Tempo and Loki ==="
+          
+          # First, verify the services exist and have endpoints
+          echo "--- Checking Tempo service ---"
+          kubectl get svc -n observability tempo -o yaml || echo "❌ Tempo service not found"
+          kubectl get endpoints -n observability tempo || echo "❌ Tempo endpoints not found"
+          
+          echo "--- Checking Loki service ---"
+          kubectl get svc -n observability loki -o yaml || echo "❌ Loki service not found"
+          kubectl get endpoints -n observability loki || echo "❌ Loki endpoints not found"
+          
+          echo "--- Checking Tempo pod status ---"
+          kubectl get pods -n observability -l app.kubernetes.io/name=tempo || echo "❌ No Tempo pods"
+          
+          echo "--- Checking Loki pod status ---"
+          kubectl get pods -n observability -l app.kubernetes.io/name=loki || echo "❌ No Loki pods"
+          
+          # Port forward Tempo (background, with verbose output)
+          echo "--- Starting Tempo port-forward ---"
+          kubectl port-forward -n observability svc/tempo 3200:3200 -v=6 &
+          TEMPO_PID=$!
+          echo $TEMPO_PID > /tmp/tempo-pf.pid
+          echo "Tempo port-forward PID: $TEMPO_PID"
+          
+          # Port forward Loki (background, with verbose output)
+          echo "--- Starting Loki port-forward ---"
+          kubectl port-forward -n observability svc/loki 3100:3100 -v=6 &
+          LOKI_PID=$!
+          echo $LOKI_PID > /tmp/loki-pf.pid
+          echo "Loki port-forward PID: $LOKI_PID"
+          
+          # Wait for port forwards to be ready
+          echo "--- Waiting for port forwards to establish ---"
+          sleep 10
+          
+          # Check if processes are still running
+          echo "--- Checking port-forward processes ---"
+          if ps -p $TEMPO_PID > /dev/null; then
+            echo "✓ Tempo port-forward process is running"
+          else
+            echo "❌ Tempo port-forward process died"
+            cat /tmp/tempo-pf.pid
+          fi
+          
+          if ps -p $LOKI_PID > /dev/null; then
+            echo "✓ Loki port-forward process is running"
+          else
+            echo "❌ Loki port-forward process died"
+            cat /tmp/loki-pf.pid
+          fi
+          
+          # Check if ports are listening
+          echo "--- Checking listening ports ---"
+          netstat -tuln | grep -E ':(3200|3100)' || echo "⚠️  Ports not listening"
+          ss -tuln | grep -E ':(3200|3100)' || echo "⚠️  Ports not found by ss"
+          
+          # Try to connect to the ports
+          echo "--- Testing connectivity ---"
+          
+          echo "Testing Tempo (localhost:3200)..."
+          if curl -v --max-time 5 http://localhost:3200/ready 2>&1; then
+            echo "✓ Tempo /ready endpoint responded"
+          else
+            echo "❌ Tempo /ready endpoint failed"
+          fi
+          
+          echo "Testing Tempo search API..."
+          if curl -v --max-time 5 "http://localhost:3200/api/search?tags=service.name=test&limit=1" 2>&1; then
+            echo "✓ Tempo /api/search endpoint responded"
+          else
+            echo "❌ Tempo /api/search endpoint failed"
+          fi
+          
+          echo "Testing Loki (localhost:3100)..."
+          if curl -v --max-time 5 http://localhost:3100/ready 2>&1; then
+            echo "✓ Loki /ready endpoint responded"
+          else
+            echo "❌ Loki /ready endpoint failed"
+          fi
+          
+          echo "--- Port forward setup complete ---"
+          echo "TEMPO_PID=$TEMPO_PID"
+          echo "LOKI_PID=$LOKI_PID"
+          echo "::endgroup::"
+      - name: Verify Tracing Configuration
+        run: |
+          echo "::group::Verify tracing configuration"
+          bash ./scripts/ci/verify-tracing-config.sh
+          echo "::endgroup::"
+      - name: Verify Controller Metrics Endpoint
+        run: |
+          echo "::group::Verify controller metrics"
+          set -euo pipefail
+          echo "=== Verifying controller metrics endpoint ==="
+          METRICS_SVC=$(kubectl get svc -n kruise-game-system -l control-plane=controller-manager -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep metrics-service | head -n 1 || true)
+          if [ -z "$METRICS_SVC" ]; then
+            echo "❌ Could not find controller metrics Service"
+            kubectl get svc -n kruise-game-system
+            exit 1
+          fi
+          echo "Using metrics service: $METRICS_SVC"
+          
+          echo "Waiting for metrics endpoints to be ready..."
+          for i in {1..12}; do
+            ENDPOINT_READY=$(kubectl get endpoints -n kruise-game-system "$METRICS_SVC" -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)
+            if [ -n "$ENDPOINT_READY" ]; then
+              echo "Endpoints ready (IP=$ENDPOINT_READY)"
+              break
+            fi
+            echo "  endpoints not ready yet (attempt $i/12); sleeping 5s"
+            sleep 5
+          done
+          
+          ENDPOINT_READY=$(kubectl get endpoints -n kruise-game-system "$METRICS_SVC" -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)
+          if [ -z "$ENDPOINT_READY" ]; then
+            echo "❌ Metrics service has no ready endpoints"
+            kubectl describe svc "$METRICS_SVC" -n kruise-game-system
+            kubectl get pods -n kruise-game-system -l control-plane=controller-manager
+            exit 1
+          fi
+          
+          echo "Attempting to query metrics via API server service proxy..."
+          set +e
+          PROXY_OUTPUT=$(kubectl get --raw "/api/v1/namespaces/kruise-game-system/services/${METRICS_SVC}:http-metrics/proxy/metrics" 2> /tmp/proxy_err | head -n 200)
+          PROXY_STATUS=$?
+          set -e
+          
+          if [ $PROXY_STATUS -ne 0 ]; then
+            echo "❌ Service proxy request failed:"
+            cat /tmp/proxy_err
+            echo "--- Service describe ---"
+            kubectl describe svc "$METRICS_SVC" -n kruise-game-system || true
+            echo "--- Endpoints ---"
+            kubectl get endpoints "$METRICS_SVC" -n kruise-game-system -o yaml || true
+            echo "--- Controller pods ---"
+            kubectl get pods -n kruise-game-system -l control-plane=controller-manager -o wide || true
+            
+            echo "Attempting to read metrics directly from controller pod..."
+            CONTROLLER_POD=$(kubectl get pods -n kruise-game-system -l control-plane=controller-manager -o jsonpath='{.items[0].metadata.name}')
+            set +e
+            DIRECT_FULL_OUTPUT=$(kubectl exec -n kruise-game-system "$CONTROLLER_POD" -- wget -qO- http://127.0.0.1:8080/metrics 2> /tmp/direct_err)
+            DIRECT_STATUS=$?
+            set -e
+            if [ $DIRECT_STATUS -ne 0 ]; then
+              echo "❌ Direct pod metrics request failed:"
+              cat /tmp/direct_err
+              exit 1
+            fi
+            DIRECT_OUTPUT=$(echo "$DIRECT_FULL_OUTPUT" | head -n 200)
+            echo "--- Sample metrics output (first 20 lines) ---"
+            echo "$DIRECT_OUTPUT" | head -n 20
+            
+            if ! echo "$DIRECT_OUTPUT" | grep -q "controller_runtime_webhook_requests_total"; then
+              echo "❌ Expected controller-runtime metrics not found even via direct pod exec"
+              exit 1
+            fi
+            
+            echo "⚠️ Service proxy failed but direct pod metrics endpoint is reachable"
+          else
+            echo "--- Sample metrics output (first 20 lines) ---"
+            echo "$PROXY_OUTPUT" | head -n 20
+            if ! echo "$PROXY_OUTPUT" | grep -q "controller_runtime_webhook_requests_total"; then
+              echo "❌ Expected controller-runtime metrics not found in /metrics output"
+              exit 1
+            fi
+            echo "✅ Controller metrics endpoint reachable via service proxy"
+          fi
+          echo "::endgroup::"
       - name: Run E2E Tests
         env:
           E2E_ARTIFACT_ROOT: /tmp/e2e-artifacts
@@ -109,6 +332,9 @@ jobs:
           E2E_AUDIT_LOG_PATH: /tmp/kind-audit/audit.log
           E2E_GINKGO_TIMEOUT: 60m
           E2E_MAX_RESTARTS: "0"
+          TEMPO_URL: http://localhost:3200
+          LOKI_URL: http://localhost:3100
+          E2E_OBSERVABILITY_DEBUG: "true"
         run: |
           echo "::group::Run E2E tests"
           bash ./scripts/ci/run-e2e-tests.sh
