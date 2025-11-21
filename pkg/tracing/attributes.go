@@ -27,21 +27,17 @@ import (
 
 // Standardized attribute/log field names for GameServer and networking metadata.
 const (
-	FieldGameServerSetName      = "game.kruise.io.game_server_set.name"
-	FieldGameServerSetNamespace = "game.kruise.io.game_server_set.namespace"
-	FieldGameServerName         = "game.kruise.io.game_server.name"
-	FieldGameServerNamespace    = "game.kruise.io.game_server.namespace"
-	FieldNetworkPluginName      = "game.kruise.io.network.plugin.name"
-	FieldNetworkStatus          = "game.kruise.io.network.status"
-	FieldNetworkResourceID      = "game.kruise.io.network.resource_id"
-	FieldNetworkPortRange       = "game.kruise.io.network.port_range"
-	FieldComponent              = "game.kruise.io.component"
-	FieldWebhookHandler         = "game.kruise.io.webhook.handler"
-	FieldAdmissionRequestUID    = "k8s.admission.request.uid"
-)
-
-// Standardized logger field names to avoid ad-hoc magic strings.
-const (
+	FieldGameServerSetName            = "game.kruise.io.game_server_set.name"
+	FieldGameServerSetNamespace       = "game.kruise.io.game_server_set.namespace"
+	FieldGameServerName               = "game.kruise.io.game_server.name"
+	FieldGameServerNamespace          = "game.kruise.io.game_server.namespace"
+	FieldNetworkPluginName            = "game.kruise.io.network.plugin.name"
+	FieldNetworkStatus                = "game.kruise.io.network.status"
+	FieldNetworkResourceID            = "game.kruise.io.network.resource_id"
+	FieldNetworkPortRange             = "game.kruise.io.network.port_range"
+	FieldComponent                    = "game.kruise.io.component"
+	FieldWebhookHandler               = "game.kruise.io.webhook.handler"
+	FieldAdmissionRequestUID          = "k8s.admission.request.uid"
 	FieldAdmissionOperation           = "admission.operation"
 	FieldAdmissionResource            = "k8s.admission.resource"
 	FieldAllocatedPods                = "game.kruise.io.host_port.allocated_pods"
@@ -116,6 +112,7 @@ const (
 	FieldPodProbeMarker               = "game.kruise.io.pod_probe_marker.name"
 	FieldProvider                     = "cloud.provider"
 	FieldReclaimPolicy                = "game.kruise.io.reclaim_policy"
+	FieldReconcileTrigger             = "reconcile.trigger"
 	FieldRemaining                    = "game.kruise.io.remaining"
 	FieldReplicas                     = "game.kruise.io.replicas"
 	FieldRequestedPorts               = "game.kruise.io.network.requested_ports"
@@ -154,6 +151,7 @@ var (
 	errorTypeKey              = attribute.Key("error.type")
 	cloudProviderKey          = attribute.Key("cloud.provider")
 	admissionRequestUIDKey    = attribute.Key(FieldAdmissionRequestUID)
+	reconcileTriggerKey       = attribute.Key(FieldReconcileTrigger)
 )
 
 // CloudProvider represents the canonical OpenTelemetry enumeration values for cloud providers.
@@ -275,6 +273,11 @@ func AttrErrorType(errType string) attribute.KeyValue {
 // AttrAdmissionRequestUID returns a span attribute representing the admission request UID.
 func AttrAdmissionRequestUID(uid string) attribute.KeyValue {
 	return admissionRequestUIDKey.String(uid)
+}
+
+// AttrReconcileTrigger returns a span attribute representing the reconcile trigger type (create/update/delete/pod.updated/etc.).
+func AttrReconcileTrigger(trigger string) attribute.KeyValue {
+	return reconcileTriggerKey.String(trigger)
 }
 
 // AttrsForGameServer returns a slice of attributes covering GameServerSet and GameServer names.

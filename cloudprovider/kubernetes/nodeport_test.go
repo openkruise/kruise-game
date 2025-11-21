@@ -11,6 +11,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/tracing"
 	"github.com/openkruise/kruise-game/pkg/util"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -267,7 +268,7 @@ func TestNodePortTracingOnPodUpdated(t *testing.T) {
 	// Find root span
 	var rootSpan sdktrace.ReadOnlySpan
 	for _, span := range spans {
-		if span.Name() == "process nodeport pod" {
+		if span.Name() == tracing.SpanProcessNodePortPod {
 			rootSpan = span
 			break
 		}
@@ -285,7 +286,7 @@ func TestNodePortTracingOnPodUpdated(t *testing.T) {
 		"game.kruise.io.game_server.name":     "test-nodeport-pod",
 		"game.kruise.io.game_server_set.name": "test-gss",
 		"k8s.namespace.name":                  "default",
-		"reconcile.trigger":                   "pod.updated",
+		tracing.FieldReconcileTrigger:         "pod.updated",
 	}
 
 	for key, expectedValue := range expectedAttrs {
@@ -415,7 +416,7 @@ func TestNodePortTracingCreateServiceSpan(t *testing.T) {
 	// Look for create nodeport service child span
 	var createSpan sdktrace.ReadOnlySpan
 	for _, span := range spans {
-		if span.Name() == "create nodeport service" {
+		if span.Name() == tracing.SpanCreateNodePortService {
 			createSpan = span
 			break
 		}
@@ -685,7 +686,7 @@ func TestNodePortTracingNetworkReady(t *testing.T) {
 	// Find root span
 	var rootSpan sdktrace.ReadOnlySpan
 	for _, span := range spans {
-		if span.Name() == "process nodeport pod" {
+		if span.Name() == tracing.SpanProcessNodePortPod {
 			rootSpan = span
 			break
 		}

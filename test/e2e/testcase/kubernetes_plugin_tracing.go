@@ -26,10 +26,10 @@ const (
 )
 
 var hostPortSpanCanonicalNames = map[string]struct{}{
-	"prepare hostport pod":        {},
-	"allocate hostport":           {},
-	"process hostport update":     {},
-	"cleanup hostport allocation": {},
+	tracing.SpanPrepareHostPortPod:        {},
+	tracing.SpanAllocateHostPort:          {},
+	tracing.SpanProcessHostPortUpdate:     {},
+	tracing.SpanCleanupHostPortAllocation: {},
 }
 
 func RunKubernetesPluginTracingTest(f *framework.Framework) {
@@ -666,7 +666,7 @@ func RunKubernetesPluginTracingTest(f *framework.Framework) {
 
 			ginkgo.By("Step 5: Search for Controller trace (Trace 1: reconcile game_server)")
 			traceFilters := map[string]string{"game.kruise.io.game_server_set.name": gss.GetName()}
-			controllerTraceID, err := f.WaitForTraceInTempo("okg-controller-manager", "reconcile game_server", 30*time.Second, traceFilters)
+			controllerTraceID, err := f.WaitForTraceInTempo("okg-controller-manager", tracing.SpanReconcileGameServer, 30*time.Second, traceFilters)
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 			ginkgo.By(fmt.Sprintf("✓ Found Controller trace: %s", controllerTraceID))
 
@@ -679,7 +679,7 @@ func RunKubernetesPluginTracingTest(f *framework.Framework) {
 			// Find the reconcile game_server span
 			var reconcileSpan *framework.SpanView
 			for _, span := range controllerSpans {
-				if span.OperationName == "reconcile game_server" {
+				if span.OperationName == tracing.SpanReconcileGameServer {
 					reconcileSpan = span
 					ginkgo.By(fmt.Sprintf("✓ Found reconcile game_server span: %s (duration: %dμs)",
 						span.SpanID, span.Duration/1000))

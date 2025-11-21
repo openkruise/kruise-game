@@ -207,7 +207,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	// Create root span for Reconcile (SERVER span kind)
 	tracer := otel.Tracer("okg-controller-manager")
-	ctx, span := tracer.Start(ctx, "reconcile game_server",
+	ctx, span := tracer.Start(ctx, tracing.SpanReconcileGameServer,
 		trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithAttributes(
 			attribute.String("k8s.namespace.name", namespacedName.Namespace),
@@ -277,7 +277,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	if podFound && !gsFound {
-		span.SetAttributes(attribute.String("reconcile.trigger", "create"))
+		span.SetAttributes(tracing.AttrReconcileTrigger("create"))
 		span.AddEvent("gameserver.reconcile.bootstrap",
 			trace.WithAttributes(
 				attribute.String("action", "init gameserver from pod"),
@@ -310,7 +310,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	if !podFound {
-		span.SetAttributes(attribute.String("reconcile.trigger", "delete"))
+		span.SetAttributes(tracing.AttrReconcileTrigger("delete"))
 		shouldDelete := gsFound && gs.GetLabels()[gamekruiseiov1alpha1.GameServerDeletingKey] == "true"
 		span.AddEvent("gameserver.reconcile.cleanup",
 			trace.WithAttributes(
@@ -331,7 +331,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return reconcile.Result{}, nil
 	}
 
-	span.SetAttributes(attribute.String("reconcile.trigger", "update"))
+	span.SetAttributes(tracing.AttrReconcileTrigger("update"))
 
 	gsm := NewGameServerManager(gs, pod, r.Client, r.recorder, logger)
 

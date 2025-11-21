@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/tracing"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -139,7 +140,7 @@ func TestHostPortTracingOnPodAdded(t *testing.T) {
 	// Find root span
 	var rootSpan sdktrace.ReadOnlySpan
 	for _, span := range spans {
-		if span.Name() == "prepare hostport pod" {
+		if span.Name() == tracing.SpanPrepareHostPortPod {
 			rootSpan = span
 			break
 		}
@@ -283,7 +284,7 @@ func TestHostPortTracingOnPodUpdated(t *testing.T) {
 	// Find root span
 	var rootSpan sdktrace.ReadOnlySpan
 	for _, span := range spans {
-		if span.Name() == "process hostport update" {
+		if span.Name() == tracing.SpanProcessHostPortUpdate {
 			rootSpan = span
 			break
 		}
@@ -504,7 +505,7 @@ func TestHostPortTracingAllocatePortsChildSpan(t *testing.T) {
 	// Look for allocate hostport child span
 	var allocateSpan sdktrace.ReadOnlySpan
 	for _, span := range spans {
-		if span.Name() == "allocate hostport" {
+		if span.Name() == tracing.SpanAllocateHostPort {
 			allocateSpan = span
 			break
 		}

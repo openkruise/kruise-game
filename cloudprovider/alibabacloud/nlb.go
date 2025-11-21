@@ -177,7 +177,7 @@ func (n *NlbPlugin) OnPodAdded(client client.Client, pod *corev1.Pod, ctx contex
 
 func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
 	tracer := otel.Tracer("okg-controller-manager")
-	ctx, span := startNLBSpan(ctx, tracer, "process nlb pod", pod)
+	ctx, span := startNLBSpan(ctx, tracer, tracing.SpanProcessNLBPod, pod)
 	defer span.End()
 	span.SetAttributes(tracing.AttrNetworkStatus("waiting"))
 	logger := nlbLogger(ctx, pod).WithValues(tracing.FieldOperation, "update")
@@ -221,7 +221,7 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	if err != nil {
 		if errors.IsNotFound(err) {
 			logger.Info("creating NLB service for pod")
-			_, createSpan := startNLBSpan(ctx, tracer, "create nlb service", pod,
+			_, createSpan := startNLBSpan(ctx, tracer, tracing.SpanCreateNLBService, pod,
 				tracing.AttrNetworkStatus("not_ready"),
 				nlbAttrPortCountKey.Int64(int64(len(sc.targetPorts))),
 				nlbAttrLBIDsKey.StringSlice(sc.lbIds),
@@ -285,7 +285,7 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 		if err != nil {
 			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
 		}
-		_, updateSpan := startNLBSpan(ctx, tracer, "reconcile nlb service", pod,
+		_, updateSpan := startNLBSpan(ctx, tracer, tracing.SpanReconcileNLBService, pod,
 			tracing.AttrNetworkStatus("not_ready"),
 			nlbAttrPortCountKey.Int64(int64(len(sc.targetPorts))),
 			nlbAttrServiceNameKey.String(pod.GetName()),
@@ -326,7 +326,7 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 
 	if networkManager.GetNetworkDisabled() && svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
 		logger.Info("disabling NLB service due to network disable flag")
-		_, toggleSpan := startNLBSpan(ctx, tracer, "toggle nlb service type", pod,
+		_, toggleSpan := startNLBSpan(ctx, tracer, tracing.SpanToggleNLBServiceType, pod,
 			tracing.AttrNetworkStatus("not_ready"),
 			nlbAttrServiceActionKey.String("disable"),
 			nlbAttrServiceNameKey.String(svc.GetName()),
@@ -349,7 +349,7 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 
 	if !networkManager.GetNetworkDisabled() && svc.Spec.Type == corev1.ServiceTypeClusterIP {
 		logger.Info("re-enabling NLB service after network resume")
-		_, toggleSpan := startNLBSpan(ctx, tracer, "toggle nlb service type", pod,
+		_, toggleSpan := startNLBSpan(ctx, tracer, tracing.SpanToggleNLBServiceType, pod,
 			tracing.AttrNetworkStatus("waiting"),
 			nlbAttrServiceActionKey.String("enable"),
 			nlbAttrServiceNameKey.String(svc.GetName()),
@@ -379,7 +379,7 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 		tracing.AttrNetworkResourceID(svc.Annotations[SlbIdAnnotationKey]),
 	}
 	lbSpanAttrs = append(lbSpanAttrs, nlbHealthCheckAttrs(sc.nlbHealthConfig)...)
-	_, lbSpan := startNLBSpan(ctx, tracer, "check nlb status", pod, lbSpanAttrs...)
+	_, lbSpan := startNLBSpan(ctx, tracer, tracing.SpanCheckNLBStatus, pod, lbSpanAttrs...)
 	if svc.Status.LoadBalancer.Ingress == nil {
 		logger.Info("load balancer ingress not yet assigned")
 		lbSpan.SetAttributes(
@@ -453,7 +453,7 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	networkStatus.ExternalAddresses = externalAddresses
 	networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkReady
 
-	_, publishSpan := startNLBSpan(ctx, tracer, "publish nlb status", pod,
+	_, publishSpan := startNLBSpan(ctx, tracer, tracing.SpanPublishNLBStatus, pod,
 		tracing.AttrNetworkStatus("ready"),
 		attribute.Int("game.kruise.io.network.internal_addresses", len(internalAddresses)),
 		attribute.Int("game.kruise.io.network.external_addresses", len(externalAddresses)),
@@ -483,7 +483,7 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 
 func (n *NlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.Context) cperrors.PluginError {
 	tracer := otel.Tracer("okg-controller-manager")
-	ctx, span := startNLBSpan(ctx, tracer, "cleanup nlb allocation", pod,
+	ctx, span := startNLBSpan(ctx, tracer, tracing.SpanCleanupNLBAllocation, pod,
 		tracing.AttrNetworkStatus("not_ready"),
 	)
 	defer span.End()
@@ -652,7 +652,7 @@ func (n *NlbPlugin) allocate(ctx context.Context, pod *corev1.Pod, lbIds []strin
 		tracing.FieldOperation, "allocate",
 		tracing.FieldPodKeyQualified, podKey,
 	)
-	_, span := startNLBSpan(ctx, tracer, "allocate nlb ports", pod,
+	_, span := startNLBSpan(ctx, tracer, tracing.SpanAllocateNLBPorts, pod,
 		tracing.AttrNetworkStatus("waiting"),
 		nlbAttrLBIDsKey.StringSlice(lbIds),
 		nlbAttrRequestedPortCountKey.Int64(int64(num)),

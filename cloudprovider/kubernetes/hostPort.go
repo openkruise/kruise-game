@@ -99,7 +99,7 @@ func (hpp *HostPortPlugin) Alias() string {
 func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, errors.PluginError) {
 	// Create root span for HostPort OnPodAdded
 	tracer := otel.Tracer("okg-controller-manager")
-	ctx, span := startHostPortSpan(ctx, tracer, "prepare hostport pod", pod)
+	ctx, span := startHostPortSpan(ctx, tracer, tracing.SpanPrepareHostPortPod, pod)
 	defer span.End()
 	podKey := pod.GetNamespace() + "/" + pod.GetName()
 	span.SetAttributes(
@@ -149,7 +149,7 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 		)
 	} else {
 		// Create child span for port allocation
-		_, allocSpan := startHostPortSpan(ctx, tracer, "allocate hostport", pod,
+		_, allocSpan := startHostPortSpan(ctx, tracer, tracing.SpanAllocateHostPort, pod,
 			tracing.AttrNetworkStatus("waiting"),
 			hostPortAttrPortsRequestedKey.Int64(int64(requestedPorts)),
 			hostPortAttrPodKey.String(podKey),
@@ -215,7 +215,7 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, errors.PluginError) {
 	// Create root span for HostPort OnPodUpdated
 	tracer := otel.Tracer("okg-controller-manager")
-	ctx, span := startHostPortSpan(ctx, tracer, "process hostport update", pod)
+	ctx, span := startHostPortSpan(ctx, tracer, tracing.SpanProcessHostPortUpdate, pod)
 	defer span.End()
 	span.SetAttributes(hostPortAttrPodKey.String(pod.GetNamespace() + "/" + pod.GetName()))
 
@@ -326,7 +326,7 @@ func (hpp *HostPortPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx co
 	logger := hostPortLogger(ctx, pod).WithValues(tracing.FieldOperation, "delete")
 	logger.Info("Processing hostport pod DELETE operation")
 	tracer := otel.Tracer("okg-controller-manager")
-	_, span := startHostPortSpan(ctx, tracer, "cleanup hostport allocation", pod,
+	_, span := startHostPortSpan(ctx, tracer, tracing.SpanCleanupHostPortAllocation, pod,
 		tracing.AttrNetworkStatus("not_ready"),
 	)
 	defer span.End()

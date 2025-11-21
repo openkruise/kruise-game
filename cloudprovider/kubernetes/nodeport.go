@@ -89,7 +89,7 @@ func (n *NodePortPlugin) OnPodAdded(client client.Client, pod *corev1.Pod, ctx c
 func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
 	// Create root span for NodePort OnPodUpdated
 	tracer := otel.Tracer("okg-controller-manager")
-	ctx, span := startNodePortSpan(ctx, tracer, "process nodeport pod", pod)
+	ctx, span := startNodePortSpan(ctx, tracer, tracing.SpanProcessNodePortPod, pod)
 	defer span.End()
 	logger := nodePortLogger(ctx, pod).WithValues(tracing.FieldOperation, "update")
 	serviceKey := fmt.Sprintf("%s/%s", pod.GetNamespace(), pod.GetName())
@@ -100,7 +100,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 	networkConfig := networkManager.GetNetworkConfig()
 	currentState := normalizeNetworkState(networkStatus)
 	span.SetAttributes(
-		attribute.String("reconcile.trigger", nodePortReconcileTrigger),
+		tracing.AttrReconcileTrigger(nodePortReconcileTrigger),
 		nodePortAttrNetworkDisabledKey.Bool(networkManager.GetNetworkDisabled()),
 		nodePortAttrAllowNotReadyKey.Bool(util.IsAllowNotReadyContainers(networkConfig)),
 		nodePortAttrHashMismatchKey.Bool(false),
@@ -137,7 +137,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 	if err != nil {
 		if errors.IsNotFound(err) {
 			logger.Info("NodePort service missing, creating new service", tracing.FieldService, serviceKey, tracing.FieldPortCount, len(npc.ports))
-			_, createSpan := startNodePortSpan(ctx, tracer, "create nodeport service", pod,
+			_, createSpan := startNodePortSpan(ctx, tracer, tracing.SpanCreateNodePortService, pod,
 				tracing.AttrNetworkStatus("not_ready"),
 				attribute.String("service.name", pod.GetName()),
 				attribute.String("service.namespace", pod.GetNamespace()),
@@ -198,7 +198,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 		logger.Info("Disabling NodePort selector for pod", tracing.FieldService, serviceKey,
 			tracing.FieldSelectorBefore, formatNodePortSelector(selectorBefore),
 			tracing.FieldSelectorAfter, formatNodePortSelector(selectorAfter))
-		_, toggleSpan := startNodePortSpan(ctx, tracer, "toggle nodeport selector", pod,
+		_, toggleSpan := startNodePortSpan(ctx, tracer, tracing.SpanToggleNodePortSelector, pod,
 			attribute.String("selector.action", "disable"),
 			attribute.String("service.name", svc.GetName()),
 			nodePortAttrSelectorBeforeKey.String(formatNodePortSelector(selectorBefore)),
@@ -230,7 +230,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 		logger.Info("Enabling NodePort selector for pod", tracing.FieldService, serviceKey,
 			tracing.FieldSelectorBefore, formatNodePortSelector(selectorBefore),
 			tracing.FieldSelectorAfter, formatNodePortSelector(selectorAfter))
-		_, toggleSpan := startNodePortSpan(ctx, tracer, "toggle nodeport selector", pod,
+		_, toggleSpan := startNodePortSpan(ctx, tracer, tracing.SpanToggleNodePortSelector, pod,
 			attribute.String("selector.action", "enable"),
 			attribute.String("service.name", svc.GetName()),
 			nodePortAttrSelectorBeforeKey.String(formatNodePortSelector(selectorBefore)),
@@ -356,7 +356,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 	networkStatus.ExternalAddresses = externalAddresses
 	networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkReady
 
-	_, publishSpan := startNodePortSpan(ctx, tracer, "publish nodeport status", pod,
+	_, publishSpan := startNodePortSpan(ctx, tracer, tracing.SpanPublishNodePortStatus, pod,
 		tracing.AttrNetworkStatus("ready"),
 		attribute.String("node.ip", nodeIP),
 		attribute.Int("game.kruise.io.network.internal_addresses", len(internalAddresses)),

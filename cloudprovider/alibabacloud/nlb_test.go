@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/tracing"
 	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -377,7 +378,7 @@ func TestAllocateNLBPortsSpanAttributes(t *testing.T) {
 	spans := recorder.Ended()
 	var allocateSpan sdktrace.ReadOnlySpan
 	for _, span := range spans {
-		if span.Name() == "allocate nlb ports" {
+		if span.Name() == tracing.SpanAllocateNLBPorts {
 			allocateSpan = span
 			break
 		}

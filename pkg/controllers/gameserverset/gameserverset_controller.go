@@ -191,7 +191,7 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// Create root span for GameServerSet Reconcile (SERVER span kind)
 	tracer := otel.Tracer("okg-controller-manager")
-	ctx, span := tracer.Start(ctx, "reconcile game_server_set",
+	ctx, span := tracer.Start(ctx, tracing.SpanReconcileGameServerSet,
 		trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithAttributes(
 			attribute.String("k8s.namespace.name", namespacedName.Namespace),
@@ -210,7 +210,7 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	err := r.Get(ctx, namespacedName, gss)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			span.SetAttributes(attribute.String("reconcile.trigger", "delete"))
+			span.SetAttributes(tracing.AttrReconcileTrigger("delete"))
 			span.SetStatus(codes.Ok, "GameServerSet not found (deleted)")
 			return reconcile.Result{}, nil
 		}
@@ -221,7 +221,7 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	span.SetAttributes(tracing.AttrGameServerSetName(gss.GetName()))
-	span.SetAttributes(attribute.String("reconcile.trigger", "update"))
+	span.SetAttributes(tracing.AttrReconcileTrigger("update"))
 
 	gsm := NewGameServerSetManager(gss, r.Client, r.recorder, logger)
 	// The serverless scenario PodProbeMarker takes effect during the Webhook phase, so need to create the PodProbeMarker in advance.
