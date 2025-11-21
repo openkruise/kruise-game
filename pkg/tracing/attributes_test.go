@@ -3,12 +3,14 @@ package tracing
 import (
 	"testing"
 
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
+
 	"go.opentelemetry.io/otel/attribute"
 )
 
 func TestEnsureNetworkStatusAttrAddsDefault(t *testing.T) {
 	attrs := []attribute.KeyValue{AttrComponent("okg-controller-manager")}
-	result := EnsureNetworkStatusAttr(attrs, "waiting")
+	result := EnsureNetworkStatusAttr(attrs, telemetryfields.NetworkStatusWaiting)
 	if len(result) != len(attrs)+1 {
 		t.Fatalf("expected default network status to be appended")
 	}
@@ -16,8 +18,8 @@ func TestEnsureNetworkStatusAttrAddsDefault(t *testing.T) {
 	for _, attr := range result {
 		if attr.Key == networkStatusKey {
 			found = true
-			if attr.Value.AsString() != "waiting" {
-				t.Fatalf("expected waiting status, got %s", attr.Value.AsString())
+			if attr.Value.AsString() != telemetryfields.NetworkStatusWaiting {
+				t.Fatalf("expected %s status, got %s", telemetryfields.NetworkStatusWaiting, attr.Value.AsString())
 			}
 		}
 	}
@@ -27,8 +29,8 @@ func TestEnsureNetworkStatusAttrAddsDefault(t *testing.T) {
 }
 
 func TestEnsureNetworkStatusAttrRespectsExisting(t *testing.T) {
-	attrs := []attribute.KeyValue{AttrNetworkStatus("ready")}
-	result := EnsureNetworkStatusAttr(attrs, "waiting")
+	attrs := []attribute.KeyValue{AttrNetworkStatus(telemetryfields.NetworkStatusReady)}
+	result := EnsureNetworkStatusAttr(attrs, telemetryfields.NetworkStatusWaiting)
 	if len(result) != len(attrs) {
 		t.Fatalf("expected slice length to remain unchanged")
 	}
@@ -72,8 +74,8 @@ func TestCloudProviderFromNetworkType(t *testing.T) {
 
 func TestAttrNetworkPluginNormalizesValue(t *testing.T) {
 	attr := AttrNetworkPlugin("  Kubernetes-HostPort  ")
-	if attr.Value.AsString() != "kubernetes-hostport" {
-		t.Fatalf("expected kubernetes-hostport, got %s", attr.Value.AsString())
+	if attr.Value.AsString() != telemetryfields.NetworkPluginKubernetesHostPort {
+		t.Fatalf("expected %s, got %s", telemetryfields.NetworkPluginKubernetesHostPort, attr.Value.AsString())
 	}
 
 	attr = AttrNetworkPlugin("Custom Plugin Name")

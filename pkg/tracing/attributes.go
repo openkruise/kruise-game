@@ -38,6 +38,9 @@ var (
 	componentKey              = attribute.Key(telemetryfields.FieldComponent)
 	webhookHandlerKey         = attribute.Key(telemetryfields.FieldWebhookHandler)
 	errorTypeKey              = attribute.Key(telemetryfields.FieldErrorType)
+	errorMessageKey           = attribute.Key(telemetryfields.FieldErrorMessage)
+	exceptionTypeKey          = attribute.Key(telemetryfields.FieldExceptionType)
+	exceptionMessageKey       = attribute.Key(telemetryfields.FieldExceptionMessage)
 	cloudProviderKey          = attribute.Key(telemetryfields.FieldProvider)
 	admissionRequestUIDKey    = attribute.Key(telemetryfields.FieldAdmissionRequestUID)
 	reconcileTriggerKey       = attribute.Key(telemetryfields.FieldReconcileTrigger)
@@ -83,7 +86,7 @@ func AttrGameServerNamespace(namespace string) attribute.KeyValue {
 
 // AttrNetworkPlugin returns a span attribute representing the network plugin name.
 func AttrNetworkPlugin(name string) attribute.KeyValue {
-	return networkPluginKey.String(normalizeDimensionValue(name))
+	return networkPluginKey.String(telemetryfields.NormalizeNetworkPlugin(name))
 }
 
 // AttrComponent returns a span attribute representing which OpenKruiseGame component emits the span.
@@ -175,7 +178,23 @@ func CloudProviderFromNetworkType(networkType string) (CloudProvider, bool) {
 
 // AttrErrorType returns a span attribute representing the classified error type (ParameterError, ApiCallError, etc.).
 func AttrErrorType(errType string) attribute.KeyValue {
-	return errorTypeKey.String(errType)
+	return errorTypeKey.String(telemetryfields.NormalizeErrorType(errType))
+}
+
+// AttrErrorMessage returns a span attribute for exception.message per OTEL convention.
+// Use caution: error.message can be high-cardinality and should be avoided as a dimension.
+func AttrErrorMessage(msg string) attribute.KeyValue {
+	return errorMessageKey.String(msg)
+}
+
+// AttrExceptionMessage returns a span attribute for exception.message per OTEL convention.
+func AttrExceptionMessage(msg string) attribute.KeyValue {
+	return exceptionMessageKey.String(msg)
+}
+
+// AttrExceptionType returns a span attribute for exception.type per OTEL convention.
+func AttrExceptionType(t string) attribute.KeyValue {
+	return exceptionTypeKey.String(t)
 }
 
 // AttrAdmissionRequestUID returns a span attribute representing the admission request UID.
@@ -251,16 +270,4 @@ func BaseNetworkAttrs(component, pluginName string, pod *corev1.Pod, extras ...a
 	return attrs
 }
 
-// normalizeDimensionValue converts human-friendly plugin names into lower snake/hyphen case strings
-// so that metric dimensions remain stable (Grafana queries depend on exact matches).
-func normalizeDimensionValue(value string) string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return ""
-	}
-	lower := strings.ToLower(trimmed)
-	if strings.ContainsAny(lower, " \t") {
-		lower = strings.Join(strings.Fields(lower), "_")
-	}
-	return lower
-}
+// NOTE: Dimension normalization helpers now live in pkg/telemetryfields/values.go

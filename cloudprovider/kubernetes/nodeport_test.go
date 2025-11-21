@@ -283,7 +283,7 @@ func TestNodePortTracingOnPodUpdated(t *testing.T) {
 	// Verify root span attributes
 	attrs := rootSpan.Attributes()
 	expectedAttrs := map[string]string{
-		"game.kruise.io.network.plugin.name":  "kubernetes-nodeport",
+		"game.kruise.io.network.plugin.name":  telemetryfields.NetworkPluginKubernetesNodePort,
 		"cloud.provider":                      "kubernetes",
 		"game.kruise.io.game_server.name":     "test-nodeport-pod",
 		"game.kruise.io.game_server_set.name": "test-gss",
@@ -697,7 +697,7 @@ func TestNodePortTracingNetworkReady(t *testing.T) {
 			hasNetworkStatus = true
 			t.Logf("Found network.status = %v", attr.Value.AsString())
 		}
-		if string(attr.Key) == "node.ip" {
+		if string(attr.Key) == telemetryfields.FieldNodeIP {
 			t.Logf("Found node.ip = %v", attr.Value.AsString())
 		}
 	}

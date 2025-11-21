@@ -55,7 +55,7 @@ const (
 	ProtocolTCPUDP    = "TCPUDP"
 
 	hostPortComponentName = "okg-controller-manager"
-	hostPortPluginSlug    = "kubernetes-hostport"
+	hostPortPluginSlug    = telemetryfields.NetworkPluginKubernetesHostPort
 )
 
 var (
@@ -104,7 +104,7 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 	defer span.End()
 	podKey := pod.GetNamespace() + "/" + pod.GetName()
 	span.SetAttributes(
-		tracing.AttrNetworkStatus("waiting"),
+		tracing.AttrNetworkStatus(telemetryfields.NetworkStatusWaiting),
 		hostPortAttrPodKey.String(podKey),
 		hostPortAttrPortsReusedKey.Bool(false),
 	)
@@ -122,14 +122,14 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 		span.RecordError(dupErr)
 		span.SetStatus(codes.Error, "pod with same name already exists")
 		span.SetAttributes(
-			tracing.AttrErrorType("ParameterError"),
+			tracing.AttrErrorType(telemetryfields.ErrorTypeParameter),
 		)
 		return pod, errors.NewPluginError(errors.InternalError, "There is a pod with same ns/name exists in cluster")
 	}
 	if !k8serrors.IsNotFound(err) {
 		logger.Error(err, "Failed to check existing pod before hostport allocation")
 		span.RecordError(err)
-		span.SetAttributes(tracing.AttrErrorType("ApiCallError"))
+		span.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall))
 		span.SetStatus(codes.Error, "failed to check for existing pod")
 		return pod, errors.NewPluginError(errors.ApiCallError, err.Error())
 	}
@@ -151,7 +151,7 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 	} else {
 		// Create child span for port allocation
 		_, allocSpan := startHostPortSpan(ctx, tracer, tracing.SpanAllocateHostPort, pod,
-			tracing.AttrNetworkStatus("waiting"),
+			tracing.AttrNetworkStatus(telemetryfields.NetworkStatusWaiting),
 			hostPortAttrPortsRequestedKey.Int64(int64(requestedPorts)),
 			hostPortAttrPodKey.String(podKey),
 		)
@@ -232,14 +232,14 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "node not found")
 			span.SetAttributes(
-				tracing.AttrNetworkStatus("not_ready"),
-				tracing.AttrErrorType("ResourceNotReady"),
+				tracing.AttrNetworkStatus(telemetryfields.NetworkStatusNotReady),
+				tracing.AttrErrorType(telemetryfields.ErrorTypeResourceNotReady),
 			)
 			return pod, nil
 		}
 		logger.Error(err, "Failed to fetch node for hostport pod", telemetryfields.FieldK8sNodeName, pod.Spec.NodeName)
 		span.RecordError(err)
-		span.SetAttributes(tracing.AttrErrorType("ApiCallError"))
+		span.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall))
 		span.SetStatus(codes.Error, "failed to get node")
 		return pod, errors.NewPluginError(errors.ApiCallError, err.Error())
 	}
@@ -274,13 +274,13 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 		errNetworkNotReady := fmt.Errorf("pod ip or hostports missing")
 		logger.Error(errNetworkNotReady, "HostPort network not ready", telemetryfields.FieldInternalPorts, len(iNetworkPorts), telemetryfields.FieldExternalPorts, len(eNetworkPorts), telemetryfields.FieldPodIP, pod.Status.PodIP)
 		span.SetAttributes(
-			tracing.AttrNetworkStatus("not_ready"),
-			attribute.Int("game.kruise.io.network.internal_ports", len(iNetworkPorts)),
-			attribute.Int("game.kruise.io.network.external_ports", len(eNetworkPorts)),
+			tracing.AttrNetworkStatus(telemetryfields.NetworkStatusNotReady),
+			attribute.Int(telemetryfields.FieldInternalPorts, len(iNetworkPorts)),
+			attribute.Int(telemetryfields.FieldExternalPorts, len(eNetworkPorts)),
 			hostPortAttrInternalPortCountKey.Int64(int64(len(iNetworkPorts))),
 			hostPortAttrExternalPortCountKey.Int64(int64(len(eNetworkPorts))),
-			attribute.String("pod.ip", pod.Status.PodIP),
-			tracing.AttrErrorType("ResourceNotReady"),
+			attribute.String(telemetryfields.FieldPodIP, pod.Status.PodIP),
+			tracing.AttrErrorType(telemetryfields.ErrorTypeResourceNotReady),
 		)
 		span.RecordError(errNetworkNotReady)
 		span.SetStatus(codes.Error, "network not ready")
@@ -308,11 +308,11 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 
 	// Record success
 	span.SetAttributes(
-		tracing.AttrNetworkStatus("ready"),
-		attribute.String("node.ip", nodeIp),
+		tracing.AttrNetworkStatus(telemetryfields.NetworkStatusReady),
+		attribute.String(telemetryfields.FieldNodeIP, nodeIp),
 		hostPortAttrNodeIPKey.String(nodeIp),
-		attribute.Int("game.kruise.io.network.internal_ports", len(iNetworkPorts)),
-		attribute.Int("game.kruise.io.network.external_ports", len(eNetworkPorts)),
+		attribute.Int(telemetryfields.FieldInternalPorts, len(iNetworkPorts)),
+		attribute.Int(telemetryfields.FieldExternalPorts, len(eNetworkPorts)),
 		hostPortAttrInternalPortCountKey.Int64(int64(len(iNetworkPorts))),
 		hostPortAttrExternalPortCountKey.Int64(int64(len(eNetworkPorts))),
 	)
@@ -328,7 +328,7 @@ func (hpp *HostPortPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx co
 	logger.Info("Processing hostport pod DELETE operation")
 	tracer := otel.Tracer("okg-controller-manager")
 	_, span := startHostPortSpan(ctx, tracer, tracing.SpanCleanupHostPortAllocation, pod,
-		tracing.AttrNetworkStatus("not_ready"),
+		tracing.AttrNetworkStatus(telemetryfields.NetworkStatusNotReady),
 	)
 	defer span.End()
 	podKey := pod.GetNamespace() + "/" + pod.GetName()
@@ -478,7 +478,7 @@ func hostPortSpanAttrs(pod *corev1.Pod, extras ...attribute.KeyValue) []attribut
 		attrExtras = append(attrExtras, tracing.AttrK8sNodeName(pod.Spec.NodeName))
 	}
 	attrExtras = append(attrExtras, extras...)
-	attrExtras = tracing.EnsureNetworkStatusAttr(attrExtras, "waiting")
+	attrExtras = tracing.EnsureNetworkStatusAttr(attrExtras, telemetryfields.NetworkStatusWaiting)
 	return tracing.BaseNetworkAttrs(hostPortComponentName, hostPortPluginSlug, pod, attrExtras...)
 }
 

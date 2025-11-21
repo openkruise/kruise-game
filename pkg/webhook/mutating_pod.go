@@ -48,7 +48,7 @@ import (
 const (
 	podMutatingTimeout        = 8 * time.Second
 	mutatingTimeoutReason     = "MutatingTimeout"
-	defaultNetworkStatusLabel = "waiting"
+	defaultNetworkStatusLabel = telemetryfields.NetworkStatusWaiting
 	webhookHandlerMutatingPod = "mutating-pod"
 )
 
@@ -72,7 +72,7 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 		trace.WithAttributes(
 			tracing.AttrK8sNamespaceName(req.Namespace),
 			tracing.AttrGameServerName(req.Name),
-			attribute.String("admission.operation", string(req.Operation)),
+			attribute.String(telemetryfields.FieldAdmissionOperation, string(req.Operation)),
 			tracing.AttrComponent("webhook"),
 			tracing.AttrWebhookHandler(webhookHandlerMutatingPod),
 		))
@@ -84,7 +84,8 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 	logger := logging.FromContextWithTrace(ctx).WithValues(
 		telemetryfields.FieldComponent, "webhook",
 		telemetryfields.FieldWebhookHandler, webhookHandlerMutatingPod,
-		"admission.operation", op,
+		telemetryfields.FieldAdmissionOperation, op,
+		telemetryfields.FieldAdmissionOperation, op,
 		telemetryfields.FieldK8sNamespaceName, req.Namespace,
 		telemetryfields.FieldAdmissionRequestUID, reqUID,
 		telemetryfields.FieldAdmissionResource, gvk,
@@ -256,7 +257,7 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 		pmh.eventRecorder.Eventf(pod, corev1.EventTypeWarning, mutatingTimeoutReason, msg)
 		span.SetStatus(codes.Error, "plugin execution timeout")
 		span.SetAttributes(attribute.Bool("plugin.timeout", true))
-		span.SetAttributes(tracing.AttrNetworkStatus("error"))
+		span.SetAttributes(tracing.AttrNetworkStatus(telemetryfields.NetworkStatusError))
 		return admission.Allowed(msg)
 	// completed before timeout
 	case result := <-resultCh:
@@ -413,7 +414,7 @@ func deriveNetworkStatusLabel(ctx context.Context, pod *corev1.Pod) string {
 	var status gameKruiseV1alpha1.NetworkStatus
 	if err := json.Unmarshal([]byte(rawStatus), &status); err != nil {
 		if ctx != nil {
-			logging.FromContextWithTrace(ctx).V(4).Info("Pod has invalid network status annotation", telemetryfields.FieldError, err)
+			logging.FromContextWithTrace(ctx).V(4).Info("Pod has invalid network status annotation", telemetryfields.FieldExceptionMessage, err)
 		}
 		return ""
 	}
@@ -423,11 +424,11 @@ func deriveNetworkStatusLabel(ctx context.Context, pod *corev1.Pod) string {
 func normalizeNetworkStateValue(state gameKruiseV1alpha1.NetworkState) string {
 	switch state {
 	case gameKruiseV1alpha1.NetworkReady:
-		return "ready"
+		return telemetryfields.NetworkStatusReady
 	case gameKruiseV1alpha1.NetworkNotReady:
-		return "not_ready"
+		return telemetryfields.NetworkStatusNotReady
 	case gameKruiseV1alpha1.NetworkWaiting:
-		return "waiting"
+		return telemetryfields.NetworkStatusWaiting
 	}
 	if state == "" {
 		return ""
@@ -449,7 +450,7 @@ func resolveNetworkStatusLabel(ctx context.Context, pod *corev1.Pod, fallback st
 		return status
 	}
 	if pluginErr != nil {
-		return "error"
+		return telemetryfields.NetworkStatusError
 	}
 	if fallback == "" {
 		return defaultNetworkStatusLabel

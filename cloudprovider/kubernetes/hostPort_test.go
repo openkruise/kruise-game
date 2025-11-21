@@ -155,12 +155,12 @@ func TestHostPortTracingOnPodAdded(t *testing.T) {
 	// Verify root span attributes
 	attrs := rootSpan.Attributes()
 	expectedAttrs := map[string]string{
-		"game.kruise.io.network.plugin.name":                        "kubernetes-hostport",
+		"game.kruise.io.network.plugin.name":                        telemetryfields.NetworkPluginKubernetesHostPort,
 		"cloud.provider":                                            "kubernetes",
 		"game.kruise.io.game_server.name":                           "test-pod",
 		"game.kruise.io.game_server_set.name":                       "test-gss",
 		telemetryfields.FieldK8sNamespaceName:                       "default",
-		"game.kruise.io.network.status":                             "waiting",
+		"game.kruise.io.network.status":                             telemetryfields.NetworkStatusWaiting,
 		"game.kruise.io.network.plugin.kubernetes.hostport.pod_key": "default/test-pod",
 	}
 
@@ -299,7 +299,7 @@ func TestHostPortTracingOnPodUpdated(t *testing.T) {
 	// Verify root span attributes
 	attrs := rootSpan.Attributes()
 	expectedAttrs := map[string]string{
-		"game.kruise.io.network.plugin.name":                        "kubernetes-hostport",
+		"game.kruise.io.network.plugin.name":                        telemetryfields.NetworkPluginKubernetesHostPort,
 		"cloud.provider":                                            "kubernetes",
 		"game.kruise.io.game_server.name":                           "test-pod-update",
 		"game.kruise.io.game_server_set.name":                       "test-gss",

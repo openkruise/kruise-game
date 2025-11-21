@@ -126,7 +126,7 @@ func main() {
 
 	// Initialize tracing (non-blocking - falls back to no-op on failure)
 	if err := tracingOptions.Apply(); err != nil {
-		setupLog.Info("Tracing initialization failed, using no-op tracer", telemetryfields.FieldError, err.Error())
+		setupLog.Info("Tracing initialization failed, using no-op tracer", telemetryfields.FieldExceptionMessage, err.Error())
 	} else if tracingOptions.Enabled {
 		setupLog.Info("Tracing initialized successfully", telemetryfields.FieldCollector, tracingOptions.CollectorEndpoint)
 

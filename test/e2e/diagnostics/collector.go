@@ -203,6 +203,7 @@ func (ac *ArtifactCollector) collectK8sResources() error {
 		start := ac.testContext.StartTime
 		end := ac.testContext.EndTime.Add(5 * time.Second)
 		for _, event := range eventList.Items {
+			//nolint:staticcheck // Using embedded Time field for comparisons is intentional; metav1.Time does not expose After/Before for time.Time directly
 			if event.LastTimestamp.Time.After(start) && event.LastTimestamp.Time.Before(end) {
 				filteredEvents.Items = append(filteredEvents.Items, event)
 			}

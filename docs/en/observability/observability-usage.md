@@ -102,7 +102,7 @@ You can reuse the sample stack from `test/e2e/manifests` (namespace `observabili
   - `spanmetrics` connector (receives spans from `traces/network` pipeline and generates RED metrics)
 
 - **Processors**:
-  - `k8sattributes`: Injects `k8s.pod.ip`/`k8s.pod.uid` labels for all signals.
+  - `k8sattributes`: Injects `game.kruise.io.k8s.pod_ip`/`k8s.pod.uid` labels for all signals.
   - `transform/log_trace_labels`: Copies `trace_id`/`span_id` into log attributes so Loki can pivot back to traces.
   - `tail_sampling`: Keeps error/slow traces while sampling everything else probabilistically.
   - `filter/network_only`: Feeds only network plugin spans into the spanmetrics connector to avoid noise.
@@ -271,9 +271,9 @@ This section demonstrates how to leverage the correlation between **Metrics**, *
     In the Trace view, identify the failed span (marked in red). In this example, the span `process hostport update` failed. Look at the **Attributes** panel on the right.
     *   `game.kruise.io.network.internal_ports`: `1` (Correct)
     *   `game.kruise.io.network.external_ports`: `1` (Correct)
-    *   `pod.ip`: `""` (Empty String)
+    *   `game.kruise.io.k8s.pod_ip`: `""` (Empty String)
     > **[Screenshot Placeholder]**
-    > *Action:* Capture the Tempo trace view, highlighting the Attributes section where `pod.ip` is empty but ports are correct.
+    > *Action:* Capture the Tempo trace view, highlighting the Attributes section where `game.kruise.io.k8s.pod_ip` is empty but ports are correct.
 
 4.  **Conclusion:**
     The trace reveals that the Webhook was triggered **after** the Pod was scheduled (NodeName exists) but **before** the CNI plugin assigned an IP address.

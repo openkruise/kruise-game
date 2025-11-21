@@ -18,6 +18,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 )
 
 var (
@@ -339,12 +341,12 @@ func TestDeriveNetworkStatusLabel(t *testing.T) {
 		{
 			name:            "ready state",
 			annotationState: gameKruiseV1alpha1.NetworkReady,
-			want:            "ready",
+			want:            telemetryfields.NetworkStatusReady,
 		},
 		{
 			name:            "waiting state",
 			annotationState: gameKruiseV1alpha1.NetworkWaiting,
-			want:            "waiting",
+			want:            telemetryfields.NetworkStatusWaiting,
 		},
 		{
 			name:          "invalid json",

@@ -39,6 +39,34 @@ Custom attributes use the `game.kruise.io` prefix (defined in `pkg/tracing/attri
 *   `game.kruise.io.network.status`
 *   `game.kruise.io.network.plugin.name`
 
+### Canonical telemetry enumerations
+
+To keep Grafana dimensions stable and prevent high-cardinality spikes, OKG uses a small set of canonical enumeration values for fields that are surfaced as spanmetrics dimensions. These values are defined in `pkg/telemetryfields/values.go` and used by `pkg/tracing` attributes/helpers.
+
+Error classification (business-level, low-cardinality):
+- `api_call_error` — External API / cloud SDK failures (ApiCallError).
+- `internal_error` — Internal runtime/code error (InternalError).
+- `parameter_error` — Parameter or validation error (ParameterError).
+- `not_implemented_error` — Not implemented feature invoked (NotImplementedError).
+- `resource_not_ready` — Cloud resource not ready yet (ResourceNotReady).
+- `port_exhausted` — No available port found (PortExhausted).
+
+Network status:
+- `ready` — network resources assigned and usable
+- `not_ready` — network resources missing (IP, ports, etc.)
+- `error` — plugin/provider error occurred
+- `waiting` — resources allocation pending
+
+Plugin slug canonical values:
+- `kubernetes_hostport` — Kubernetes HostPort plugin
+- `kubernetes_nodeport` — Kubernetes NodePort plugin
+- `alibabacloud_nlb` — Alibaba Cloud NLB plugin
+
+Design notes:
+- Use `error.type` (low-cardinality) for business classification and `exception.type`/`exception.message` (OTel) for SDK/exception details.
+- Avoid registering `exception.message` or other long text fields as spanmetrics or Prometheus labels — they are high-cardinality and will affect cardinality of metrics.
+- Use `telemetryfields.Normalize*` helper functions to normalize and map legacy/camelCase variants into canonical snake_case enumerations.
+
 ## 2. Logging Design
 
 ### `otelzap` Integration

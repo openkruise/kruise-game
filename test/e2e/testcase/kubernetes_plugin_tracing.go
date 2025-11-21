@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	hostPortPluginName = "kubernetes-hostport"
-	nodePortPluginName = "kubernetes-nodeport"
+	hostPortPluginName = telemetryfields.NetworkPluginKubernetesHostPort
+	nodePortPluginName = telemetryfields.NetworkPluginKubernetesNodePort
 )
 
 var hostPortSpanCanonicalNames = map[string]struct{}{

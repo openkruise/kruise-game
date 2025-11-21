@@ -61,7 +61,7 @@ data:
         pod_association:
           - sources:
               - from: resource_attribute
-                name: k8s.pod.ip
+                name: game.kruise.io.k8s.pod_ip
           - sources:
               - from: resource_attribute
                 name: k8s.pod.uid
