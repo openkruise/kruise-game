@@ -28,6 +28,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	noop "go.opentelemetry.io/otel/trace/noop"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -80,7 +81,7 @@ func TestHostPortTracingOnPodAdded(t *testing.T) {
 		sdktrace.WithSpanProcessor(spanRecorder),
 	)
 	otel.SetTracerProvider(tracerProvider)
-	defer otel.SetTracerProvider(trace.NewNoopTracerProvider())
+	defer otel.SetTracerProvider(noop.NewTracerProvider())
 
 	// Create test pod
 	pod := &corev1.Pod{
@@ -157,7 +158,7 @@ func TestHostPortTracingOnPodAdded(t *testing.T) {
 		"cloud.provider":                                            "kubernetes",
 		"game.kruise.io.game_server.name":                           "test-pod",
 		"game.kruise.io.game_server_set.name":                       "test-gss",
-		"k8s.namespace.name":                                        "default",
+		tracing.FieldK8sNamespaceName:                               "default",
 		"game.kruise.io.network.status":                             "waiting",
 		"game.kruise.io.network.plugin.kubernetes.hostport.pod_key": "default/test-pod",
 	}
@@ -215,7 +216,7 @@ func TestHostPortTracingOnPodUpdated(t *testing.T) {
 		sdktrace.WithSpanProcessor(spanRecorder),
 	)
 	otel.SetTracerProvider(tracerProvider)
-	defer otel.SetTracerProvider(trace.NewNoopTracerProvider())
+	defer otel.SetTracerProvider(noop.NewTracerProvider())
 
 	// Create test pod with node
 	pod := &corev1.Pod{
@@ -301,7 +302,7 @@ func TestHostPortTracingOnPodUpdated(t *testing.T) {
 		"cloud.provider":                                            "kubernetes",
 		"game.kruise.io.game_server.name":                           "test-pod-update",
 		"game.kruise.io.game_server_set.name":                       "test-gss",
-		"k8s.namespace.name":                                        "default",
+		tracing.FieldK8sNamespaceName:                               "default",
 		"game.kruise.io.network.plugin.kubernetes.hostport.pod_key": "default/test-pod-update",
 	}
 
@@ -367,7 +368,7 @@ func TestHostPortTracingErrorHandling(t *testing.T) {
 		sdktrace.WithSpanProcessor(spanRecorder),
 	)
 	otel.SetTracerProvider(tracerProvider)
-	defer otel.SetTracerProvider(trace.NewNoopTracerProvider())
+	defer otel.SetTracerProvider(noop.NewTracerProvider())
 
 	// Create test pod with invalid configuration (duplicate pod scenario)
 	pod := &corev1.Pod{
@@ -450,7 +451,7 @@ func TestHostPortTracingAllocatePortsChildSpan(t *testing.T) {
 		sdktrace.WithSpanProcessor(spanRecorder),
 	)
 	otel.SetTracerProvider(tracerProvider)
-	defer otel.SetTracerProvider(trace.NewNoopTracerProvider())
+	defer otel.SetTracerProvider(noop.NewTracerProvider())
 
 	// Create test pod
 	pod := &corev1.Pod{

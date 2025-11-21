@@ -134,10 +134,10 @@ func (manager *GameServerSetManager) IsNeedToScale() bool {
 	gssSpecReserveIds := util.GetReserveOrdinalIntSet(gss.Spec.ReserveGameServerIds)
 
 	// no need to scale
-	return !(*gss.Spec.Replicas == *asts.Spec.Replicas &&
-		util.StringToOrdinalIntSet(
+	return *gss.Spec.Replicas != *asts.Spec.Replicas ||
+		!util.StringToOrdinalIntSet(
 			gss.GetAnnotations()[gameKruiseV1alpha1.GameServerSetReserveIdsKey], ",",
-		).Equal(gssSpecReserveIds))
+		).Equal(gssSpecReserveIds)
 }
 
 func (manager *GameServerSetManager) GameServerScale(ctx context.Context) error {
@@ -392,7 +392,7 @@ func (manager *GameServerSetManager) UpdateWorkload(ctx context.Context) error {
 		tracing.FieldHashOld, oldHash,
 		tracing.FieldHashNew, newHash,
 		tracing.FieldServiceName, gss.Spec.ServiceName,
-		tracing.FieldPodTemplateRevision, gss.Spec.GameServerTemplate.ObjectMeta.ResourceVersion,
+		tracing.FieldPodTemplateRevision, gss.Spec.GameServerTemplate.ResourceVersion,
 		tracing.FieldReplicas, ptr.Deref(gss.Spec.Replicas, 0))
 
 	// sync with Advanced StatefulSet

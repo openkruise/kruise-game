@@ -188,22 +188,22 @@ func (w *Writer) Write(payload map[string]FileProjection) error {
 	// (8)
 	newDataDirPath := path.Join(w.targetDir, newDataDirName)
 	if err = os.Symlink(tsDirName, newDataDirPath); err != nil {
-		os.RemoveAll(tsDir)
+		_ = os.RemoveAll(tsDir)
 		klog.Error(err, "unable to create symbolic link for atomic update")
 		return err
 	}
 
 	// (9)
 	if runtime.GOOS == "windows" {
-		os.Remove(dataDirPath)
+		_ = os.Remove(dataDirPath)
 		err = os.Symlink(tsDirName, dataDirPath)
-		os.Remove(newDataDirPath)
+		_ = os.Remove(newDataDirPath)
 	} else {
 		err = os.Rename(newDataDirPath, dataDirPath)
 	}
 	if err != nil {
-		os.Remove(newDataDirPath)
-		os.RemoveAll(tsDir)
+		_ = os.Remove(newDataDirPath)
+		_ = os.RemoveAll(tsDir)
 		klog.Error(err, "unable to rename symbolic link for data directory", tracing.FieldDataDirectory, newDataDirPath)
 		return err
 	}

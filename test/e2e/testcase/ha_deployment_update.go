@@ -121,10 +121,10 @@ func RunHADeploymentUpdateTest(f *framework.Framework) {
 				ctx, managerDeployment, metav1.GetOptions{})
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
-			if deployment.Spec.Template.ObjectMeta.Annotations == nil {
-				deployment.Spec.Template.ObjectMeta.Annotations = make(map[string]string)
+			if deployment.Spec.Template.Annotations == nil {
+				deployment.Spec.Template.Annotations = make(map[string]string)
 			}
-			deployment.Spec.Template.ObjectMeta.Annotations["e2e-test/update-timestamp"] = time.Now().Format(time.RFC3339)
+			deployment.Spec.Template.Annotations["e2e-test/update-timestamp"] = time.Now().Format(time.RFC3339)
 
 			_, err = f.KubeClientSet().AppsV1().Deployments(managerNamespace).Update(ctx, deployment, metav1.UpdateOptions{})
 			gomega.Expect(err).NotTo(gomega.HaveOccurred(), "should update deployment")

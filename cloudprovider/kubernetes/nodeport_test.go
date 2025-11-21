@@ -19,6 +19,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	noop "go.opentelemetry.io/otel/trace/noop"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -202,7 +203,7 @@ func TestNodePortTracingOnPodUpdated(t *testing.T) {
 		sdktrace.WithSpanProcessor(spanRecorder),
 	)
 	otel.SetTracerProvider(tracerProvider)
-	defer otel.SetTracerProvider(trace.NewNoopTracerProvider())
+	defer otel.SetTracerProvider(noop.NewTracerProvider())
 
 	// Create test pod
 	pod := &corev1.Pod{
@@ -285,7 +286,7 @@ func TestNodePortTracingOnPodUpdated(t *testing.T) {
 		"cloud.provider":                      "kubernetes",
 		"game.kruise.io.game_server.name":     "test-nodeport-pod",
 		"game.kruise.io.game_server_set.name": "test-gss",
-		"k8s.namespace.name":                  "default",
+		tracing.FieldK8sNamespaceName:         "default",
 		tracing.FieldReconcileTrigger:         "pod.updated",
 	}
 
@@ -351,7 +352,7 @@ func TestNodePortTracingCreateServiceSpan(t *testing.T) {
 		sdktrace.WithSpanProcessor(spanRecorder),
 	)
 	otel.SetTracerProvider(tracerProvider)
-	defer otel.SetTracerProvider(trace.NewNoopTracerProvider())
+	defer otel.SetTracerProvider(noop.NewTracerProvider())
 
 	// Create test pod (no existing service to trigger creation)
 	pod := &corev1.Pod{
@@ -471,7 +472,7 @@ func TestNodePortTracingErrorHandling(t *testing.T) {
 		sdktrace.WithSpanProcessor(spanRecorder),
 	)
 	otel.SetTracerProvider(tracerProvider)
-	defer otel.SetTracerProvider(trace.NewNoopTracerProvider())
+	defer otel.SetTracerProvider(noop.NewTracerProvider())
 
 	// Create test pod with invalid configuration
 	pod := &corev1.Pod{
@@ -578,15 +579,6 @@ func attrIntValue(attrs []attribute.KeyValue, key string) (int64, bool) {
 	return 0, false
 }
 
-func attrBoolValue(attrs []attribute.KeyValue, key string) (bool, bool) {
-	for _, attr := range attrs {
-		if string(attr.Key) == key {
-			return attr.Value.AsBool(), true
-		}
-	}
-	return false, false
-}
-
 // TestNodePortTracingNetworkReady tests success attributes when network is ready
 func TestNodePortTracingNetworkReady(t *testing.T) {
 	// Setup in-memory span exporter
@@ -595,7 +587,7 @@ func TestNodePortTracingNetworkReady(t *testing.T) {
 		sdktrace.WithSpanProcessor(spanRecorder),
 	)
 	otel.SetTracerProvider(tracerProvider)
-	defer otel.SetTracerProvider(trace.NewNoopTracerProvider())
+	defer otel.SetTracerProvider(noop.NewTracerProvider())
 
 	// Create test pod with existing service (to simulate ready network)
 	pod := &corev1.Pod{

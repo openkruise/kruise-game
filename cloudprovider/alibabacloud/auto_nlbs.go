@@ -19,6 +19,10 @@ package alibabacloud
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
@@ -32,9 +36,6 @@ import (
 	log "k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strconv"
-	"strings"
-	"sync"
 )
 
 const (
@@ -203,7 +204,7 @@ func (a *AutoNLBsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx cont
 			return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 		}
 
-		if svc.Status.LoadBalancer.Ingress == nil || len(svc.Status.LoadBalancer.Ingress) == 0 {
+		if len(svc.Status.LoadBalancer.Ingress) == 0 {
 			networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 			pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 			return pod, cperrors.ToPluginError(err, cperrors.InternalError)

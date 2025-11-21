@@ -1,7 +1,6 @@
 package util
 
 import (
-	"os"
 	"testing"
 	"time"
 )
@@ -18,7 +17,7 @@ func TestGetNetworkTotalWaitTime(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		os.Setenv("NETWORK_TOTAL_WAIT_TIME", test.networkTotalWaitTime)
+		t.Setenv("NETWORK_TOTAL_WAIT_TIME", test.networkTotalWaitTime)
 		if GetNetworkTotalWaitTime() != test.result {
 			t.Errorf("expect %v but got %v", test.result, GetNetworkTotalWaitTime())
 		}
@@ -37,7 +36,7 @@ func TestGetNetworkIntervalTime(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		os.Setenv("NETWORK_PROBE_INTERVAL_TIME", test.networkIntervalTime)
+		t.Setenv("NETWORK_PROBE_INTERVAL_TIME", test.networkIntervalTime)
 		if GetNetworkIntervalTime() != test.result {
 			t.Errorf("expect %v but got %v", test.result, GetNetworkIntervalTime())
 		}

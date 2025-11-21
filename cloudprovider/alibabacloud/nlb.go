@@ -762,7 +762,7 @@ func nlbSpanAttrs(pod *corev1.Pod, extras ...attribute.KeyValue) []attribute.Key
 		tracing.AttrCloudProvider(tracing.CloudProviderAlibabaCloud),
 	}
 	if pod != nil && pod.Spec.NodeName != "" {
-		attrExtras = append(attrExtras, attribute.String("k8s.node.name", pod.Spec.NodeName))
+		attrExtras = append(attrExtras, tracing.AttrK8sNodeName(pod.Spec.NodeName))
 	}
 	attrExtras = append(attrExtras, extras...)
 	attrExtras = tracing.EnsureNetworkStatusAttr(attrExtras, "waiting")

@@ -402,7 +402,7 @@ func TestAllocateScatter(t *testing.T) {
 		}
 		results = append(results, lbId)
 	}
-	if !(results[0] != results[1] && results[0] == results[2] && results[1] == results[3]) {
+	if results[0] == results[1] || results[0] != results[2] || results[1] != results[3] {
 		t.Errorf("scatter allocate not round robin: %v", results)
 	}
 }

@@ -69,7 +69,7 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 	ctx, span := tracer.Start(ctx, tracing.SpanAdmissionMutatePod,
 		trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithAttributes(
-			attribute.String("k8s.namespace.name", req.Namespace),
+			tracing.AttrK8sNamespaceName(req.Namespace),
 			tracing.AttrGameServerName(req.Name),
 			attribute.String("admission.operation", string(req.Operation)),
 			tracing.AttrComponent("webhook"),
@@ -117,7 +117,7 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 				tracing.AttrGameServerSetNamespace(pod.GetNamespace()),
 			)
 		}
-		span.SetAttributes(attribute.String("k8s.namespace.name", pod.GetNamespace()))
+		span.SetAttributes(tracing.AttrK8sNamespaceName(pod.GetNamespace()))
 	}
 
 	initialNetworkStatus := deriveNetworkStatusLabel(ctx, pod)
@@ -135,7 +135,7 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 			span.AddLink(trace.Link{
 				SpanContext: remoteSpanContext,
 				Attributes: []attribute.KeyValue{
-					attribute.String("link.reason", "triggered_by_reconcile"),
+					tracing.AttrLinkReason("triggered_by_reconcile"),
 				},
 			})
 			logger.Info("Linked webhook span to reconcile trace", tracing.FieldTraceparent, traceparent)

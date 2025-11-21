@@ -194,7 +194,7 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	ctx, span := tracer.Start(ctx, tracing.SpanReconcileGameServerSet,
 		trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithAttributes(
-			attribute.String("k8s.namespace.name", namespacedName.Namespace),
+			tracing.AttrK8sNamespaceName(namespacedName.Namespace),
 			tracing.AttrGameServerSetNamespace(namespacedName.Namespace),
 			tracing.AttrGameServerSetName(namespacedName.Name),
 		))
@@ -225,7 +225,7 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	gsm := NewGameServerSetManager(gss, r.Client, r.recorder, logger)
 	// The serverless scenario PodProbeMarker takes effect during the Webhook phase, so need to create the PodProbeMarker in advance.
-	span.AddEvent("gameserverset.reconcile.sync_podprobemarker.start")
+	span.AddEvent(tracing.EventGameServerSetReconcileSyncPodProbeMarkerStart)
 	err, done := gsm.SyncPodProbeMarker(ctx)
 	if err != nil {
 		logger.Error(err, "failed to sync PodProbeMarker")
@@ -233,18 +233,18 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		span.SetStatus(codes.Error, "failed to sync PodProbeMarker")
 		return reconcile.Result{}, err
 	} else if !done {
-		span.AddEvent("gameserverset.reconcile.sync_podprobemarker.waiting")
+		span.AddEvent(tracing.EventGameServerSetReconcileSyncPodProbeMarkerWaiting)
 		span.SetAttributes(attribute.Bool("podprobemarker.synced", false))
 		return reconcile.Result{}, nil
 	}
-	span.AddEvent("gameserverset.reconcile.sync_podprobemarker.success")
+	span.AddEvent(tracing.EventGameServerSetReconcileSyncPodProbeMarkerSuccess)
 
 	// get advanced statefulset
 	asts := &kruiseV1beta1.StatefulSet{}
 	err = r.Get(ctx, namespacedName, asts)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			span.SetAttributes(attribute.String("reconcile.action", "create_statefulset"))
+			span.SetAttributes(tracing.AttrReconcileAction("create_statefulset"))
 			err = r.initAsts(ctx, gss)
 			if err != nil {
 				logger.Error(err, "failed to create Advanced StatefulSet")
@@ -287,12 +287,12 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	newReplicas := gsm.GetReplicasAfterKilling()
 	if *gss.Spec.Replicas != *newReplicas {
 		span.SetAttributes(
-			attribute.String("reconcile.action", "kill_gameservers"),
+			tracing.AttrReconcileAction("kill_gameservers"),
 			attribute.Int("replicas.old", int(*gss.Spec.Replicas)),
 			attribute.Int("replicas.new", int(*newReplicas)),
 		)
 		gss.Spec.Replicas = newReplicas
-		err = r.Client.Update(ctx, gss)
+		err = r.Update(ctx, gss)
 		if err != nil {
 			logger.Error(err, "failed to update replicas after kill")
 			span.RecordError(err)
@@ -305,7 +305,7 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// scale game servers
 	if gsm.IsNeedToScale() {
-		span.SetAttributes(attribute.String("reconcile.action", "scale_gameservers"))
+		span.SetAttributes(tracing.AttrReconcileAction("scale_gameservers"))
 		err = gsm.GameServerScale(ctx)
 		if err != nil {
 			logger.Error(err, "failed to scale GameServers")
@@ -319,7 +319,7 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// update workload
 	if gsm.IsNeedToUpdateWorkload() {
-		span.SetAttributes(attribute.String("reconcile.action", "update_workload"))
+		span.SetAttributes(tracing.AttrReconcileAction("update_workload"))
 		err = gsm.UpdateWorkload(ctx)
 		if err != nil {
 			logger.Error(err, "failed to update workload")
@@ -398,5 +398,5 @@ func (r *GameServerSetReconciler) initAsts(ctx context.Context, gss *gamekruisei
 
 	asts = util.GetNewAstsFromGss(gss.DeepCopy(), asts)
 
-	return r.Client.Create(ctx, asts)
+	return r.Create(ctx, asts)
 }

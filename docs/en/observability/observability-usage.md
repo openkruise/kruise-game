@@ -55,7 +55,7 @@ The controller manager binary already contains log, trace, and metric instrument
 **Operational tips**
 
 - Spans fall back to a no-op provider when OTLP dialing fails; the controller logs `Tracing initialization failed, using no-op tracer` in that case.
-- Search for traces & logs by attributes like `game.kruise.io.game_server.name`, `game.kruise.io.network.plugin.name`, `cloud.provider`, or `k8s.namespace.name`, you can find them at `pkg/tracing/attributes.go`.
+- Search for traces & logs by attributes like `game.kruise.io.game_server.name`, `game.kruise.io.network.plugin.name`, `cloud.provider`, or `k8s.namespace.name` (use `tracing.AttrK8sNamespaceName(ns)` or `tracing.FieldK8sNamespaceName`), you can find them at `pkg/tracing/attributes.go`.
 
 ## 4. Metrics
 
@@ -244,3 +244,94 @@ graph LR
 | Network plugin slowness | Check `okg_gameserver_network_ready_duration_seconds` (controller) and corresponding spanmetrics histograms for the same timeframe. Use exemplars to correlate spikes with specific traces. |
 
 Following this guide provides end-to-end visibility across controller reconciles, admission webhooks, and the cloud-provider networking layer with minimal configuration changes.
+
+
+
+## 7. Diagnosis Scenarios (Cookbook)
+
+This section demonstrates how to leverage the correlation between **Metrics**, **Traces**, and **Logs** to diagnose complex issues in OpenKruiseGame. We use real-world examples to show how to move from a high-level alert to the root cause.
+
+### Scenario 1: Debugging Network Plugin "Not Ready" Errors
+**Problem:** You observe a spike in the **Network Error Rate** dashboard, or users report that GameServers are taking longer than expected to reach the `Ready` state.
+
+**Investigation Steps:**
+
+1.  **Identify the Spike:**
+    Open the Grafana Dashboard. Locate the "Network Operation Status" or "Error Rate" panel. You notice a cluster of errors associated with the `kubernetes-hostport` plugin.
+    > **[Screenshot Placeholder]**
+    > *Action:* Capture the Grafana panel showing a red line/spike in error rate.
+    > *Highlight:* Hover over a data point to show the **Exemplar** (the small dot linking to a trace).
+
+2.  **Drill Down via Exemplar:**
+    Click on one of the **Exemplars** on the graph. This automatically opens the corresponding Trace ID in Tempo (or your tracing backend).
+    > **[Screenshot Placeholder]**
+    > *Action:* Capture the "Query with Tempo" button or the direct jump to the Trace view.
+
+3.  **Analyze Span Attributes:**
+    In the Trace view, identify the failed span (marked in red). In this example, the span `process hostport update` failed. Look at the **Attributes** panel on the right.
+    *   `game.kruise.io.network.internal_ports`: `1` (Correct)
+    *   `game.kruise.io.network.external_ports`: `1` (Correct)
+    *   `pod.ip`: `""` (Empty String)
+    > **[Screenshot Placeholder]**
+    > *Action:* Capture the Tempo trace view, highlighting the Attributes section where `pod.ip` is empty but ports are correct.
+
+4.  **Conclusion:**
+    The trace reveals that the Webhook was triggered **after** the Pod was scheduled (NodeName exists) but **before** the CNI plugin assigned an IP address.
+    *   **Verdict:** This is a transient issue caused by the timing difference between Kubelet updates and CNI operations. It will resolve automatically in the next retry.
+    *   **Why OTel shines here:** Without these attributes, you might waste time checking port configurations or Node status. The trace immediately pinpointed the *missing dependency* (Pod IP).
+
+
+### Scenario 2: Investigating Controller Race Conditions
+**Problem:** You see intermittent error logs regarding "StatefulSet already exists" during GameServerSet scaling, but the system seems to recover eventually. You want to understand if this is a logic bug.
+
+**Investigation Steps:**
+
+1.  **Isolate the Trace:**
+    Search for traces with `status=error` and `service.name=okg-controller-manager`. Open a trace that shows a short duration (e.g., < 20ms).
+    > **[Screenshot Placeholder]**
+    > *Action:* Capture a Trace timeline showing a very short, single red bar (fast fail).
+
+2.  **Correlate with Events & Logs:**
+    Click the failed span to expand details.
+    *   **Span Events:** You see an exception event: `statefulsets... "default-gss" already exists`.
+    *   **Logs:** Click the **"Logs for this span"** button. It jumps directly to the log line generated *during this specific request*.
+    > **[Screenshot Placeholder]**
+    > *Action:* Capture the detailed view showing the "Logs" tab or split screen with the error log: "failed to create Advanced StatefulSet".
+
+3.  **Root Cause Analysis:**
+    The log indicates the error occurred in the `initAsts` function.
+    *   **Logic Trace:** The code only enters `initAsts` (Creation) if the previous `Get` call returned `NotFound`.
+    *   **Conflict:** However, the Creation failed because the API Server reported it `AlreadyExists`.
+    > **[Screenshot Placeholder]**
+    > *Action:* (Optional) Capture the log line showing the specific code path (file/line number) provided by `otelzap`.
+
+4.  **Conclusion:**
+    This confirms a classic Kubernetes **Informer Cache Race Condition**. The local cache was stale (reporting "Not Found"), but the API Server had the latest state.
+    *   **Verdict:** Benign noise. The controller's retry mechanism handles this gracefully.
+    *   **Why OTel shines here:** The timeline view (19ms duration) visually confirms this is a **logic fast-fail**, ruling out network timeouts or slow API calls instantly.
+
+
+### Scenario 3: Contextual Log Analysis (Bottom-Up)
+**Problem:** You find a generic error log in your console or Loki (e.g., "failed to update workload") and need to know *which* GameServer caused it and *what* happened before.
+
+**Investigation Steps:**
+
+1.  **Locate the Log:**
+    In Grafana Explore (Loki), expand the log line. Notice the `trace_id` and `span_id` fields automatically injected by the OKG instrumentation.
+    > **[Screenshot Placeholder]**
+    > *Action:* Capture a log line in Loki expanded to show the `trace_id` field.
+
+2.  **Pivot to Trace:**
+    Click the **TraceID** link (or "Derived Field" button). This opens the full transaction history.
+    > **[Screenshot Placeholder]**
+    > *Action:* Capture the "Split View" where the log is on one side and the trace has opened on the other.
+
+3.  **Gain Context:**
+    Now you can see the **parent span**.
+    *   **Question:** Who triggered this update?
+    *   **Answer:** Look at the `game.kruise.io.game_server_set.name` attribute in the parent span.
+    *   **Question:** Did the previous steps (e.g., PodProbeMarker sync) succeed?
+    *   **Answer:** Yes, you can see the `sync_podprobemarker.success` event in the timeline *before* the error occurred.
+
+
+**Note:** The screenshots above demonstrate the standard workflow using Grafana, Tempo, and Loki, but the same principles apply to any OTel-compatible backend.

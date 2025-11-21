@@ -139,8 +139,8 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 			logger.Info("NodePort service missing, creating new service", tracing.FieldService, serviceKey, tracing.FieldPortCount, len(npc.ports))
 			_, createSpan := startNodePortSpan(ctx, tracer, tracing.SpanCreateNodePortService, pod,
 				tracing.AttrNetworkStatus("not_ready"),
-				attribute.String("service.name", pod.GetName()),
-				attribute.String("service.namespace", pod.GetNamespace()),
+				tracing.AttrServiceName(pod.GetName()),
+				tracing.AttrServiceNamespace(pod.GetNamespace()),
 				nodePortAttrServicePortCount.Int(len(npc.ports)),
 			)
 			defer createSpan.End()
@@ -200,7 +200,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 			tracing.FieldSelectorAfter, formatNodePortSelector(selectorAfter))
 		_, toggleSpan := startNodePortSpan(ctx, tracer, tracing.SpanToggleNodePortSelector, pod,
 			attribute.String("selector.action", "disable"),
-			attribute.String("service.name", svc.GetName()),
+			tracing.AttrServiceName(svc.GetName()),
 			nodePortAttrSelectorBeforeKey.String(formatNodePortSelector(selectorBefore)),
 			nodePortAttrSelectorAfterKey.String(formatNodePortSelector(selectorAfter)),
 			nodePortAttrAllowNotReadyKey.Bool(util.IsAllowNotReadyContainers(networkConfig)),
@@ -232,7 +232,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 			tracing.FieldSelectorAfter, formatNodePortSelector(selectorAfter))
 		_, toggleSpan := startNodePortSpan(ctx, tracer, tracing.SpanToggleNodePortSelector, pod,
 			attribute.String("selector.action", "enable"),
-			attribute.String("service.name", svc.GetName()),
+			tracing.AttrServiceName(svc.GetName()),
 			nodePortAttrSelectorBeforeKey.String(formatNodePortSelector(selectorBefore)),
 			nodePortAttrSelectorAfterKey.String(formatNodePortSelector(selectorAfter)),
 			nodePortAttrAllowNotReadyKey.Bool(util.IsAllowNotReadyContainers(networkConfig)),
@@ -474,7 +474,7 @@ func nodePortSpanAttrs(pod *corev1.Pod, extras ...attribute.KeyValue) []attribut
 		tracing.AttrCloudProvider(tracing.CloudProviderKubernetes),
 	}
 	if pod != nil && pod.Spec.NodeName != "" {
-		attrExtras = append(attrExtras, attribute.String("k8s.node.name", pod.Spec.NodeName))
+		attrExtras = append(attrExtras, tracing.AttrK8sNodeName(pod.Spec.NodeName))
 	}
 	attrExtras = append(attrExtras, extras...)
 	attrExtras = tracing.EnsureNetworkStatusAttr(attrExtras, "waiting")

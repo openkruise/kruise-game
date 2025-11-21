@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/observability/fields"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -72,8 +73,8 @@ const (
 	FieldInternalPorts                = "game.kruise.io.network.internal_ports"
 	FieldIteration                    = "game.kruise.io.test.iteration"
 	FieldKeys                         = "game.kruise.io.keys"
-	FieldK8sNamespaceName             = "k8s.namespace.name"
-	FieldK8sPodName                   = "k8s.pod.name"
+	FieldK8sNamespaceName             = fields.FieldK8sNamespaceName
+	FieldK8sPodName                   = fields.FieldK8sPodName
 	FieldLBID                         = "game.kruise.io.network.lb_id"
 	FieldManagedPods                  = "game.kruise.io.managed_pods"
 	FieldMaxPort                      = "game.kruise.io.network.max_port"
@@ -88,7 +89,7 @@ const (
 	FieldNewReserveIDs                = "game.kruise.io.gameserver_set.reserve_ids.new"
 	FieldNewUID                       = "game.kruise.io.uid.new"
 	FieldNodeIP                       = "k8s.node.ip"
-	FieldNodeNameQualified            = "k8s.node.name"
+	FieldNodeNameQualified            = fields.FieldK8sNodeName
 	FieldObservedGeneration           = "game.kruise.io.observed_generation"
 	FieldOldUID                       = "game.kruise.io.uid.old"
 	FieldOperation                    = "game.kruise.io.operation"
@@ -113,6 +114,8 @@ const (
 	FieldProvider                     = "cloud.provider"
 	FieldReclaimPolicy                = "game.kruise.io.reclaim_policy"
 	FieldReconcileTrigger             = "reconcile.trigger"
+	FieldReconcileAction              = "reconcile.action"
+	FieldReconcileRequeue             = "reconcile.requeue"
 	FieldRemaining                    = "game.kruise.io.remaining"
 	FieldReplicas                     = "game.kruise.io.replicas"
 	FieldRequestedPorts               = "game.kruise.io.network.requested_ports"
@@ -122,8 +125,8 @@ const (
 	FieldSelectorAfter                = "game.kruise.io.nodeport.selector.after"
 	FieldSelectorBefore               = "game.kruise.io.nodeport.selector.before"
 	FieldService                      = "game.kruise.io.service.key"
-	FieldServiceName                  = "service.name"
-	FieldServiceNamespace             = "service.namespace"
+	FieldServiceName                  = fields.FieldServiceName
+	FieldServiceNamespace             = fields.FieldServiceNamespace
 	FieldServiceQualities             = "game.kruise.io.service_qualities.count"
 	FieldServiceUID                   = "game.kruise.io.service.uid"
 	FieldSpanID                       = "span_id"
@@ -134,6 +137,7 @@ const (
 	FieldTargetDirectory              = "game.kruise.io.fs.target_directory"
 	FieldTraceID                      = "trace_id"
 	FieldTraceparent                  = "game.kruise.io.traceparent"
+	FieldLinkReason                   = "link.reason"
 	FieldTSDirectory                  = "game.kruise.io.fs.ts_directory"
 )
 
@@ -152,6 +156,10 @@ var (
 	cloudProviderKey          = attribute.Key("cloud.provider")
 	admissionRequestUIDKey    = attribute.Key(FieldAdmissionRequestUID)
 	reconcileTriggerKey       = attribute.Key(FieldReconcileTrigger)
+	reconcileActionKey        = attribute.Key(FieldReconcileAction)
+	linkReasonKey             = attribute.Key(FieldLinkReason)
+	k8sNamespaceKey           = attribute.Key(FieldK8sNamespaceName)
+	reconcileRequeueKey       = attribute.Key(FieldReconcileRequeue)
 )
 
 // CloudProvider represents the canonical OpenTelemetry enumeration values for cloud providers.
@@ -237,6 +245,21 @@ func AttrCloudProvider(provider CloudProvider) attribute.KeyValue {
 	return cloudProviderKey.String(string(provider))
 }
 
+// AttrReconcileAction returns a span attribute representing the current reconcile action (create_statefulset/kill_gameservers/scale_gameservers/update_workload/etc.).
+func AttrReconcileAction(action string) attribute.KeyValue {
+	return reconcileActionKey.String(action)
+}
+
+// AttrLinkReason returns an attribute describing the reason a trace Link was added
+func AttrLinkReason(reason string) attribute.KeyValue {
+	return linkReasonKey.String(reason)
+}
+
+// AttrReconcileRequeue returns a bool attribute to indicate whether reconcile will requeue.
+func AttrReconcileRequeue(requeue bool) attribute.KeyValue {
+	return reconcileRequeueKey.Bool(requeue)
+}
+
 // CloudProviderFromNetworkType maps a GameServer network-type annotation (e.g. "Kubernetes-HostPort")
 // to the canonical OpenTelemetry cloud.provider enumeration used in spanmetrics dimensions.
 func CloudProviderFromNetworkType(networkType string) (CloudProvider, bool) {
@@ -280,6 +303,31 @@ func AttrReconcileTrigger(trigger string) attribute.KeyValue {
 	return reconcileTriggerKey.String(trigger)
 }
 
+// AttrK8sPodName returns a span attribute for k8s.pod.name.
+func AttrK8sPodName(podName string) attribute.KeyValue {
+	return attribute.Key(FieldK8sPodName).String(podName)
+}
+
+// AttrK8sNodeName returns a span attribute for k8s.node.name.
+func AttrK8sNodeName(nodeName string) attribute.KeyValue {
+	return attribute.Key(FieldNodeNameQualified).String(nodeName)
+}
+
+// AttrServiceName returns a span attribute for service.name.
+func AttrServiceName(name string) attribute.KeyValue {
+	return attribute.Key(FieldServiceName).String(name)
+}
+
+// AttrServiceNamespace returns a span attribute for service.namespace.
+func AttrServiceNamespace(ns string) attribute.KeyValue {
+	return attribute.Key(FieldServiceNamespace).String(ns)
+}
+
+// AttrK8sNamespaceName returns a span attribute for k8s.namespace.name.
+func AttrK8sNamespaceName(namespace string) attribute.KeyValue {
+	return k8sNamespaceKey.String(namespace)
+}
+
 // AttrsForGameServer returns a slice of attributes covering GameServerSet and GameServer names.
 func AttrsForGameServer(gssName, gsName string) []attribute.KeyValue {
 	attrs := make([]attribute.KeyValue, 0, 2)
@@ -304,7 +352,7 @@ func BaseNetworkAttrs(component, pluginName string, pod *corev1.Pod, extras ...a
 	if pod != nil {
 		if ns := pod.GetNamespace(); ns != "" {
 			attrs = append(attrs,
-				attribute.String("k8s.namespace.name", ns),
+				AttrK8sNamespaceName(ns),
 				AttrGameServerSetNamespace(ns),
 				AttrGameServerNamespace(ns),
 			)

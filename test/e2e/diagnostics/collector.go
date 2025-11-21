@@ -157,7 +157,9 @@ func (ac *ArtifactCollector) collectK8sResources() error {
 			for i := range gssList.Items {
 				gss := &gssList.Items[i]
 				filename := fmt.Sprintf("gameserverset-%s.yaml", gss.Name)
-				ac.saveResourceYAML(filepath.Join(resourcesDir, filename), gss)
+				if err := ac.saveResourceYAML(filepath.Join(resourcesDir, filename), gss); err != nil {
+					fmt.Printf("Warning: failed to save GameServerSet %s: %v\n", gss.Name, err)
+				}
 			}
 		}
 	}
@@ -167,13 +169,17 @@ func (ac *ArtifactCollector) collectK8sResources() error {
 		LabelSelector: ac.getLabelSelector(),
 	})
 	if err == nil {
-		ac.saveResourceYAML(filepath.Join(resourcesDir, "pods.yaml"), podList)
+		if err := ac.saveResourceYAML(filepath.Join(resourcesDir, "pods.yaml"), podList); err != nil {
+			fmt.Printf("Warning: failed to save pods list: %v\n", err)
+		}
 
 		// Also save detailed pod info including annotations
 		for i := range podList.Items {
 			pod := &podList.Items[i]
 			filename := fmt.Sprintf("pod-%s.yaml", pod.Name)
-			ac.saveResourceYAML(filepath.Join(resourcesDir, filename), pod)
+			if err := ac.saveResourceYAML(filepath.Join(resourcesDir, filename), pod); err != nil {
+				fmt.Printf("Warning: failed to save pod %s: %v\n", pod.Name, err)
+			}
 		}
 	}
 
@@ -182,7 +188,9 @@ func (ac *ArtifactCollector) collectK8sResources() error {
 		LabelSelector: ac.getLabelSelector(),
 	})
 	if err == nil {
-		ac.saveResourceYAML(filepath.Join(resourcesDir, "services.yaml"), svcList)
+		if err := ac.saveResourceYAML(filepath.Join(resourcesDir, "services.yaml"), svcList); err != nil {
+			fmt.Printf("Warning: failed to save services list: %v\n", err)
+		}
 	}
 
 	// Collect Events
@@ -192,13 +200,16 @@ func (ac *ArtifactCollector) collectK8sResources() error {
 		filteredEvents := &corev1.EventList{
 			Items: []corev1.Event{},
 		}
+		start := ac.testContext.StartTime
+		end := ac.testContext.EndTime.Add(5 * time.Second)
 		for _, event := range eventList.Items {
-			if event.LastTimestamp.Time.After(ac.testContext.StartTime) &&
-				event.LastTimestamp.Time.Before(ac.testContext.EndTime.Add(5*time.Second)) {
+			if event.LastTimestamp.Time.After(start) && event.LastTimestamp.Time.Before(end) {
 				filteredEvents.Items = append(filteredEvents.Items, event)
 			}
 		}
-		ac.saveResourceYAML(filepath.Join(resourcesDir, "events.yaml"), filteredEvents)
+		if err := ac.saveResourceYAML(filepath.Join(resourcesDir, "events.yaml"), filteredEvents); err != nil {
+			fmt.Printf("Warning: failed to save events list: %v\n", err)
+		}
 	}
 
 	return nil
@@ -295,15 +306,15 @@ func (ac *ArtifactCollector) collectPodLogs() error {
 		// Write logs to file
 		logFile, err := os.Create(logPath)
 		if err != nil {
-			logStream.Close()
+			_ = logStream.Close()
 			fmt.Printf("ERROR: failed to create log file %s: %v\n", logPath, err)
 			continue
 		}
 
 		// Copy log stream to file
 		bytesWritten, err := logFile.ReadFrom(logStream)
-		logStream.Close()
-		logFile.Close()
+		_ = logStream.Close()
+		_ = logFile.Close()
 
 		if err != nil {
 			fmt.Printf("ERROR: failed to write logs for pod %s: %v\n", pod.Name, err)

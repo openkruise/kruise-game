@@ -543,7 +543,7 @@ func RunKubernetesPluginTracingTest(f *framework.Framework) {
 			}
 
 			ginkgo.By("Step 7: Searching for additional traces to verify continuous export")
-			searchResult, err := f.SearchTracesInTempo("okg-controller-manager", 0, 10, traceFilters, 0, 0)
+			searchResult, err := f.SearchTracesInTempo(context.Background(), "okg-controller-manager", 0, 10, traceFilters, 0, 0)
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 			gomega.Expect(searchResult.Traces).NotTo(gomega.BeEmpty(),
 				"should find multiple traces from controller")
@@ -695,7 +695,7 @@ func RunKubernetesPluginTracingTest(f *framework.Framework) {
 			foundName := false
 			for _, span := range controllerSpans {
 				for key, value := range span.Tags {
-					if key == "k8s.namespace.name" {
+					if key == tracing.FieldK8sNamespaceName {
 						foundNamespace = true
 						ginkgo.By(fmt.Sprintf("  ✓ k8s.namespace.name = %v", value))
 					}

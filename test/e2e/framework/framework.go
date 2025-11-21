@@ -228,7 +228,7 @@ func (f *Framework) collectTempoTraces(verbose bool) {
 	if gss := f.GameServerSetName(); gss != "" {
 		filters["game.kruise.io.game_server_set.name"] = gss
 	}
-	result, err := f.SearchTracesInTempo("okg-controller-manager", 0, 500, filters, startSec, endSec)
+	result, err := f.SearchTracesInTempo(context.Background(), "okg-controller-manager", 0, 500, filters, startSec, endSec)
 	if err != nil {
 		fmt.Printf("Warning: failed to query Tempo traces: %v\n", err)
 		return
@@ -538,19 +538,35 @@ func (f *Framework) WaitForTempoReady(timeout time.Duration) error {
 
 	err := wait.PollUntilContextTimeout(context.TODO(), 2*time.Second, timeout, true,
 		func(ctx context.Context) (done bool, err error) {
-			resp, err := http.Get(healthURL)
+			// Build the request using the polling context so the HTTP call can be canceled
+			// when the overall wait times out.
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
+			if err != nil {
+				tempoDebugf("  [Tempo] Failed to build health request (will retry): %v\n", err)
+				return false, nil
+			}
+
+			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				tempoDebugf("  [Tempo] Health check failed (will retry): %v\n", err)
 				return false, nil
 			}
-			defer resp.Body.Close()
+			// Close the body immediately before returning to avoid leaking file descriptors
+			// across each Poll iteration.
+			closeResp := func() {
+				if resp.Body != nil {
+					_ = resp.Body.Close()
+				}
+			}
 
 			if resp.StatusCode == http.StatusOK {
+				closeResp()
 				tempoDebugf("  [Tempo] ✓ Tempo is ready (status: %d)\n", resp.StatusCode)
 				return true, nil
 			}
 
 			tempoDebugf("  [Tempo] Tempo not ready yet (status: %d, will retry)\n", resp.StatusCode)
+			closeResp()
 			return false, nil
 		})
 
@@ -566,7 +582,7 @@ func (f *Framework) WaitForTempoReady(timeout time.Duration) error {
 // minDuration: minimum trace duration in milliseconds (0 = no filter)
 // limit: maximum number of traces to return (default 20)
 // startNano/endNano: optional Unix nano time window (0 = not set)
-func (f *Framework) SearchTracesInTempo(serviceName string, minDuration int, limit int, filters map[string]string, startSec, endSec int64) (*TempoSearchResult, error) {
+func (f *Framework) SearchTracesInTempo(ctx context.Context, serviceName string, minDuration int, limit int, filters map[string]string, startSec, endSec int64) (*TempoSearchResult, error) {
 	if limit == 0 {
 		limit = 20
 	}
@@ -586,15 +602,19 @@ func (f *Framework) SearchTracesInTempo(serviceName string, minDuration int, lim
 	tempoDebugf("  [Tempo] Querying: %s\n", query)
 	tempoDebugf("  [Tempo] Using Tempo URL: %s (from env: %s)\n", tempoURL, os.Getenv("TEMPO_URL"))
 
-	resp, err := http.Get(query)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, query, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build tempo query request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query Tempo at %s: %w", query, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Tempo API returned status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("tempo API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result TempoSearchResult
@@ -670,7 +690,7 @@ func (f *Framework) fetchAndParseOTelProtobuf(url string, traceID string) (*trac
 	if err != nil {
 		return nil, fmt.Errorf("failed to get trace: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -723,7 +743,7 @@ func (f *Framework) WaitForTraceInTempo(serviceName string, operationName string
 			attemptCount++
 			tempoDebugf("  [Tempo] Attempt #%d\n", attemptCount)
 
-			result, err := f.SearchTracesInTempo(serviceName, 0, 50, filters, 0, 0)
+			result, err := f.SearchTracesInTempo(ctx, serviceName, 0, 50, filters, 0, 0)
 			if err != nil {
 				lastErr = err
 				tempoDebugf("  [Tempo] Search error (will retry): %v\n", err)
@@ -788,11 +808,11 @@ func (f *Framework) QueryLogsInLoki(query string, start, end int64) ([]byte, err
 	if err != nil {
 		return nil, fmt.Errorf("failed to query Loki: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Loki API returned status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("loki API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	return io.ReadAll(resp.Body)
@@ -1264,7 +1284,7 @@ func (f *Framework) WaitForPodOpsStateOrDeleted(gsName string, opsState string) 
 				lastPodPhase = string(pod.Status.Phase)
 				lastPodUID = string(pod.UID)
 				if pod.DeletionTimestamp != nil {
-					lastDeletionTimestamp = pod.DeletionTimestamp.Time.Format(time.RFC3339)
+					lastDeletionTimestamp = pod.DeletionTimestamp.Format(time.RFC3339)
 				} else {
 					lastDeletionTimestamp = "<nil>"
 				}

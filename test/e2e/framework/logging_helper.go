@@ -254,7 +254,7 @@ func CollectManagerLogs(ctx context.Context, kube clientset.Interface, ns string
 	if err != nil {
 		return fmt.Errorf("create output file %s: %w", outPath, err)
 	}
-	defer outFile.Close()
+	defer func() { _ = outFile.Close() }()
 
 	sinceSeconds := int64(since.Seconds())
 	for _, pod := range pods.Items {
@@ -264,13 +264,13 @@ func CollectManagerLogs(ctx context.Context, kube clientset.Interface, ns string
 		stream, err := req.Stream(ctx)
 		if err != nil {
 			// Log error but continue with other pods
-			fmt.Fprintf(outFile, "# Error getting logs for pod %s: %v\n", pod.Name, err)
+			_, _ = fmt.Fprintf(outFile, "# Error getting logs for pod %s: %v\n", pod.Name, err)
 			continue
 		}
-		fmt.Fprintf(outFile, "# Logs from pod: %s\n", pod.Name)
+		_, _ = fmt.Fprintf(outFile, "# Logs from pod: %s\n", pod.Name)
 		_, _ = io.Copy(outFile, stream)
-		stream.Close()
-		fmt.Fprintln(outFile) // blank line between pods
+		_ = stream.Close()
+		_, _ = fmt.Fprintln(outFile) // blank line between pods
 	}
 	return nil
 }

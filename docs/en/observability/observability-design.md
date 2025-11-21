@@ -29,7 +29,7 @@ To solve this, OKG uses a **Span Link** pattern:
 ### Attributes
 
 We adhere to OTel Semantic Conventions where possible:
-*   `k8s.namespace.name`
+*   `k8s.namespace.name` (use `tracing.AttrK8sNamespaceName(namespace)` or `tracing.FieldK8sNamespaceName`)
 *   `k8s.pod.name`
 *   `service.name` (default: `okg-controller-manager`)
 

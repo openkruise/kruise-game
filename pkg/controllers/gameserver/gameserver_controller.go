@@ -210,7 +210,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	ctx, span := tracer.Start(ctx, tracing.SpanReconcileGameServer,
 		trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithAttributes(
-			attribute.String("k8s.namespace.name", namespacedName.Namespace),
+			tracing.AttrK8sNamespaceName(namespacedName.Namespace),
 			tracing.AttrGameServerNamespace(namespacedName.Namespace),
 			tracing.AttrGameServerName(namespacedName.Name),
 		))
@@ -278,7 +278,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	if podFound && !gsFound {
 		span.SetAttributes(tracing.AttrReconcileTrigger("create"))
-		span.AddEvent("gameserver.reconcile.bootstrap",
+		span.AddEvent(tracing.EventGameServerReconcileBootstrap,
 			trace.WithAttributes(
 				attribute.String("action", "init gameserver from pod"),
 				attribute.String("pod.uid", string(pod.GetUID())),
@@ -301,7 +301,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			span.SetStatus(codes.Error, "failed to create GameServer")
 			return reconcile.Result{}, err
 		}
-		span.AddEvent("gameserver.reconcile.gameserver_initialized",
+		span.AddEvent(tracing.EventGameServerReconcileGameServerInitialized,
 			trace.WithAttributes(
 				tracing.AttrGameServerName(pod.GetName()),
 				attribute.String("gss", gss.GetName()),
@@ -312,13 +312,13 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if !podFound {
 		span.SetAttributes(tracing.AttrReconcileTrigger("delete"))
 		shouldDelete := gsFound && gs.GetLabels()[gamekruiseiov1alpha1.GameServerDeletingKey] == "true"
-		span.AddEvent("gameserver.reconcile.cleanup",
+		span.AddEvent(tracing.EventGameServerReconcileCleanup,
 			trace.WithAttributes(
 				tracing.AttrGameServerName(namespacedName.Name),
 				attribute.Bool("markedForDeletion", shouldDelete),
 			))
 		if shouldDelete {
-			err := r.Client.Delete(ctx, gs)
+			err := r.Delete(ctx, gs)
 			if err != nil && !errors.IsNotFound(err) {
 				logger.Error(err, "failed to delete GameServer",
 					tracing.FieldGameServerNamespace, namespacedName.Namespace,
@@ -335,7 +335,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	gsm := NewGameServerManager(gs, pod, r.Client, r.recorder, logger)
 
-	span.AddEvent("gameserver.reconcile.manager_ready",
+	span.AddEvent(tracing.EventGameServerReconcileManagerReady,
 		trace.WithAttributes(
 			tracing.AttrGameServerName(gs.GetName()),
 			attribute.String("pod.uid", string(pod.GetUID())),
@@ -353,7 +353,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return reconcile.Result{}, err
 	}
 
-	span.AddEvent("gameserver.reconcile.sync_gs_to_pod.start",
+	span.AddEvent(tracing.EventGameServerReconcileSyncGsToPodStart,
 		trace.WithAttributes(
 			tracing.AttrGameServerSetName(gss.GetName()),
 			tracing.AttrGameServerName(gs.GetName()),
@@ -364,13 +364,13 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		span.SetStatus(codes.Error, "SyncGsToPod failed")
 		return reconcile.Result{RequeueAfter: 3 * time.Second}, err
 	}
-	span.AddEvent("gameserver.reconcile.sync_gs_to_pod.success",
+	span.AddEvent(tracing.EventGameServerReconcileSyncGsToPodSuccess,
 		trace.WithAttributes(
 			attribute.Int("pod.label.count", len(pod.GetLabels())),
 			attribute.Int("pod.annotation.count", len(pod.GetAnnotations())),
 		))
 
-	span.AddEvent("gameserver.reconcile.sync_pod_to_gs.start",
+	span.AddEvent(tracing.EventGameServerReconcileSyncPodToGsStart,
 		trace.WithAttributes(
 			tracing.AttrGameServerSetName(gss.GetName()),
 			tracing.AttrGameServerName(gs.GetName()),
@@ -381,18 +381,18 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		span.SetStatus(codes.Error, "SyncPodToGs failed")
 		return reconcile.Result{}, err
 	}
-	span.AddEvent("gameserver.reconcile.sync_pod_to_gs.success",
+	span.AddEvent(tracing.EventGameServerReconcileSyncPodToGsSuccess,
 		trace.WithAttributes(
 			attribute.String("gameserver.resourceVersion", gs.ResourceVersion),
 		))
 
 	if gsm.WaitOrNot() {
-		span.AddEvent("gameserver.reconcile.wait_network_state",
+		span.AddEvent(tracing.EventGameServerReconcileWaitNetworkState,
 			trace.WithAttributes(
 				attribute.String(tracing.FieldDesired, string(gs.Status.NetworkStatus.DesiredNetworkState)),
 				attribute.String(tracing.FieldCurrent, string(gs.Status.NetworkStatus.CurrentNetworkState)),
 			))
-		span.SetAttributes(attribute.Bool("reconcile.requeue", true))
+		span.SetAttributes(tracing.AttrReconcileRequeue(true))
 		return ctrl.Result{RequeueAfter: NetworkIntervalTime}, nil
 	}
 
@@ -410,7 +410,7 @@ func (r *GameServerReconciler) SetupWithManager(mgr ctrl.Manager) (c controller.
 func (r *GameServerReconciler) getGameServerSet(ctx context.Context, pod *corev1.Pod) (*gamekruiseiov1alpha1.GameServerSet, error) {
 	gssName := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]
 	gss := &gamekruiseiov1alpha1.GameServerSet{}
-	err := r.Client.Get(ctx, types.NamespacedName{
+	err := r.Get(ctx, types.NamespacedName{
 		Namespace: pod.GetNamespace(),
 		Name:      gssName,
 	}, gss)
@@ -436,5 +436,5 @@ func (r *GameServerReconciler) initGameServerByPod(ctx context.Context, gss *gam
 		gs.OwnerReferences = ors
 	}
 
-	return r.Client.Create(ctx, gs)
+	return r.Create(ctx, gs)
 }

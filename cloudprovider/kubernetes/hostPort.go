@@ -474,7 +474,7 @@ func hostPortSpanAttrs(pod *corev1.Pod, extras ...attribute.KeyValue) []attribut
 		tracing.AttrCloudProvider(tracing.CloudProviderKubernetes),
 	}
 	if pod != nil && pod.Spec.NodeName != "" {
-		attrExtras = append(attrExtras, attribute.String("k8s.node.name", pod.Spec.NodeName))
+		attrExtras = append(attrExtras, tracing.AttrK8sNodeName(pod.Spec.NodeName))
 	}
 	attrExtras = append(attrExtras, extras...)
 	attrExtras = tracing.EnsureNetworkStatusAttr(attrExtras, "waiting")

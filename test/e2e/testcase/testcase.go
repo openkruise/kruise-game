@@ -273,7 +273,7 @@ func RunTestCases(f *framework.Framework) {
 			// 3. Wait for controller to backfill reserve into GSS (both spec and annotation contain 3 and 4)
 			err = f.WaitForGss(func(g *gameKruiseV1alpha1.GameServerSet) (bool, error) {
 				rset := util.GetReserveOrdinalIntSet(g.Spec.ReserveGameServerIds)
-				if rset == nil || !(rset.Has(3) && rset.Has(4)) {
+				if rset == nil || !rset.Has(3) || !rset.Has(4) {
 					return false, nil
 				}
 				ann := g.GetAnnotations()[gameKruiseV1alpha1.GameServerSetReserveIdsKey]
