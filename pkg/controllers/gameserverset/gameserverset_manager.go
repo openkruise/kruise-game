@@ -27,7 +27,6 @@ import (
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	"github.com/openkruise/kruise-game/pkg/tracing"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -40,6 +39,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"github.com/openkruise/kruise-game/pkg/util"
 )
 
@@ -122,7 +122,7 @@ func (manager *GameServerSetManager) GetReplicasAfterKilling() *int32 {
 		}
 	}
 
-	manager.logger.Info("GameServerSet will kill GameServers", tracing.FieldCount, toKill)
+	manager.logger.Info("GameServerSet will kill GameServers", telemetryfields.FieldCount, toKill)
 	return ptr.To[int32](*gss.Spec.Replicas - int32(toKill))
 }
 
@@ -157,22 +157,22 @@ func (manager *GameServerSetManager) GameServerScale(ctx context.Context) error 
 	gssSpecReservedIds := util.GetReserveOrdinalIntSet(gss.Spec.ReserveGameServerIds)
 
 	logger.Info("Scaling GameServers",
-		tracing.FieldCurrentReplicas, currentReplicas,
-		tracing.FieldExpectedReplicas, expectedReplicas,
-		tracing.FieldReserveIDsSpec, sortedOrdinals(gssSpecReservedIds),
-		tracing.FieldReserveIDsAnnotation, sortedOrdinals(gssAnnotationsReservedIds),
-		tracing.FieldReserveIDsImplicit, sortedOrdinals(astsImplicitReservedIds),
-		tracing.FieldStrategyScaleDown, gss.Spec.ScaleStrategy.ScaleDownStrategyType,
-		tracing.FieldStrategyMaxUnavailable, gss.Spec.ScaleStrategy.MaxUnavailable,
-		tracing.FieldReclaimPolicy, gss.Spec.GameServerTemplate.ReclaimPolicy,
-		tracing.FieldPodCount, len(podList))
+		telemetryfields.FieldCurrentReplicas, currentReplicas,
+		telemetryfields.FieldExpectedReplicas, expectedReplicas,
+		telemetryfields.FieldReserveIDsSpec, sortedOrdinals(gssSpecReservedIds),
+		telemetryfields.FieldReserveIDsAnnotation, sortedOrdinals(gssAnnotationsReservedIds),
+		telemetryfields.FieldReserveIDsImplicit, sortedOrdinals(astsImplicitReservedIds),
+		telemetryfields.FieldStrategyScaleDown, gss.Spec.ScaleStrategy.ScaleDownStrategyType,
+		telemetryfields.FieldStrategyMaxUnavailable, gss.Spec.ScaleStrategy.MaxUnavailable,
+		telemetryfields.FieldReclaimPolicy, gss.Spec.GameServerTemplate.ReclaimPolicy,
+		telemetryfields.FieldPodCount, len(podList))
 	manager.eventRecorder.Eventf(gss, corev1.EventTypeNormal, ScaleReason, "scale from %d to %d", currentReplicas, expectedReplicas)
 
 	newManageIds, newReserveIds := computeToScaleGs(gssSpecReservedIds, gssAnnotationsReservedIds, astsImplicitReservedIds, expectedReplicas, podList)
 	logger.Info("Scale plan computed",
-		tracing.FieldNewReserveIDs, sortedOrdinals(newReserveIds),
-		tracing.FieldNewManageIDs, sortedOrdinals(newManageIds),
-		tracing.FieldManagedPods, len(newManageIds))
+		telemetryfields.FieldNewReserveIDs, sortedOrdinals(newReserveIds),
+		telemetryfields.FieldNewManageIDs, sortedOrdinals(newManageIds),
+		telemetryfields.FieldManagedPods, len(newManageIds))
 
 	if gss.Spec.GameServerTemplate.ReclaimPolicy == gameKruiseV1alpha1.DeleteGameServerReclaimPolicy {
 		err := SyncGameServer(ctx, logger, gss, c, newManageIds, util.GetIndexSetFromPodList(podList))
@@ -298,8 +298,8 @@ func SyncGameServer(ctx context.Context, logger logr.Logger, gss *gameKruiseV1al
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	gsLogger := logger.WithValues(
-		tracing.FieldGameServerSetNamespace, gss.Namespace,
-		tracing.FieldGameServerSetName, gss.Name,
+		telemetryfields.FieldGameServerSetNamespace, gss.Namespace,
+		telemetryfields.FieldGameServerSetName, gss.Name,
 	)
 
 	addIds := util.GetSetInANotInB(newManageIds, oldManageIds)
@@ -342,7 +342,7 @@ func SyncGameServer(ctx context.Context, logger logr.Logger, gss *gameKruiseV1al
 					errch <- err
 					return
 				}
-				gsLogger.Info("Reset GameServer deleting key", tracing.FieldGameServerName, gsName)
+				gsLogger.Info("Reset GameServer deleting key", telemetryfields.FieldGameServerName, gsName)
 			}
 
 			if deleteIds.Has(id) && gs.GetLabels()[gameKruiseV1alpha1.GameServerDeletingKey] != "true" {
@@ -359,7 +359,7 @@ func SyncGameServer(ctx context.Context, logger logr.Logger, gss *gameKruiseV1al
 					errch <- err
 					return
 				}
-				gsLogger.Info("Mark GameServer deleting", tracing.FieldGameServerName, gsName)
+				gsLogger.Info("Mark GameServer deleting", telemetryfields.FieldGameServerName, gsName)
 			}
 
 		}(ctx)
@@ -389,11 +389,11 @@ func (manager *GameServerSetManager) UpdateWorkload(ctx context.Context) error {
 	}
 	newHash := util.GetAstsHash(manager.gameServerSet)
 	logger.Info("Updating Advanced StatefulSet from GameServerSet",
-		tracing.FieldHashOld, oldHash,
-		tracing.FieldHashNew, newHash,
-		tracing.FieldServiceName, gss.Spec.ServiceName,
-		tracing.FieldPodTemplateRevision, gss.Spec.GameServerTemplate.ResourceVersion,
-		tracing.FieldReplicas, ptr.Deref(gss.Spec.Replicas, 0))
+		telemetryfields.FieldHashOld, oldHash,
+		telemetryfields.FieldHashNew, newHash,
+		telemetryfields.FieldServiceName, gss.Spec.ServiceName,
+		telemetryfields.FieldPodTemplateRevision, gss.Spec.GameServerTemplate.ResourceVersion,
+		telemetryfields.FieldReplicas, ptr.Deref(gss.Spec.Replicas, 0))
 
 	// sync with Advanced StatefulSet
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -429,9 +429,9 @@ func (manager *GameServerSetManager) SyncPodProbeMarker(ctx context.Context) (er
 			manager.eventRecorder.Event(gss, corev1.EventTypeNormal, CreatePPMReason, "create PodProbeMarker")
 			ppm = createPpm(gss)
 			logger.Info("Creating PodProbeMarker",
-				tracing.FieldPodProbeMarker, ppm.Name,
-				tracing.FieldServiceQualities, len(sqs),
-				tracing.FieldHash, util.GetHash(gss.Spec.ServiceQualities))
+				telemetryfields.FieldPodProbeMarker, ppm.Name,
+				telemetryfields.FieldServiceQualities, len(sqs),
+				telemetryfields.FieldHash, util.GetHash(gss.Spec.ServiceQualities))
 			return c.Create(ctx, ppm), false
 		}
 		return err, false
@@ -439,7 +439,7 @@ func (manager *GameServerSetManager) SyncPodProbeMarker(ctx context.Context) (er
 
 	// delete ppm
 	if sqs == nil {
-		logger.Info("Deleting PodProbeMarker because ServiceQualities is empty", tracing.FieldPodProbeMarker, ppm.Name)
+		logger.Info("Deleting PodProbeMarker because ServiceQualities is empty", telemetryfields.FieldPodProbeMarker, ppm.Name)
 		return c.Delete(ctx, ppm), false
 	}
 
@@ -452,19 +452,19 @@ func (manager *GameServerSetManager) SyncPodProbeMarker(ctx context.Context) (er
 		by, _ := json.Marshal(ppm.Spec.Probes)
 		manager.eventRecorder.Event(gss, corev1.EventTypeNormal, UpdatePPMReason, "update PodProbeMarker")
 		logger.Info("Updating PodProbeMarker",
-			tracing.FieldPodProbeMarker, ppm.Name,
-			tracing.FieldServiceQualities, len(sqs),
-			tracing.FieldHashOld, hashOld,
-			tracing.FieldHashNew, hashNew,
-			tracing.FieldBody, string(by))
+			telemetryfields.FieldPodProbeMarker, ppm.Name,
+			telemetryfields.FieldServiceQualities, len(sqs),
+			telemetryfields.FieldHashOld, hashOld,
+			telemetryfields.FieldHashNew, hashNew,
+			telemetryfields.FieldBody, string(by))
 		return c.Update(ctx, ppm), false
 	}
 	// Determine PodProbeMarker Status to ensure that PodProbeMarker resources have been processed by kruise-manager
 	if ppm.Generation != ppm.Status.ObservedGeneration {
 		logger.Info("PodProbeMarker observedGeneration inconsistent, waiting",
-			tracing.FieldPodProbeMarker, ppm.Name,
-			tracing.FieldGeneration, ppm.Generation,
-			tracing.FieldObservedGeneration, ppm.Status.ObservedGeneration)
+			telemetryfields.FieldPodProbeMarker, ppm.Name,
+			telemetryfields.FieldGeneration, ppm.Generation,
+			telemetryfields.FieldObservedGeneration, ppm.Status.ObservedGeneration)
 		return nil, false
 	}
 	return nil, true

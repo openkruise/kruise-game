@@ -29,6 +29,7 @@ import (
 	"github.com/openkruise/kruise-game/cloudprovider/errors"
 	"github.com/openkruise/kruise-game/cloudprovider/manager"
 	"github.com/openkruise/kruise-game/pkg/logging"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"github.com/openkruise/kruise-game/pkg/tracing"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -81,12 +82,12 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 	reqUID := string(req.UID)
 	gvk := fmt.Sprintf("%s/%s/%s", req.Kind.Group, req.Kind.Version, req.Kind.Kind)
 	logger := logging.FromContextWithTrace(ctx).WithValues(
-		tracing.FieldComponent, "webhook",
-		tracing.FieldWebhookHandler, webhookHandlerMutatingPod,
+		telemetryfields.FieldComponent, "webhook",
+		telemetryfields.FieldWebhookHandler, webhookHandlerMutatingPod,
 		"admission.operation", op,
-		tracing.FieldK8sNamespaceName, req.Namespace,
-		tracing.FieldAdmissionRequestUID, reqUID,
-		tracing.FieldAdmissionResource, gvk,
+		telemetryfields.FieldK8sNamespaceName, req.Namespace,
+		telemetryfields.FieldAdmissionRequestUID, reqUID,
+		telemetryfields.FieldAdmissionResource, gvk,
 	)
 	span.SetAttributes(tracing.AttrAdmissionRequestUID(reqUID))
 	ctx = logr.NewContext(ctx, logger)
@@ -102,15 +103,15 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 
 	if pod != nil {
 		logger = logger.WithValues(
-			tracing.FieldGameServerNamespace, pod.GetNamespace(),
-			tracing.FieldGameServerName, pod.GetName(),
+			telemetryfields.FieldGameServerNamespace, pod.GetNamespace(),
+			telemetryfields.FieldGameServerName, pod.GetName(),
 		)
 		span.SetAttributes(tracing.AttrGameServerName(pod.GetName()))
 		span.SetAttributes(tracing.AttrGameServerNamespace(pod.GetNamespace()))
 		if gssName := pod.GetLabels()[gameKruiseV1alpha1.GameServerOwnerGssKey]; gssName != "" {
 			logger = logger.WithValues(
-				tracing.FieldGameServerSetNamespace, pod.GetNamespace(),
-				tracing.FieldGameServerSetName, gssName,
+				telemetryfields.FieldGameServerSetNamespace, pod.GetNamespace(),
+				telemetryfields.FieldGameServerSetName, gssName,
 			)
 			span.SetAttributes(
 				tracing.AttrGameServerSetName(gssName),
@@ -130,7 +131,7 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 	if traceparent, ok := pod.Annotations["game.kruise.io/traceparent"]; ok {
 		remoteSpanContext, err := tracing.ParseTraceparent(traceparent)
 		if err != nil {
-			logger.Error(err, "Failed to parse traceparent from pod annotation", tracing.FieldTraceparent, traceparent)
+			logger.Error(err, "Failed to parse traceparent from pod annotation", telemetryfields.FieldTraceparent, traceparent)
 		} else {
 			span.AddLink(trace.Link{
 				SpanContext: remoteSpanContext,
@@ -138,7 +139,7 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 					tracing.AttrLinkReason("triggered_by_reconcile"),
 				},
 			})
-			logger.Info("Linked webhook span to reconcile trace", tracing.FieldTraceparent, traceparent)
+			logger.Info("Linked webhook span to reconcile trace", telemetryfields.FieldTraceparent, traceparent)
 		}
 	}
 
@@ -154,28 +155,28 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 	}
 
 	// get the plugin according to pod
-	logger.V(4).Info("Processing webhook request", tracing.FieldAnnotations, pod.Annotations)
+	logger.V(4).Info("Processing webhook request", telemetryfields.FieldAnnotations, pod.Annotations)
 
 	// List all available plugins for debugging
 	availablePlugins := []string{}
 	for _, cp := range pmh.CloudProviderManager.CloudProviders {
 		plugins, err := cp.ListPlugins()
 		if err != nil {
-			logger.Error(err, "Cloud provider failed to list plugins", tracing.FieldProvider, cp.Name())
+			logger.Error(err, "Cloud provider failed to list plugins", telemetryfields.FieldProvider, cp.Name())
 			continue
 		}
 		for _, p := range plugins {
 			availablePlugins = append(availablePlugins, p.Name())
 		}
 	}
-	logger.V(4).Info("Available plugins", tracing.FieldPlugins, availablePlugins)
+	logger.V(4).Info("Available plugins", telemetryfields.FieldPlugins, availablePlugins)
 
 	plugin, ok := pmh.CloudProviderManager.FindAvailablePlugins(pod)
 	if !ok {
 		networkType, hasNetworkType := pod.Annotations[gameKruiseV1alpha1.GameServerNetworkType]
 		msg := fmt.Sprintf("Pod %s/%s has no available plugin (network-type annotation: %s=%v, available plugins: %v)",
 			pod.Namespace, pod.Name, networkType, hasNetworkType, availablePlugins)
-		logger.Info("No available network plugin", tracing.FieldMessage, msg, tracing.FieldNetworkType, networkType, tracing.FieldNetworkTypeAnnotationPresent, hasNetworkType)
+		logger.Info("No available network plugin", telemetryfields.FieldMessage, msg, telemetryfields.FieldNetworkType, networkType, telemetryfields.FieldNetworkTypeAnnotationPresent, hasNetworkType)
 		span.SetAttributes(attribute.Bool("plugin.available", false))
 		span.SetStatus(codes.Ok, "no plugin needed")
 		return getAdmissionResponse(ctx, req, patchResult{pod: pod, err: nil})
@@ -184,7 +185,7 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 	pluginName := plugin.Name()
 	spanAttrs := []attribute.KeyValue{
 		tracing.AttrNetworkPlugin(pluginName),
-		attribute.String(tracing.FieldPluginAlias, plugin.Alias()),
+		attribute.String(telemetryfields.FieldPluginAlias, plugin.Alias()),
 	}
 	if provider, ok := tracing.CloudProviderFromNetworkType(pluginName); ok {
 		spanAttrs = append(spanAttrs, tracing.AttrCloudProvider(provider))
@@ -193,8 +194,8 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 	}
 	span.SetAttributes(spanAttrs...)
 	logger = logger.WithValues(
-		tracing.FieldNetworkPluginName, pluginName,
-		tracing.FieldPluginAlias, plugin.Alias(),
+		telemetryfields.FieldNetworkPluginName, pluginName,
+		telemetryfields.FieldPluginAlias, plugin.Alias(),
 	)
 
 	// define context with timeout
@@ -209,7 +210,7 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 		var newPod *corev1.Pod
 		var pluginError errors.PluginError
 		operation := strings.ToLower(string(req.Operation))
-		pluginLogger := logger.WithValues(tracing.FieldPluginOperation, operation)
+		pluginLogger := logger.WithValues(telemetryfields.FieldPluginOperation, operation)
 		pluginSpanAttrs := buildPluginSpanAttributes(spanAttrs, operation, initialNetworkStatus)
 		pluginCtx, pluginSpan := tracer.Start(ctx,
 			fmt.Sprintf("plugin.%s.%s", pluginName, operation),
@@ -308,8 +309,8 @@ func getAdmissionResponse(ctx context.Context, req admission.Request, result pat
 			delete(pod.Annotations, "game.kruise.io/traceparent")
 			if ctx != nil {
 				logging.FromContextWithTrace(ctx).V(4).Info("Removed traceparent annotation before generating patch",
-					tracing.FieldK8sNamespaceName, req.Namespace,
-					tracing.FieldK8sPodName, req.Name,
+					telemetryfields.FieldK8sNamespaceName, req.Namespace,
+					telemetryfields.FieldK8sPodName, req.Name,
 				)
 			}
 
@@ -412,7 +413,7 @@ func deriveNetworkStatusLabel(ctx context.Context, pod *corev1.Pod) string {
 	var status gameKruiseV1alpha1.NetworkStatus
 	if err := json.Unmarshal([]byte(rawStatus), &status); err != nil {
 		if ctx != nil {
-			logging.FromContextWithTrace(ctx).V(4).Info("Pod has invalid network status annotation", tracing.FieldError, err)
+			logging.FromContextWithTrace(ctx).V(4).Info("Pod has invalid network status annotation", telemetryfields.FieldError, err)
 		}
 		return ""
 	}
@@ -437,7 +438,7 @@ func normalizeNetworkStateValue(state gameKruiseV1alpha1.NetworkState) string {
 func buildPluginSpanAttributes(base []attribute.KeyValue, operation, defaultStatus string) []attribute.KeyValue {
 	attrs := append([]attribute.KeyValue{}, base...)
 	attrs = append(attrs,
-		attribute.String(tracing.FieldPluginOperation, operation),
+		attribute.String(telemetryfields.FieldPluginOperation, operation),
 		tracing.AttrComponent("webhook"),
 	)
 	return tracing.EnsureNetworkStatusAttr(attrs, defaultStatus)

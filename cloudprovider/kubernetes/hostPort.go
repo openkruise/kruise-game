@@ -31,6 +31,7 @@ import (
 	provideroptions "github.com/openkruise/kruise-game/cloudprovider/options"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
 	"github.com/openkruise/kruise-game/pkg/logging"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"github.com/openkruise/kruise-game/pkg/tracing"
 	"github.com/openkruise/kruise-game/pkg/util"
 	"go.opentelemetry.io/otel"
@@ -108,7 +109,7 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 		hostPortAttrPortsReusedKey.Bool(false),
 	)
 
-	logger := hostPortLogger(ctx, pod).WithValues(tracing.FieldOperation, "add")
+	logger := hostPortLogger(ctx, pod).WithValues(telemetryfields.FieldOperation, "add")
 	logger.Info("Handling hostport pod ADD operation")
 	podNow := &corev1.Pod{}
 	err := c.Get(ctx, types.NamespacedName{
@@ -141,7 +142,7 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 	var hostPorts []int32
 	if str, ok := hpp.podAllocated[podKey]; ok {
 		hostPorts = util.StringToInt32Slice(str, ",")
-		logger.Info("Reusing previously allocated hostPorts", tracing.FieldHostPorts, hostPorts, tracing.FieldRequestedPorts, requestedPorts)
+		logger.Info("Reusing previously allocated hostPorts", telemetryfields.FieldHostPorts, hostPorts, telemetryfields.FieldRequestedPorts, requestedPorts)
 		span.SetAttributes(
 			hostPortAttrPortsReusedKey.Bool(true),
 			hostPortAttrAllocatedPortsKey.String(util.Int32SliceToString(hostPorts, ",")),
@@ -155,7 +156,7 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 			hostPortAttrPodKey.String(podKey),
 		)
 		hostPorts = hpp.allocate(numToAlloc, podKey)
-		logger.Info("Allocated hostPorts for pod", tracing.FieldHostPorts, hostPorts, tracing.FieldRequestedPorts, requestedPorts)
+		logger.Info("Allocated hostPorts for pod", telemetryfields.FieldHostPorts, hostPorts, telemetryfields.FieldRequestedPorts, requestedPorts)
 		allocSpan.SetAttributes(
 			hostPortAttrAllocatedPortsKey.String(util.Int32SliceToString(hostPorts, ",")),
 			hostPortAttrAllocatedCountKey.Int64(int64(len(hostPorts))),
@@ -219,7 +220,7 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 	defer span.End()
 	span.SetAttributes(hostPortAttrPodKey.String(pod.GetNamespace() + "/" + pod.GetName()))
 
-	logger := hostPortLogger(ctx, pod).WithValues(tracing.FieldOperation, "update")
+	logger := hostPortLogger(ctx, pod).WithValues(telemetryfields.FieldOperation, "update")
 	logger.Info("Processing hostport pod UPDATE operation")
 	node := &corev1.Node{}
 	err := c.Get(ctx, types.NamespacedName{
@@ -227,7 +228,7 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 	}, node)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
-			logger.Error(err, "Node not found for hostport pod", tracing.FieldNodeNameQualified, pod.Spec.NodeName)
+			logger.Error(err, "Node not found for hostport pod", telemetryfields.FieldK8sNodeName, pod.Spec.NodeName)
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "node not found")
 			span.SetAttributes(
@@ -236,7 +237,7 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 			)
 			return pod, nil
 		}
-		logger.Error(err, "Failed to fetch node for hostport pod", tracing.FieldNodeNameQualified, pod.Spec.NodeName)
+		logger.Error(err, "Failed to fetch node for hostport pod", telemetryfields.FieldK8sNodeName, pod.Spec.NodeName)
 		span.RecordError(err)
 		span.SetAttributes(tracing.AttrErrorType("ApiCallError"))
 		span.SetStatus(codes.Error, "failed to get node")
@@ -271,7 +272,7 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 	// network not ready
 	if len(iNetworkPorts) == 0 || len(eNetworkPorts) == 0 || pod.Status.PodIP == "" {
 		errNetworkNotReady := fmt.Errorf("pod ip or hostports missing")
-		logger.Error(errNetworkNotReady, "HostPort network not ready", tracing.FieldInternalPorts, len(iNetworkPorts), tracing.FieldExternalPorts, len(eNetworkPorts), tracing.FieldPodIP, pod.Status.PodIP)
+		logger.Error(errNetworkNotReady, "HostPort network not ready", telemetryfields.FieldInternalPorts, len(iNetworkPorts), telemetryfields.FieldExternalPorts, len(eNetworkPorts), telemetryfields.FieldPodIP, pod.Status.PodIP)
 		span.SetAttributes(
 			tracing.AttrNetworkStatus("not_ready"),
 			attribute.Int("game.kruise.io.network.internal_ports", len(iNetworkPorts)),
@@ -316,14 +317,14 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 		hostPortAttrExternalPortCountKey.Int64(int64(len(eNetworkPorts))),
 	)
 	span.SetStatus(codes.Ok, "network ready")
-	logger.Info("Updated hostport network status", tracing.FieldNodeIP, nodeIp, tracing.FieldInternalPorts, len(iNetworkPorts), tracing.FieldExternalPorts, len(eNetworkPorts))
+	logger.Info("Updated hostport network status", telemetryfields.FieldNodeIP, nodeIp, telemetryfields.FieldInternalPorts, len(iNetworkPorts), telemetryfields.FieldExternalPorts, len(eNetworkPorts))
 
 	pod, err = networkManager.UpdateNetworkStatus(networkStatus, pod)
 	return pod, errors.ToPluginError(err, errors.InternalError)
 }
 
 func (hpp *HostPortPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.Context) errors.PluginError {
-	logger := hostPortLogger(ctx, pod).WithValues(tracing.FieldOperation, "delete")
+	logger := hostPortLogger(ctx, pod).WithValues(telemetryfields.FieldOperation, "delete")
 	logger.Info("Processing hostport pod DELETE operation")
 	tracer := otel.Tracer("okg-controller-manager")
 	_, span := startHostPortSpan(ctx, tracer, tracing.SpanCleanupHostPortAllocation, pod,
@@ -348,7 +349,7 @@ func (hpp *HostPortPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx co
 	}
 
 	hpp.deAllocate(hostPorts, podKey)
-	logger.Info("Released hostPorts for pod", tracing.FieldHostPorts, hostPorts)
+	logger.Info("Released hostPorts for pod", telemetryfields.FieldHostPorts, hostPorts)
 	span.SetAttributes(
 		hostPortAttrReleasedCountKey.Int64(int64(len(hostPorts))),
 		hostPortAttrReleasedPortsKey.String(util.Int32SliceToString(hostPorts, ",")),
@@ -405,11 +406,11 @@ func (hpp *HostPortPlugin) Init(c client.Client, options cloudprovider.CloudProv
 	hpp.portAmount = newPortAmount
 	hpp.amountStat = newAmountStat
 	logger := hostPortLogger(ctx, nil).WithValues(
-		tracing.FieldOperation, "init",
-		tracing.FieldPortMin, hpp.minPort,
-		tracing.FieldPortMax, hpp.maxPort,
+		telemetryfields.FieldOperation, "init",
+		telemetryfields.FieldPortMin, hpp.minPort,
+		telemetryfields.FieldPortMax, hpp.maxPort,
 	)
-	logger.Info("Initialized hostport allocation state", tracing.FieldAllocatedPods, len(hpp.podAllocated))
+	logger.Info("Initialized hostport allocation state", telemetryfields.FieldAllocatedPods, len(hpp.podAllocated))
 	return nil
 }
 
@@ -447,22 +448,22 @@ func (hpp *HostPortPlugin) deAllocate(hostPorts []int32, nsname string) {
 
 func hostPortLogger(ctx context.Context, pod *corev1.Pod) logr.Logger {
 	logger := logging.FromContextWithTrace(ctx).WithValues(
-		tracing.FieldComponent, "cloudprovider",
-		tracing.FieldNetworkPluginName, hostPortPluginSlug,
-		tracing.FieldPluginSlug, hostPortPluginSlug,
+		telemetryfields.FieldComponent, "cloudprovider",
+		telemetryfields.FieldNetworkPluginName, hostPortPluginSlug,
+		telemetryfields.FieldPluginSlug, hostPortPluginSlug,
 	)
 	if pod != nil {
 		logger = logger.WithValues(
-			tracing.FieldGameServerNamespace, pod.GetNamespace(),
-			tracing.FieldGameServerName, pod.GetName(),
+			telemetryfields.FieldGameServerNamespace, pod.GetNamespace(),
+			telemetryfields.FieldGameServerName, pod.GetName(),
 		)
 		if nodeName := pod.Spec.NodeName; nodeName != "" {
-			logger = logger.WithValues(tracing.FieldNodeNameQualified, nodeName)
+			logger = logger.WithValues(telemetryfields.FieldK8sNodeName, nodeName)
 		}
 		if gss := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; gss != "" {
 			logger = logger.WithValues(
-				tracing.FieldGameServerSetNamespace, pod.GetNamespace(),
-				tracing.FieldGameServerSetName, gss,
+				telemetryfields.FieldGameServerSetNamespace, pod.GetNamespace(),
+				telemetryfields.FieldGameServerSetName, gss,
 			)
 		}
 	}

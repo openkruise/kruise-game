@@ -29,7 +29,7 @@ To solve this, OKG uses a **Span Link** pattern:
 ### Attributes
 
 We adhere to OTel Semantic Conventions where possible:
-*   `k8s.namespace.name` (use `tracing.AttrK8sNamespaceName(namespace)` or `tracing.FieldK8sNamespaceName`)
+*   `k8s.namespace.name` (use `tracing.AttrK8sNamespaceName(namespace)` or `telemetryfields.FieldK8sNamespaceName`)
 *   `k8s.pod.name`
 *   `service.name` (default: `okg-controller-manager`)
 
@@ -84,8 +84,8 @@ defer span.End()
 // Log with trace context and structured fields
 logger := logging.FromContextWithTrace(ctx)
 logger.Info("Allocating network resources", 
-    tracing.FieldGameServerName, gs.Name,
-    tracing.FieldNetworkPluginName, "HostPort",
+    telemetryfields.FieldGameServerName, gs.Name,
+    telemetryfields.FieldNetworkPluginName, "HostPort",
 )
 ```
 

@@ -11,6 +11,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"github.com/openkruise/kruise-game/pkg/tracing"
 	"github.com/openkruise/kruise-game/pkg/util"
 	"go.opentelemetry.io/otel"
@@ -286,8 +287,8 @@ func TestNodePortTracingOnPodUpdated(t *testing.T) {
 		"cloud.provider":                      "kubernetes",
 		"game.kruise.io.game_server.name":     "test-nodeport-pod",
 		"game.kruise.io.game_server_set.name": "test-gss",
-		tracing.FieldK8sNamespaceName:         "default",
-		tracing.FieldReconcileTrigger:         "pod.updated",
+		telemetryfields.FieldK8sNamespaceName: "default",
+		telemetryfields.FieldReconcileTrigger: "pod.updated",
 	}
 
 	for key, expectedValue := range expectedAttrs {

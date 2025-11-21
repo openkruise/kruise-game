@@ -55,7 +55,7 @@ The controller manager binary already contains log, trace, and metric instrument
 **Operational tips**
 
 - Spans fall back to a no-op provider when OTLP dialing fails; the controller logs `Tracing initialization failed, using no-op tracer` in that case.
-- Search for traces & logs by attributes like `game.kruise.io.game_server.name`, `game.kruise.io.network.plugin.name`, `cloud.provider`, or `k8s.namespace.name` (use `tracing.AttrK8sNamespaceName(ns)` or `tracing.FieldK8sNamespaceName`), you can find them at `pkg/tracing/attributes.go`.
+- Search for traces & logs by attributes like `game.kruise.io.game_server.name`, `game.kruise.io.network.plugin.name`, `cloud.provider`, or `k8s.namespace.name` (use `tracing.AttrK8sNamespaceName(ns)` or `telemetryfields.FieldK8sNamespaceName`), you can find them at `pkg/tracing/attributes.go`.
 
 ## 4. Metrics
 

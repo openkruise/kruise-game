@@ -22,144 +22,29 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
-	"github.com/openkruise/kruise-game/pkg/observability/fields"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// Standardized attribute/log field names for GameServer and networking metadata.
-const (
-	FieldGameServerSetName            = "game.kruise.io.game_server_set.name"
-	FieldGameServerSetNamespace       = "game.kruise.io.game_server_set.namespace"
-	FieldGameServerName               = "game.kruise.io.game_server.name"
-	FieldGameServerNamespace          = "game.kruise.io.game_server.namespace"
-	FieldNetworkPluginName            = "game.kruise.io.network.plugin.name"
-	FieldNetworkStatus                = "game.kruise.io.network.status"
-	FieldNetworkResourceID            = "game.kruise.io.network.resource_id"
-	FieldNetworkPortRange             = "game.kruise.io.network.port_range"
-	FieldComponent                    = "game.kruise.io.component"
-	FieldWebhookHandler               = "game.kruise.io.webhook.handler"
-	FieldAdmissionRequestUID          = "k8s.admission.request.uid"
-	FieldAdmissionOperation           = "admission.operation"
-	FieldAdmissionResource            = "k8s.admission.resource"
-	FieldAllocatedPods                = "game.kruise.io.host_port.allocated_pods"
-	FieldAllowNotReadyContainers      = "game.kruise.io.network.allow_not_ready_containers"
-	FieldAnnotations                  = "k8s.annotations"
-	FieldBlockPorts                   = "game.kruise.io.network.block_ports"
-	FieldBody                         = "game.kruise.io.request.body"
-	FieldCollector                    = "observability.collector"
-	FieldConfigEntries                = "game.kruise.io.config.entries"
-	FieldContext                      = "context"
-	FieldCount                        = "game.kruise.io.count"
-	FieldCurrent                      = "game.kruise.io.current"
-	FieldCurrentHash                  = "game.kruise.io.hash.current"
-	FieldCurrentReplicas              = "game.kruise.io.replicas.current"
-	FieldDataDirectory                = "game.kruise.io.fs.data_directory"
-	FieldDesired                      = "game.kruise.io.desired"
-	FieldDesiredPorts                 = "game.kruise.io.network.desired_ports"
-	FieldDirectory                    = "game.kruise.io.fs.directory"
-	FieldError                        = "error"
-	FieldEvent                        = "game.kruise.io.event"
-	FieldExpectedHash                 = "game.kruise.io.hash.expected"
-	FieldExpectedReplicas             = "game.kruise.io.replicas.expected"
-	FieldExternalAddresses            = "game.kruise.io.network.external_addresses"
-	FieldExternalPorts                = "game.kruise.io.network.external_ports"
-	FieldFile                         = "game.kruise.io.fs.file"
-	FieldGeneration                   = "game.kruise.io.generation"
-	FieldHash                         = "game.kruise.io.hash"
-	FieldHashNew                      = "game.kruise.io.hash.new"
-	FieldHashOld                      = "game.kruise.io.hash.old"
-	FieldHostPorts                    = "game.kruise.io.host_port.ports"
-	FieldInternalAddresses            = "game.kruise.io.network.internal_addresses"
-	FieldInternalPorts                = "game.kruise.io.network.internal_ports"
-	FieldIteration                    = "game.kruise.io.test.iteration"
-	FieldKeys                         = "game.kruise.io.keys"
-	FieldK8sNamespaceName             = fields.FieldK8sNamespaceName
-	FieldK8sPodName                   = fields.FieldK8sPodName
-	FieldLBID                         = "game.kruise.io.network.lb_id"
-	FieldManagedPods                  = "game.kruise.io.managed_pods"
-	FieldMaxPort                      = "game.kruise.io.network.max_port"
-	FieldMessage                      = "game.kruise.io.message"
-	FieldMinPort                      = "game.kruise.io.network.min_port"
-	FieldMode                         = "game.kruise.io.fs.mode"
-	FieldNetworkDisabled              = "game.kruise.io.network.disabled"
-	FieldNetworkState                 = "game.kruise.io.network.state"
-	FieldNetworkType                  = "game.kruise.io.network.type"
-	FieldNetworkTypeAnnotationPresent = "game.kruise.io.network.type_annotation_present"
-	FieldNewManageIDs                 = "game.kruise.io.gameserver_set.manage_ids.new"
-	FieldNewReserveIDs                = "game.kruise.io.gameserver_set.reserve_ids.new"
-	FieldNewUID                       = "game.kruise.io.uid.new"
-	FieldNodeIP                       = "k8s.node.ip"
-	FieldNodeNameQualified            = fields.FieldK8sNodeName
-	FieldObservedGeneration           = "game.kruise.io.observed_generation"
-	FieldOldUID                       = "game.kruise.io.uid.old"
-	FieldOperation                    = "game.kruise.io.operation"
-	FieldPath                         = "game.kruise.io.fs.path"
-	FieldPaths                        = "game.kruise.io.fs.paths"
-	FieldPluginAlias                  = "game.kruise.io.plugin.alias"
-	FieldPluginOperation              = "game.kruise.io.plugin.operation"
-	FieldPlugins                      = "game.kruise.io.plugins"
-	FieldPluginSlug                   = "game.kruise.io.plugin.slug"
-	FieldPodAllocate                  = "game.kruise.io.network.pod_allocate_cache"
-	FieldPodCount                     = "game.kruise.io.pod.count"
-	FieldPodIP                        = "k8s.pod.ip"
-	FieldPodKeyQualified              = "game.kruise.io.pod.key"
-	FieldPodKeyLegacy                 = "game.kruise.io.pod.key_legacy"
-	FieldPodTemplateRevision          = "game.kruise.io.pod_template.revision"
-	FieldPort                         = "game.kruise.io.network.port"
-	FieldPortCount                    = "game.kruise.io.network.port_count"
-	FieldPortMax                      = "game.kruise.io.network.port.max"
-	FieldPortMin                      = "game.kruise.io.network.port.min"
-	FieldPorts                        = "game.kruise.io.network.ports"
-	FieldPodProbeMarker               = "game.kruise.io.pod_probe_marker.name"
-	FieldProvider                     = "cloud.provider"
-	FieldReclaimPolicy                = "game.kruise.io.reclaim_policy"
-	FieldReconcileTrigger             = "reconcile.trigger"
-	FieldReconcileAction              = "reconcile.action"
-	FieldReconcileRequeue             = "reconcile.requeue"
-	FieldRemaining                    = "game.kruise.io.remaining"
-	FieldReplicas                     = "game.kruise.io.replicas"
-	FieldRequestedPorts               = "game.kruise.io.network.requested_ports"
-	FieldReserveIDsAnnotation         = "game.kruise.io.gameserver_set.reserve_ids.annotation"
-	FieldReserveIDsImplicit           = "game.kruise.io.gameserver_set.reserve_ids.implicit"
-	FieldReserveIDsSpec               = "game.kruise.io.gameserver_set.reserve_ids.spec"
-	FieldSelectorAfter                = "game.kruise.io.nodeport.selector.after"
-	FieldSelectorBefore               = "game.kruise.io.nodeport.selector.before"
-	FieldService                      = "game.kruise.io.service.key"
-	FieldServiceName                  = fields.FieldServiceName
-	FieldServiceNamespace             = fields.FieldServiceNamespace
-	FieldServiceQualities             = "game.kruise.io.service_qualities.count"
-	FieldServiceUID                   = "game.kruise.io.service.uid"
-	FieldSpanID                       = "span_id"
-	FieldSpanName                     = "span.name"
-	FieldState                        = "game.kruise.io.state"
-	FieldStrategyMaxUnavailable       = "game.kruise.io.strategy.max_unavailable"
-	FieldStrategyScaleDown            = "game.kruise.io.strategy.scale_down"
-	FieldTargetDirectory              = "game.kruise.io.fs.target_directory"
-	FieldTraceID                      = "trace_id"
-	FieldTraceparent                  = "game.kruise.io.traceparent"
-	FieldLinkReason                   = "link.reason"
-	FieldTSDirectory                  = "game.kruise.io.fs.ts_directory"
-)
-
 var (
-	gameServerSetNameKey      = attribute.Key(FieldGameServerSetName)
-	gameServerSetNamespaceKey = attribute.Key(FieldGameServerSetNamespace)
-	gameServerNameKey         = attribute.Key(FieldGameServerName)
-	gameServerNamespaceKey    = attribute.Key(FieldGameServerNamespace)
-	networkPluginKey          = attribute.Key(FieldNetworkPluginName)
-	networkStatusKey          = attribute.Key(FieldNetworkStatus)
-	networkResourceIDKey      = attribute.Key(FieldNetworkResourceID)
-	networkPortRangeKey       = attribute.Key(FieldNetworkPortRange)
-	componentKey              = attribute.Key(FieldComponent)
-	webhookHandlerKey         = attribute.Key(FieldWebhookHandler)
-	errorTypeKey              = attribute.Key("error.type")
-	cloudProviderKey          = attribute.Key("cloud.provider")
-	admissionRequestUIDKey    = attribute.Key(FieldAdmissionRequestUID)
-	reconcileTriggerKey       = attribute.Key(FieldReconcileTrigger)
-	reconcileActionKey        = attribute.Key(FieldReconcileAction)
-	linkReasonKey             = attribute.Key(FieldLinkReason)
-	k8sNamespaceKey           = attribute.Key(FieldK8sNamespaceName)
-	reconcileRequeueKey       = attribute.Key(FieldReconcileRequeue)
+	gameServerSetNameKey      = attribute.Key(telemetryfields.FieldGameServerSetName)
+	gameServerSetNamespaceKey = attribute.Key(telemetryfields.FieldGameServerSetNamespace)
+	gameServerNameKey         = attribute.Key(telemetryfields.FieldGameServerName)
+	gameServerNamespaceKey    = attribute.Key(telemetryfields.FieldGameServerNamespace)
+	networkPluginKey          = attribute.Key(telemetryfields.FieldNetworkPluginName)
+	networkStatusKey          = attribute.Key(telemetryfields.FieldNetworkStatus)
+	networkResourceIDKey      = attribute.Key(telemetryfields.FieldNetworkResourceID)
+	networkPortRangeKey       = attribute.Key(telemetryfields.FieldNetworkPortRange)
+	componentKey              = attribute.Key(telemetryfields.FieldComponent)
+	webhookHandlerKey         = attribute.Key(telemetryfields.FieldWebhookHandler)
+	errorTypeKey              = attribute.Key(telemetryfields.FieldErrorType)
+	cloudProviderKey          = attribute.Key(telemetryfields.FieldProvider)
+	admissionRequestUIDKey    = attribute.Key(telemetryfields.FieldAdmissionRequestUID)
+	reconcileTriggerKey       = attribute.Key(telemetryfields.FieldReconcileTrigger)
+	reconcileActionKey        = attribute.Key(telemetryfields.FieldReconcileAction)
+	linkReasonKey             = attribute.Key(telemetryfields.FieldLinkReason)
+	k8sNamespaceKey           = attribute.Key(telemetryfields.FieldK8sNamespaceName)
+	reconcileRequeueKey       = attribute.Key(telemetryfields.FieldReconcileRequeue)
 )
 
 // CloudProvider represents the canonical OpenTelemetry enumeration values for cloud providers.
@@ -305,22 +190,22 @@ func AttrReconcileTrigger(trigger string) attribute.KeyValue {
 
 // AttrK8sPodName returns a span attribute for k8s.pod.name.
 func AttrK8sPodName(podName string) attribute.KeyValue {
-	return attribute.Key(FieldK8sPodName).String(podName)
+	return attribute.Key(telemetryfields.FieldK8sPodName).String(podName)
 }
 
 // AttrK8sNodeName returns a span attribute for k8s.node.name.
 func AttrK8sNodeName(nodeName string) attribute.KeyValue {
-	return attribute.Key(FieldNodeNameQualified).String(nodeName)
+	return attribute.Key(telemetryfields.FieldK8sNodeName).String(nodeName)
 }
 
 // AttrServiceName returns a span attribute for service.name.
 func AttrServiceName(name string) attribute.KeyValue {
-	return attribute.Key(FieldServiceName).String(name)
+	return attribute.Key(telemetryfields.FieldServiceName).String(name)
 }
 
 // AttrServiceNamespace returns a span attribute for service.namespace.
 func AttrServiceNamespace(ns string) attribute.KeyValue {
-	return attribute.Key(FieldServiceNamespace).String(ns)
+	return attribute.Key(telemetryfields.FieldServiceNamespace).String(ns)
 }
 
 // AttrK8sNamespaceName returns a span attribute for k8s.namespace.name.

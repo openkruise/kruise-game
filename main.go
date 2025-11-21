@@ -55,6 +55,7 @@ import (
 	"github.com/openkruise/kruise-game/pkg/externalscaler"
 	"github.com/openkruise/kruise-game/pkg/logging"
 	"github.com/openkruise/kruise-game/pkg/metrics"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"github.com/openkruise/kruise-game/pkg/tracing"
 	"github.com/openkruise/kruise-game/pkg/util/client"
 	"github.com/openkruise/kruise-game/pkg/webhook"
@@ -125,9 +126,9 @@ func main() {
 
 	// Initialize tracing (non-blocking - falls back to no-op on failure)
 	if err := tracingOptions.Apply(); err != nil {
-		setupLog.Info("Tracing initialization failed, using no-op tracer", tracing.FieldError, err.Error())
+		setupLog.Info("Tracing initialization failed, using no-op tracer", telemetryfields.FieldError, err.Error())
 	} else if tracingOptions.Enabled {
-		setupLog.Info("Tracing initialized successfully", tracing.FieldCollector, tracingOptions.CollectorEndpoint)
+		setupLog.Info("Tracing initialized successfully", telemetryfields.FieldCollector, tracingOptions.CollectorEndpoint)
 
 		// Register shutdown hook
 		defer func() {
@@ -240,7 +241,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	setupLog.Info("setup controllers", tracing.FieldEvent, "controller.setup")
+	setupLog.Info("setup controllers", telemetryfields.FieldEvent, "controller.setup")
 	if err = controller.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
@@ -248,17 +249,17 @@ func main() {
 
 	signal := ctrl.SetupSignalHandler()
 	go func() {
-		setupLog.Info("waiting for cache sync to init cloud provider manager", tracing.FieldEvent, "cache.wait_for_sync")
+		setupLog.Info("waiting for cache sync to init cloud provider manager", telemetryfields.FieldEvent, "cache.wait_for_sync")
 		if mgr.GetCache().WaitForCacheSync(signal) {
-			setupLog.Info("cache synced, cloud provider manager start to init", tracing.FieldEvent, "cache.synced")
+			setupLog.Info("cache synced, cloud provider manager start to init", telemetryfields.FieldEvent, "cache.synced")
 			if enableLeaderElection {
-				setupLog.Info("waiting for leader election to init cloud provider manager", tracing.FieldEvent, "leader_election.wait_for_leadership")
+				setupLog.Info("waiting for leader election to init cloud provider manager", telemetryfields.FieldEvent, "leader_election.wait_for_leadership")
 				<-mgr.Elected()
-				setupLog.Info("leader election completed, initializing cloud provider manager", tracing.FieldEvent, "leader_election.completed")
+				setupLog.Info("leader election completed, initializing cloud provider manager", telemetryfields.FieldEvent, "leader_election.completed")
 			}
-			setupLog.Info("initializing cloud provider manager", tracing.FieldEvent, "cloud_provider_manager.init_start")
+			setupLog.Info("initializing cloud provider manager", telemetryfields.FieldEvent, "cloud_provider_manager.init_start")
 			cloudProviderManager.Init(mgr.GetClient())
-			setupLog.Info("cloud provider manager initialized successfully", tracing.FieldEvent, "cloud_provider_manager.init_completed")
+			setupLog.Info("cloud provider manager initialized successfully", telemetryfields.FieldEvent, "cloud_provider_manager.init_completed")
 			isCloudManagerInitialized.Store(true)
 		}
 	}()
@@ -299,7 +300,7 @@ func main() {
 		ScaleServerAddr: scaleServerAddr,
 	})
 
-	setupLog.Info("starting kruise-game-manager", tracing.FieldEvent, "service.start")
+	setupLog.Info("starting kruise-game-manager", telemetryfields.FieldEvent, "service.start")
 
 	if err := mgr.Start(signal); err != nil {
 		setupLog.Error(err, "problem running manager")
@@ -338,7 +339,7 @@ type serviceSummary struct {
 
 func logServiceReadySummary(logger logr.Logger, summary serviceSummary) {
 	fields := []interface{}{
-		tracing.FieldEvent, "service.ready",
+		telemetryfields.FieldEvent, "service.ready",
 		"leader_election", summary.LeaderElection,
 	}
 	if summary.MetricsAddr != "" {

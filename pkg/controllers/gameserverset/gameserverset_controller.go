@@ -48,6 +48,7 @@ import (
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/logging"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"github.com/openkruise/kruise-game/pkg/tracing"
 	"github.com/openkruise/kruise-game/pkg/util"
 	utildiscovery "github.com/openkruise/kruise-game/pkg/util/discovery"
@@ -201,8 +202,8 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	defer span.End()
 
 	logger := logging.FromContextWithTrace(ctx).WithValues(
-		tracing.FieldGameServerSetNamespace, namespacedName.Namespace,
-		tracing.FieldGameServerSetName, namespacedName.Name,
+		telemetryfields.FieldGameServerSetNamespace, namespacedName.Namespace,
+		telemetryfields.FieldGameServerSetName, namespacedName.Name,
 	)
 
 	// get GameServerSet
@@ -272,8 +273,8 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	})
 	if err != nil {
 		logger.Error(err, "failed to list GameServers",
-			tracing.FieldGameServerSetNamespace, gss.GetNamespace(),
-			tracing.FieldGameServerSetName, gss.GetName())
+			telemetryfields.FieldGameServerSetNamespace, gss.GetNamespace(),
+			telemetryfields.FieldGameServerSetName, gss.GetName())
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to list Pods")
 		return reconcile.Result{}, err

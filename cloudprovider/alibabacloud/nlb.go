@@ -32,6 +32,7 @@ import (
 	provideroptions "github.com/openkruise/kruise-game/cloudprovider/options"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
 	"github.com/openkruise/kruise-game/pkg/logging"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"github.com/openkruise/kruise-game/pkg/tracing"
 	"github.com/openkruise/kruise-game/pkg/util"
 	"go.opentelemetry.io/otel"
@@ -160,13 +161,13 @@ func (n *NlbPlugin) Init(c client.Client, options cloudprovider.CloudProviderOpt
 
 	n.cache, n.podAllocate = initLbCache(svcList.Items, n.minPort, n.maxPort, n.blockPorts)
 	logger := nlbLogger(ctx, nil).WithValues(
-		tracing.FieldOperation, "init",
+		telemetryfields.FieldOperation, "init",
 	)
 	logger.Info("podAllocate cache initialized",
-		tracing.FieldPodAllocate, n.podAllocate,
-		tracing.FieldMinPort, n.minPort,
-		tracing.FieldMaxPort, n.maxPort,
-		tracing.FieldBlockPorts, n.blockPorts,
+		telemetryfields.FieldPodAllocate, n.podAllocate,
+		telemetryfields.FieldMinPort, n.minPort,
+		telemetryfields.FieldMaxPort, n.maxPort,
+		telemetryfields.FieldBlockPorts, n.blockPorts,
 	)
 	return nil
 }
@@ -180,7 +181,7 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	ctx, span := startNLBSpan(ctx, tracer, tracing.SpanProcessNLBPod, pod)
 	defer span.End()
 	span.SetAttributes(tracing.AttrNetworkStatus("waiting"))
-	logger := nlbLogger(ctx, pod).WithValues(tracing.FieldOperation, "update")
+	logger := nlbLogger(ctx, pod).WithValues(telemetryfields.FieldOperation, "update")
 	logger.Info("processing NLB pod update")
 
 	networkManager := utils.NewNetworkManager(pod, c)
@@ -267,18 +268,18 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 
 	if svc.OwnerReferences[0].Kind == "Pod" && svc.OwnerReferences[0].UID != pod.UID {
 		logger.Info("waiting for previous Service owner cleanup",
-			tracing.FieldServiceNamespace, svc.Namespace,
-			tracing.FieldServiceName, svc.Name,
-			tracing.FieldOldUID, svc.OwnerReferences[0].UID,
-			tracing.FieldNewUID, pod.UID,
+			telemetryfields.FieldServiceNamespace, svc.Namespace,
+			telemetryfields.FieldServiceName, svc.Name,
+			telemetryfields.FieldOldUID, svc.OwnerReferences[0].UID,
+			telemetryfields.FieldNewUID, pod.UID,
 		)
 		return pod, nil
 	}
 
 	if util.GetHash(sc) != svc.GetAnnotations()[SlbConfigHashKey] {
 		logger.Info("detected Service config drift; reconciling",
-			tracing.FieldCurrentHash, svc.GetAnnotations()[SlbConfigHashKey],
-			tracing.FieldDesiredPorts, len(sc.targetPorts),
+			telemetryfields.FieldCurrentHash, svc.GetAnnotations()[SlbConfigHashKey],
+			telemetryfields.FieldDesiredPorts, len(sc.targetPorts),
 		)
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
@@ -317,8 +318,8 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 		)
 		updateSpan.SetStatus(codes.Ok, "nlb service updated")
 		logger.Info("reconciled NLB service",
-			tracing.FieldLBID, lbID,
-			tracing.FieldPortCount, len(service.Spec.Ports),
+			telemetryfields.FieldLBID, lbID,
+			telemetryfields.FieldPortCount, len(service.Spec.Ports),
 		)
 		span.SetAttributes(tracing.AttrNetworkStatus("not_ready"))
 		return pod, nil
@@ -477,7 +478,7 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 
 	span.SetAttributes(tracing.AttrNetworkStatus("ready"))
 	span.SetStatus(codes.Ok, "nlb pod processed")
-	logger.Info("NLB pod update complete", tracing.FieldState, networkStatus.CurrentNetworkState)
+	logger.Info("NLB pod update complete", telemetryfields.FieldState, networkStatus.CurrentNetworkState)
 	return pod, nil
 }
 
@@ -487,7 +488,7 @@ func (n *NlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.C
 		tracing.AttrNetworkStatus("not_ready"),
 	)
 	defer span.End()
-	logger := nlbLogger(ctx, pod).WithValues(tracing.FieldOperation, "delete")
+	logger := nlbLogger(ctx, pod).WithValues(telemetryfields.FieldOperation, "delete")
 
 	networkManager := utils.NewNetworkManager(pod, c)
 	networkConfig := networkManager.GetNetworkConfig()
@@ -526,7 +527,7 @@ func (n *NlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.C
 	}
 
 	for _, podKey := range podKeys {
-		logger.Info("deallocating NLB ports for pod key", tracing.FieldPodKeyQualified, podKey)
+		logger.Info("deallocating NLB ports for pod key", telemetryfields.FieldPodKeyQualified, podKey)
 		n.deAllocate(podKey)
 	}
 
@@ -534,7 +535,7 @@ func (n *NlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.C
 		nlbAttrDeallocatedCntKey.Int64(int64(len(podKeys))),
 		nlbAttrDeallocatedKeysKey.StringSlice(podKeys),
 	)
-	logger.Info("cleaned up NLB allocations", tracing.FieldCount, len(podKeys), tracing.FieldKeys, podKeys)
+	logger.Info("cleaned up NLB allocations", telemetryfields.FieldCount, len(podKeys), telemetryfields.FieldKeys, podKeys)
 	span.SetStatus(codes.Ok, "nlb allocation cleaned up")
 	return nil
 }
@@ -649,8 +650,8 @@ func (n *NlbPlugin) allocate(ctx context.Context, pod *corev1.Pod, lbIds []strin
 		podKey = pod.GetNamespace() + "/" + pod.GetName()
 	}
 	logger := nlbLogger(ctx, pod).WithValues(
-		tracing.FieldOperation, "allocate",
-		tracing.FieldPodKeyQualified, podKey,
+		telemetryfields.FieldOperation, "allocate",
+		telemetryfields.FieldPodKeyQualified, podKey,
 	)
 	_, span := startNLBSpan(ctx, tracer, tracing.SpanAllocateNLBPorts, pod,
 		tracing.AttrNetworkStatus("waiting"),
@@ -717,8 +718,8 @@ func (n *NlbPlugin) allocate(ctx context.Context, pod *corev1.Pod, lbIds []strin
 
 	n.podAllocate[podKey] = lbId + ":" + util.Int32SliceToString(ports, ",")
 	logger.Info("allocated NLB ports",
-		tracing.FieldLBID, lbId,
-		tracing.FieldPorts, ports,
+		telemetryfields.FieldLBID, lbId,
+		telemetryfields.FieldPorts, ports,
 	)
 
 	// Record successful allocation in span
@@ -771,20 +772,20 @@ func nlbSpanAttrs(pod *corev1.Pod, extras ...attribute.KeyValue) []attribute.Key
 
 func nlbLogger(ctx context.Context, pod *corev1.Pod) logr.Logger {
 	logger := logging.FromContextWithTrace(ctx).WithValues(
-		tracing.FieldComponent, "cloudprovider",
-		tracing.FieldNetworkPluginName, nlbPluginSlug,
-		tracing.FieldPluginSlug, nlbPluginSlug,
+		telemetryfields.FieldComponent, "cloudprovider",
+		telemetryfields.FieldNetworkPluginName, nlbPluginSlug,
+		telemetryfields.FieldPluginSlug, nlbPluginSlug,
 	)
 	if pod != nil {
 		podLabels := pod.GetLabels()
 		logger = logger.WithValues(
-			tracing.FieldGameServerNamespace, pod.GetNamespace(),
-			tracing.FieldGameServerName, pod.GetName(),
+			telemetryfields.FieldGameServerNamespace, pod.GetNamespace(),
+			telemetryfields.FieldGameServerName, pod.GetName(),
 		)
 		if gss, ok := podLabels[gamekruiseiov1alpha1.GameServerOwnerGssKey]; ok {
 			logger = logger.WithValues(
-				tracing.FieldGameServerSetNamespace, pod.GetNamespace(),
-				tracing.FieldGameServerSetName, gss,
+				telemetryfields.FieldGameServerSetNamespace, pod.GetNamespace(),
+				telemetryfields.FieldGameServerSetName, gss,
 			)
 		}
 	}

@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"github.com/openkruise/kruise-game/pkg/tracing"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -158,7 +159,7 @@ func TestHostPortTracingOnPodAdded(t *testing.T) {
 		"cloud.provider":                                            "kubernetes",
 		"game.kruise.io.game_server.name":                           "test-pod",
 		"game.kruise.io.game_server_set.name":                       "test-gss",
-		tracing.FieldK8sNamespaceName:                               "default",
+		telemetryfields.FieldK8sNamespaceName:                       "default",
 		"game.kruise.io.network.status":                             "waiting",
 		"game.kruise.io.network.plugin.kubernetes.hostport.pod_key": "default/test-pod",
 	}
@@ -302,7 +303,7 @@ func TestHostPortTracingOnPodUpdated(t *testing.T) {
 		"cloud.provider":                                            "kubernetes",
 		"game.kruise.io.game_server.name":                           "test-pod-update",
 		"game.kruise.io.game_server_set.name":                       "test-gss",
-		tracing.FieldK8sNamespaceName:                               "default",
+		telemetryfields.FieldK8sNamespaceName:                       "default",
 		"game.kruise.io.network.plugin.kubernetes.hostport.pod_key": "default/test-pod-update",
 	}
 

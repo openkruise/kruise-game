@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/openkruise/kruise-game/pkg/observability/fields"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"github.com/openkruise/kruise-game/pkg/version"
 )
 
@@ -134,7 +134,7 @@ func firstNonEmpty(values ...string) string {
 func (cfg JSONConfig) resourceKeyValues() []interface{} {
 	var kv []interface{}
 	if cfg.Resource.ServiceName != "" {
-		kv = append(kv, fields.FieldServiceName, cfg.Resource.ServiceName)
+		kv = append(kv, telemetryfields.FieldServiceName, cfg.Resource.ServiceName)
 	}
 	if cfg.Resource.Namespace != "" {
 		kv = append(kv, "service.namespace", cfg.Resource.Namespace)
@@ -146,10 +146,10 @@ func (cfg JSONConfig) resourceKeyValues() []interface{} {
 		kv = append(kv, "service.instance.id", cfg.Resource.ServiceInstanceID)
 	}
 	if cfg.Resource.Namespace != "" {
-		kv = append(kv, fields.FieldK8sNamespaceName, cfg.Resource.Namespace)
+		kv = append(kv, telemetryfields.FieldK8sNamespaceName, cfg.Resource.Namespace)
 	}
 	if cfg.Resource.PodName != "" {
-		kv = append(kv, fields.FieldK8sPodName, cfg.Resource.PodName)
+		kv = append(kv, telemetryfields.FieldK8sPodName, cfg.Resource.PodName)
 	}
 	return kv
 }

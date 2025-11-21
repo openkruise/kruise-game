@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/openkruise/kruise-game/pkg/logging"
-	"github.com/openkruise/kruise-game/pkg/tracing"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
@@ -32,7 +32,7 @@ func main() {
 	startTime := time.Now()
 
 	for i := 0; i < numLogs; i++ {
-		logger.Info("This is a test log message", tracing.FieldIteration, i)
+		logger.Info("This is a test log message", telemetryfields.FieldIteration, i)
 	}
 
 	duration := time.Since(startTime)

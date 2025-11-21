@@ -27,6 +27,7 @@ import (
 	kruisePub "github.com/openkruise/kruise-api/apps/pub"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"github.com/openkruise/kruise-game/pkg/tracing"
 	"github.com/openkruise/kruise-game/pkg/util"
 	"go.opentelemetry.io/otel/attribute"
@@ -199,16 +200,16 @@ func (manager GameServerManager) SyncGsToPod(ctx context.Context) error {
 		oldTime, err := time.Parse(TimeFormat, pod.Annotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime])
 		if err != nil {
 			manager.logger.Error(err, "failed to parse previous network trigger time",
-				tracing.FieldGameServerNamespace, gs.Namespace,
-				tracing.FieldGameServerName, gs.Name)
+				telemetryfields.FieldGameServerNamespace, gs.Namespace,
+				telemetryfields.FieldGameServerName, gs.Name)
 			newAnnotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime] = time.Now().Format(TimeFormat)
 		} else {
 			timeSinceOldTrigger := time.Since(oldTime)
 			timeSinceNetworkTransition := time.Since(gs.Status.NetworkStatus.LastTransitionTime.Time)
 			if timeSinceOldTrigger > NetworkIntervalTime && timeSinceNetworkTransition < NetworkTotalWaitTime {
 				manager.logger.V(4).Info("network trigger conditions met, updating trigger time",
-					tracing.FieldGameServerNamespace, gs.Namespace,
-					tracing.FieldGameServerName, gs.Name)
+					telemetryfields.FieldGameServerNamespace, gs.Namespace,
+					telemetryfields.FieldGameServerName, gs.Name)
 				newAnnotations[gameKruiseV1alpha1.GameServerNetworkTriggerTime] = time.Now().Format(TimeFormat)
 			}
 		}
@@ -274,8 +275,8 @@ func (manager GameServerManager) SyncGsToPod(ctx context.Context) error {
 		err = manager.client.Patch(ctx, pod, client.RawPatch(types.StrategicMergePatchType, patchPodBytes))
 		if err != nil && !errors.IsNotFound(err) {
 			manager.logger.Error(err, "failed to patch Pod",
-				tracing.FieldGameServerNamespace, pod.GetNamespace(),
-				tracing.FieldGameServerName, pod.GetName())
+				telemetryfields.FieldGameServerNamespace, pod.GetNamespace(),
+				telemetryfields.FieldGameServerName, pod.GetName())
 			return err
 		}
 	}
@@ -366,8 +367,8 @@ func (manager GameServerManager) SyncPodToGs(ctx context.Context, gss *gameKruis
 			err = manager.client.Patch(ctx, gs, client.RawPatch(types.MergePatchType, jsonPatchSpec))
 			if err != nil && !errors.IsNotFound(err) {
 				manager.logger.Error(err, "failed to patch GameServer spec/metadata",
-					tracing.FieldGameServerNamespace, gs.GetNamespace(),
-					tracing.FieldGameServerName, gs.GetName())
+					telemetryfields.FieldGameServerNamespace, gs.GetNamespace(),
+					telemetryfields.FieldGameServerName, gs.GetName())
 				return err
 			}
 		}
@@ -377,8 +378,8 @@ func (manager GameServerManager) SyncPodToGs(ctx context.Context, gss *gameKruis
 	conditions, err := getConditions(ctx, manager.client, gs, manager.eventRecorder)
 	if err != nil {
 		manager.logger.Error(err, "failed to get GameServer conditions",
-			tracing.FieldGameServerNamespace, gs.GetNamespace(),
-			tracing.FieldGameServerName, gs.GetName())
+			telemetryfields.FieldGameServerNamespace, gs.GetNamespace(),
+			telemetryfields.FieldGameServerName, gs.GetName())
 		return err
 	}
 
@@ -411,8 +412,8 @@ func (manager GameServerManager) SyncPodToGs(ctx context.Context, gss *gameKruis
 		err = manager.client.Status().Patch(ctx, gs, client.RawPatch(types.MergePatchType, jsonPatchStatus))
 		if err != nil && !errors.IsNotFound(err) {
 			manager.logger.Error(err, "failed to patch GameServer status",
-				tracing.FieldGameServerNamespace, gs.GetNamespace(),
-				tracing.FieldGameServerName, gs.GetName())
+				telemetryfields.FieldGameServerNamespace, gs.GetNamespace(),
+				telemetryfields.FieldGameServerName, gs.GetName())
 			return err
 		}
 	}
@@ -426,11 +427,11 @@ func (manager GameServerManager) WaitOrNot() bool {
 	if networkStatus.DesiredNetworkState != networkStatus.CurrentNetworkState {
 		if alreadyWait < NetworkTotalWaitTime {
 			manager.logger.Info("waiting for network state",
-				tracing.FieldGameServerNamespace, manager.gameServer.GetNamespace(),
-				tracing.FieldGameServerName, manager.gameServer.GetName(),
-				tracing.FieldDesired, networkStatus.DesiredNetworkState,
-				tracing.FieldCurrent, networkStatus.CurrentNetworkState,
-				tracing.FieldRemaining, NetworkTotalWaitTime-alreadyWait)
+				telemetryfields.FieldGameServerNamespace, manager.gameServer.GetNamespace(),
+				telemetryfields.FieldGameServerName, manager.gameServer.GetName(),
+				telemetryfields.FieldDesired, networkStatus.DesiredNetworkState,
+				telemetryfields.FieldCurrent, networkStatus.CurrentNetworkState,
+				telemetryfields.FieldRemaining, NetworkTotalWaitTime-alreadyWait)
 			return true
 		} else {
 			manager.eventRecorder.Eventf(manager.gameServer, corev1.EventTypeWarning, GsNetworkStateReason, "Network wait timeout: waited %v, max %v", alreadyWait, NetworkTotalWaitTime)

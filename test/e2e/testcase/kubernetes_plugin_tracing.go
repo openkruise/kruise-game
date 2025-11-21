@@ -13,6 +13,7 @@ import (
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/gomega"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"github.com/openkruise/kruise-game/pkg/tracing"
 	"github.com/openkruise/kruise-game/test/e2e/framework"
 	corev1 "k8s.io/api/core/v1"
@@ -695,7 +696,7 @@ func RunKubernetesPluginTracingTest(f *framework.Framework) {
 			foundName := false
 			for _, span := range controllerSpans {
 				for key, value := range span.Tags {
-					if key == tracing.FieldK8sNamespaceName {
+					if key == telemetryfields.FieldK8sNamespaceName {
 						foundNamespace = true
 						ginkgo.By(fmt.Sprintf("  ✓ k8s.namespace.name = %v", value))
 					}

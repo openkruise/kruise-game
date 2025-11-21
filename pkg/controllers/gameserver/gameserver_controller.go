@@ -50,6 +50,7 @@ import (
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/logging"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"github.com/openkruise/kruise-game/pkg/tracing"
 	"github.com/openkruise/kruise-game/pkg/util"
 	utildiscovery "github.com/openkruise/kruise-game/pkg/util/discovery"
@@ -217,8 +218,8 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	defer span.End()
 
 	logger := logging.FromContextWithTrace(ctx).WithValues(
-		tracing.FieldGameServerNamespace, req.Namespace,
-		tracing.FieldGameServerName, req.Name,
+		telemetryfields.FieldGameServerNamespace, req.Namespace,
+		telemetryfields.FieldGameServerName, req.Name,
 	)
 
 	// get pod
@@ -230,8 +231,8 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			podFound = false
 		} else {
 			logger.Error(err, "failed to find pod",
-				tracing.FieldGameServerNamespace, namespacedName.Namespace,
-				tracing.FieldGameServerName, namespacedName.Name)
+				telemetryfields.FieldGameServerNamespace, namespacedName.Namespace,
+				telemetryfields.FieldGameServerName, namespacedName.Name)
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "failed to get pod")
 			return reconcile.Result{}, err
@@ -247,8 +248,8 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			gsFound = false
 		} else {
 			logger.Error(err, "failed to find GameServer",
-				tracing.FieldGameServerNamespace, namespacedName.Namespace,
-				tracing.FieldGameServerName, namespacedName.Name)
+				telemetryfields.FieldGameServerNamespace, namespacedName.Namespace,
+				telemetryfields.FieldGameServerName, namespacedName.Name)
 			return reconcile.Result{}, err
 		}
 	}
@@ -271,8 +272,8 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			tracing.AttrGameServerSetNamespace(namespacedName.Namespace),
 		)
 		logger = logger.WithValues(
-			tracing.FieldGameServerSetNamespace, namespacedName.Namespace,
-			tracing.FieldGameServerSetName, gssName,
+			telemetryfields.FieldGameServerSetNamespace, namespacedName.Namespace,
+			telemetryfields.FieldGameServerSetName, gssName,
 		)
 	}
 
@@ -295,8 +296,8 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		err = r.initGameServerByPod(ctx, gss, pod)
 		if err != nil && !errors.IsAlreadyExists(err) {
 			logger.Error(err, "failed to create GameServer",
-				tracing.FieldGameServerNamespace, namespacedName.Namespace,
-				tracing.FieldGameServerName, namespacedName.Name)
+				telemetryfields.FieldGameServerNamespace, namespacedName.Namespace,
+				telemetryfields.FieldGameServerName, namespacedName.Name)
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "failed to create GameServer")
 			return reconcile.Result{}, err
@@ -321,8 +322,8 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			err := r.Delete(ctx, gs)
 			if err != nil && !errors.IsNotFound(err) {
 				logger.Error(err, "failed to delete GameServer",
-					tracing.FieldGameServerNamespace, namespacedName.Namespace,
-					tracing.FieldGameServerName, namespacedName.Name)
+					telemetryfields.FieldGameServerNamespace, namespacedName.Namespace,
+					telemetryfields.FieldGameServerName, namespacedName.Name)
 				span.RecordError(err)
 				span.SetStatus(codes.Error, "failed to delete GameServer")
 				return reconcile.Result{}, err
@@ -346,8 +347,8 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, nil
 		}
 		logger.Error(err, "failed to get GameServerSet",
-			tracing.FieldGameServerNamespace, namespacedName.Namespace,
-			tracing.FieldGameServerName, namespacedName.Name)
+			telemetryfields.FieldGameServerNamespace, namespacedName.Namespace,
+			telemetryfields.FieldGameServerName, namespacedName.Name)
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to get GameServerSet")
 		return reconcile.Result{}, err
@@ -389,8 +390,8 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if gsm.WaitOrNot() {
 		span.AddEvent(tracing.EventGameServerReconcileWaitNetworkState,
 			trace.WithAttributes(
-				attribute.String(tracing.FieldDesired, string(gs.Status.NetworkStatus.DesiredNetworkState)),
-				attribute.String(tracing.FieldCurrent, string(gs.Status.NetworkStatus.CurrentNetworkState)),
+				attribute.String(telemetryfields.FieldDesired, string(gs.Status.NetworkStatus.DesiredNetworkState)),
+				attribute.String(telemetryfields.FieldCurrent, string(gs.Status.NetworkStatus.CurrentNetworkState)),
 			))
 		span.SetAttributes(tracing.AttrReconcileRequeue(true))
 		return ctrl.Result{RequeueAfter: NetworkIntervalTime}, nil
