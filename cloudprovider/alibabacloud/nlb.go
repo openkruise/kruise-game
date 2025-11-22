@@ -179,24 +179,56 @@ func (n *NlbPlugin) OnPodAdded(client client.Client, pod *corev1.Pod, ctx contex
 func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
 	tracer := otel.Tracer("okg-controller-manager")
 	ctx, span := startNLBSpan(ctx, tracer, tracing.SpanProcessNLBPod, pod)
-	defer span.End()
-	span.SetAttributes(tracing.AttrNetworkStatus(telemetryfields.NetworkStatusWaiting))
+	// track final network status and error to ensure a single final attribute is set on the parent span
+	finalNetworkStatus := telemetryfields.NetworkStatusWaiting
+	var finalErr error
+	var finalErrorType string
+	finalStatus := codes.Ok
+	finalMessage := "nlb pod processed"
+	defer func() {
+		// Handle panic first so the span records it before finalization.
+		if r := recover(); r != nil {
+			finalErr = fmt.Errorf("panic: %v", r)
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeInternal
+			finalStatus = codes.Error
+			finalMessage = fmt.Sprintf("panic: %v", r)
+		}
+		if finalErr != nil {
+			span.RecordError(finalErr)
+			finalStatus = codes.Error
+			if finalMessage == "nlb pod processed" {
+				finalMessage = finalErr.Error()
+			}
+			if finalErrorType != "" {
+				span.SetAttributes(tracing.AttrErrorType(finalErrorType))
+			}
+		}
+		span.SetAttributes(tracing.AttrNetworkStatus(finalNetworkStatus))
+		span.SetStatus(finalStatus, finalMessage)
+		span.End()
+	}()
 	logger := nlbLogger(ctx, pod).WithValues(telemetryfields.FieldOperation, "update")
 	logger.Info("processing NLB pod update")
 
 	networkManager := utils.NewNetworkManager(pod, c)
 
-	networkStatus, _ := networkManager.GetNetworkStatus()
+	networkStatus, err := networkManager.GetNetworkStatus()
+	if err != nil {
+		logger.Error(err, "failed to get network status")
+		finalErr = err
+		finalNetworkStatus = telemetryfields.NetworkStatusError
+		finalErrorType = telemetryfields.ErrorTypeInternal
+		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+	}
 	networkConfig := networkManager.GetNetworkConfig()
 	sc, err := parseNlbConfig(networkConfig)
 	if err != nil {
 		logger.Error(err, "failed to parse NLB config")
 		span.RecordError(err)
-		span.SetAttributes(
-			tracing.AttrNetworkStatus(telemetryfields.NetworkStatusError),
-			tracing.AttrErrorType(telemetryfields.ErrorTypeParameter),
-		)
-		span.SetStatus(codes.Error, "failed to parse NLB config")
+		finalErr = err
+		finalNetworkStatus = telemetryfields.NetworkStatusError
+		finalErrorType = telemetryfields.ErrorTypeParameter
 		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
 	}
 	span.SetAttributes(
@@ -206,12 +238,18 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 		nlbAttrServiceNamespaceKey.String(pod.GetNamespace()),
 	)
 	if networkStatus == nil {
-		logger.Info("network status missing; marking pod not ready")
-		span.SetAttributes(tracing.AttrNetworkStatus(telemetryfields.NetworkStatusNotReady))
-		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
+		logger.V(1).Info("network status missing; marking pod not ready")
+		finalNetworkStatus = telemetryfields.NetworkStatusNotReady
+		pod, err = networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
 			CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
 		}, pod)
-		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+		if err != nil {
+			finalErr = err
+			finalErrorType = telemetryfields.ErrorTypeInternal
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+		}
+		return pod, nil
 	}
 
 	svc := &corev1.Service{}
@@ -223,7 +261,6 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 		if errors.IsNotFound(err) {
 			logger.Info("creating NLB service for pod")
 			_, createSpan := startNLBSpan(ctx, tracer, tracing.SpanCreateNLBService, pod,
-				tracing.AttrNetworkStatus(telemetryfields.NetworkStatusNotReady),
 				nlbAttrPortCountKey.Int64(int64(len(sc.targetPorts))),
 				nlbAttrLBIDsKey.StringSlice(sc.lbIds),
 				nlbAttrServiceNameKey.String(pod.GetName()),
@@ -235,6 +272,9 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 				createSpan.RecordError(err)
 				createSpan.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeParameter))
 				createSpan.SetStatus(codes.Error, "failed to build nlb service")
+				finalErr = err
+				finalErrorType = telemetryfields.ErrorTypeParameter
+				finalNetworkStatus = telemetryfields.NetworkStatusError
 				return pod, cperrors.ToPluginError(err, cperrors.ParameterError)
 			}
 			if err := c.Create(ctx, service); err != nil {
@@ -242,6 +282,9 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 				createSpan.RecordError(err)
 				createSpan.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall))
 				createSpan.SetStatus(codes.Error, "failed to create nlb service")
+				finalErr = err
+				finalErrorType = telemetryfields.ErrorTypeAPICall
+				finalNetworkStatus = telemetryfields.NetworkStatusError
 				return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
 			}
 			lbID := service.Annotations[SlbIdAnnotationKey]
@@ -253,21 +296,19 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 				nlbAttrServiceTypeKey.String(string(service.Spec.Type)),
 			)
 			createSpan.SetStatus(codes.Ok, "nlb service created")
-			span.SetAttributes(tracing.AttrNetworkStatus(telemetryfields.NetworkStatusNotReady))
+			finalNetworkStatus = telemetryfields.NetworkStatusNotReady
 			return pod, nil
 		}
 		logger.Error(err, "failed to get NLB service")
 		span.RecordError(err)
-		span.SetAttributes(
-			tracing.AttrNetworkStatus(telemetryfields.NetworkStatusError),
-			tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall),
-		)
-		span.SetStatus(codes.Error, "failed to get service")
+		finalErr = err
+		finalErrorType = telemetryfields.ErrorTypeAPICall
+		finalNetworkStatus = telemetryfields.NetworkStatusError
 		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
 
-	if svc.OwnerReferences[0].Kind == "Pod" && svc.OwnerReferences[0].UID != pod.UID {
-		logger.Info("waiting for previous Service owner cleanup",
+	if len(svc.OwnerReferences) > 0 && svc.OwnerReferences[0].Kind == "Pod" && svc.OwnerReferences[0].UID != pod.UID {
+		logger.V(1).Info("waiting for previous Service owner cleanup",
 			telemetryfields.FieldServiceNamespace, svc.Namespace,
 			telemetryfields.FieldServiceName, svc.Name,
 			telemetryfields.FieldOldUID, svc.OwnerReferences[0].UID,
@@ -287,7 +328,6 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
 		}
 		_, updateSpan := startNLBSpan(ctx, tracer, tracing.SpanReconcileNLBService, pod,
-			tracing.AttrNetworkStatus(telemetryfields.NetworkStatusNotReady),
 			nlbAttrPortCountKey.Int64(int64(len(sc.targetPorts))),
 			nlbAttrServiceNameKey.String(pod.GetName()),
 			nlbAttrServiceNamespaceKey.String(pod.GetNamespace()),
@@ -299,6 +339,9 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 			updateSpan.RecordError(err)
 			updateSpan.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeParameter))
 			updateSpan.SetStatus(codes.Error, "failed to build nlb service")
+			finalErr = err
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeParameter
 			return pod, cperrors.ToPluginError(err, cperrors.ParameterError)
 		}
 		if err := c.Update(ctx, service); err != nil {
@@ -306,6 +349,9 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 			updateSpan.RecordError(err)
 			updateSpan.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall))
 			updateSpan.SetStatus(codes.Error, "failed to update nlb service")
+			finalErr = err
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeAPICall
 			return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
 		}
 		lbID := service.Annotations[SlbIdAnnotationKey]
@@ -321,14 +367,13 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 			telemetryfields.FieldLBID, lbID,
 			telemetryfields.FieldPortCount, len(service.Spec.Ports),
 		)
-		span.SetAttributes(tracing.AttrNetworkStatus(telemetryfields.NetworkStatusNotReady))
+		finalNetworkStatus = telemetryfields.NetworkStatusNotReady
 		return pod, nil
 	}
 
 	if networkManager.GetNetworkDisabled() && svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
 		logger.Info("disabling NLB service due to network disable flag")
 		_, toggleSpan := startNLBSpan(ctx, tracer, tracing.SpanToggleNLBServiceType, pod,
-			tracing.AttrNetworkStatus(telemetryfields.NetworkStatusNotReady),
 			nlbAttrServiceActionKey.String("disable"),
 			nlbAttrServiceNameKey.String(svc.GetName()),
 			nlbAttrServiceNamespaceKey.String(svc.GetNamespace()),
@@ -342,8 +387,15 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 			toggleSpan.RecordError(err)
 			toggleSpan.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall))
 			toggleSpan.SetStatus(codes.Error, "failed to disable nlb service")
+			finalErr = err
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeAPICall
 		} else {
 			toggleSpan.SetStatus(codes.Ok, "nlb service disabled")
+			// Disabling NLB makes the pod network NotReady for the load balancer
+			finalNetworkStatus = telemetryfields.NetworkStatusNotReady
+			finalStatus = codes.Ok
+			finalMessage = "nlb service disabled"
 		}
 		return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
 	}
@@ -351,7 +403,6 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	if !networkManager.GetNetworkDisabled() && svc.Spec.Type == corev1.ServiceTypeClusterIP {
 		logger.Info("re-enabling NLB service after network resume")
 		_, toggleSpan := startNLBSpan(ctx, tracer, tracing.SpanToggleNLBServiceType, pod,
-			tracing.AttrNetworkStatus(telemetryfields.NetworkStatusWaiting),
 			nlbAttrServiceActionKey.String("enable"),
 			nlbAttrServiceNameKey.String(svc.GetName()),
 			nlbAttrServiceNamespaceKey.String(svc.GetNamespace()),
@@ -365,14 +416,20 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 			toggleSpan.RecordError(err)
 			toggleSpan.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall))
 			toggleSpan.SetStatus(codes.Error, "failed to enable nlb service")
+			finalErr = err
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeAPICall
 		} else {
 			toggleSpan.SetStatus(codes.Ok, "nlb service enabled")
+			// Enabling NLB likely requires time for the LB to be assigned; mark Waiting
+			finalNetworkStatus = telemetryfields.NetworkStatusWaiting
+			finalStatus = codes.Ok
+			finalMessage = "nlb service enabled"
 		}
 		return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
 	}
 
 	lbSpanAttrs := []attribute.KeyValue{
-		tracing.AttrNetworkStatus(telemetryfields.NetworkStatusWaiting),
 		nlbAttrServiceNameKey.String(svc.GetName()),
 		nlbAttrServiceNamespaceKey.String(svc.GetNamespace()),
 		nlbAttrServiceTypeKey.String(string(svc.Spec.Type)),
@@ -381,27 +438,33 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	}
 	lbSpanAttrs = append(lbSpanAttrs, nlbHealthCheckAttrs(sc.nlbHealthConfig)...)
 	_, lbSpan := startNLBSpan(ctx, tracer, tracing.SpanCheckNLBStatus, pod, lbSpanAttrs...)
-	if svc.Status.LoadBalancer.Ingress == nil {
-		logger.Info("load balancer ingress not yet assigned")
+	if len(svc.Status.LoadBalancer.Ingress) == 0 {
+		logger.V(1).Info("load balancer ingress not yet assigned")
 		lbSpan.SetAttributes(
-			tracing.AttrNetworkStatus(telemetryfields.NetworkStatusNotReady),
 			tracing.AttrErrorType(telemetryfields.ErrorTypeResourceNotReady),
 		)
 		lbSpan.SetStatus(codes.Error, "LoadBalancer ingress not yet assigned")
+		lbSpan.AddEvent(tracing.EventGameServerReconcileWaitNetworkState, trace.WithAttributes(tracing.AttrNetworkStatus(telemetryfields.NetworkStatusWaiting)))
 		lbSpan.End()
-		span.SetAttributes(tracing.AttrNetworkStatus(telemetryfields.NetworkStatusNotReady))
+		finalNetworkStatus = telemetryfields.NetworkStatusNotReady
 
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
-		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+		if err != nil {
+			finalErr = err
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeInternal
+			return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+		}
+		return pod, nil
 	}
 
 	lbSpan.SetAttributes(
-		tracing.AttrNetworkStatus(telemetryfields.NetworkStatusReady),
 		nlbAttrIngressIPKey.String(svc.Status.LoadBalancer.Ingress[0].IP),
 		nlbAttrIngressHostnameKey.String(svc.Status.LoadBalancer.Ingress[0].Hostname),
 	)
 	lbSpan.SetStatus(codes.Ok, "LoadBalancer ready")
+	lbSpan.AddEvent(tracing.EventGameServerReconcileSyncPodToGsSuccess, trace.WithAttributes(tracing.AttrNetworkStatus(telemetryfields.NetworkStatusReady)))
 	lbSpan.End()
 
 	if util.IsAllowNotReadyContainers(networkManager.GetNetworkConfig()) {
@@ -416,6 +479,9 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 			err := c.Update(ctx, svc)
 			if err != nil {
 				logger.Error(err, "failed to update Service for allow-not-ready containers")
+				finalErr = err
+				finalNetworkStatus = telemetryfields.NetworkStatusError
+				finalErrorType = telemetryfields.ErrorTypeAPICall
 				return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
 			}
 		}
@@ -455,7 +521,6 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkReady
 
 	_, publishSpan := startNLBSpan(ctx, tracer, tracing.SpanPublishNLBStatus, pod,
-		tracing.AttrNetworkStatus(telemetryfields.NetworkStatusReady),
 		attribute.Int(telemetryfields.FieldInternalAddresses, len(internalAddresses)),
 		attribute.Int(telemetryfields.FieldExternalAddresses, len(externalAddresses)),
 		nlbAttrPortCountKey.Int64(int64(len(svc.Spec.Ports))),
@@ -468,26 +533,52 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	if err != nil {
 		logger.Error(err, "failed to publish NLB network status to pod")
 		span.RecordError(err)
-		span.SetAttributes(
-			tracing.AttrNetworkStatus(telemetryfields.NetworkStatusError),
-			tracing.AttrErrorType(telemetryfields.ErrorTypeInternal),
-		)
-		span.SetStatus(codes.Error, "failed to update network status")
+		finalErr = err
+		finalNetworkStatus = telemetryfields.NetworkStatusError
+		finalErrorType = telemetryfields.ErrorTypeInternal
 		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 	}
 
-	span.SetAttributes(tracing.AttrNetworkStatus(telemetryfields.NetworkStatusReady))
-	span.SetStatus(codes.Ok, "nlb pod processed")
+	finalNetworkStatus = telemetryfields.NetworkStatusReady
+	finalStatus = codes.Ok
+	finalMessage = "nlb pod processed"
 	logger.Info("NLB pod update complete", telemetryfields.FieldState, networkStatus.CurrentNetworkState)
 	return pod, nil
 }
 
 func (n *NlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.Context) cperrors.PluginError {
 	tracer := otel.Tracer("okg-controller-manager")
-	ctx, span := startNLBSpan(ctx, tracer, tracing.SpanCleanupNLBAllocation, pod,
-		tracing.AttrNetworkStatus(telemetryfields.NetworkStatusNotReady),
-	)
-	defer span.End()
+	ctx, span := startNLBSpan(ctx, tracer, tracing.SpanCleanupNLBAllocation, pod)
+	finalNetworkStatus := telemetryfields.NetworkStatusNotReady
+	var finalErr error
+	var finalErrorType string
+	finalStatus := codes.Ok
+	finalMessage := "nlb allocation cleaned up"
+	defer func() {
+		if finalErr != nil {
+			span.RecordError(finalErr)
+			finalStatus = codes.Error
+			if finalMessage == "nlb allocation cleaned up" {
+				finalMessage = finalErr.Error()
+			}
+			if finalErrorType != "" {
+				span.SetAttributes(tracing.AttrErrorType(finalErrorType))
+			}
+		}
+		span.SetAttributes(tracing.AttrNetworkStatus(finalNetworkStatus))
+		span.SetStatus(finalStatus, finalMessage)
+		span.End()
+	}()
+	// guard against panic to ensure controller keeps running; defer must run before finalization.
+	defer func() {
+		if r := recover(); r != nil {
+			finalErr = fmt.Errorf("panic: %v", r)
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeInternal
+			finalStatus = codes.Error
+			finalMessage = fmt.Sprintf("panic: %v", r)
+		}
+	}()
 	logger := nlbLogger(ctx, pod).WithValues(telemetryfields.FieldOperation, "delete")
 
 	networkManager := utils.NewNetworkManager(pod, c)
@@ -496,8 +587,9 @@ func (n *NlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.C
 	if err != nil {
 		logger.Error(err, "failed to parse NLB config during cleanup")
 		span.RecordError(err)
-		span.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeParameter))
-		span.SetStatus(codes.Error, "failed to parse NLB config")
+		finalErr = err
+		finalErrorType = telemetryfields.ErrorTypeParameter
+		finalNetworkStatus = telemetryfields.NetworkStatusError
 		return cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
 
@@ -507,13 +599,15 @@ func (n *NlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.C
 		if err != nil && !errors.IsNotFound(err) {
 			logger.Error(err, "failed to fetch GameServerSet during cleanup")
 			span.RecordError(err)
-			span.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall))
-			span.SetStatus(codes.Error, "failed to fetch GameServerSet")
+			finalErr = err
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeAPICall
 			return cperrors.ToPluginError(err, cperrors.ApiCallError)
 		}
 		if err == nil && gss.GetDeletionTimestamp() == nil {
-			logger.Info("GameServerSet still active; skipping NLB cleanup")
-			span.SetStatus(codes.Ok, "gss still alive, skip cleanup")
+			logger.V(1).Info("GameServerSet still active; skipping NLB cleanup")
+			finalStatus = codes.Ok
+			finalNetworkStatus = telemetryfields.NetworkStatusReady
 			return nil
 		}
 		for key := range n.podAllocate {
@@ -536,7 +630,9 @@ func (n *NlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.C
 		nlbAttrDeallocatedKeysKey.StringSlice(podKeys),
 	)
 	logger.Info("cleaned up NLB allocations", telemetryfields.FieldCount, len(podKeys), telemetryfields.FieldKeys, podKeys)
-	span.SetStatus(codes.Ok, "nlb allocation cleaned up")
+	finalNetworkStatus = telemetryfields.NetworkStatusReady
+	finalStatus = codes.Ok
+	finalMessage = "nlb allocation cleaned up"
 	return nil
 }
 
@@ -654,7 +750,6 @@ func (n *NlbPlugin) allocate(ctx context.Context, pod *corev1.Pod, lbIds []strin
 		telemetryfields.FieldPodKeyQualified, podKey,
 	)
 	_, span := startNLBSpan(ctx, tracer, tracing.SpanAllocateNLBPorts, pod,
-		tracing.AttrNetworkStatus(telemetryfields.NetworkStatusWaiting),
 		nlbAttrLBIDsKey.StringSlice(lbIds),
 		nlbAttrRequestedPortCountKey.Int64(int64(num)),
 		nlbAttrPodKey.String(podKey),
@@ -722,14 +817,14 @@ func (n *NlbPlugin) allocate(ctx context.Context, pod *corev1.Pod, lbIds []strin
 		telemetryfields.FieldPorts, ports,
 	)
 
-	// Record successful allocation in span
+	// Record successful allocation in span; avoid setting business network attribute on child span
 	span.SetAttributes(
-		tracing.AttrNetworkStatus(telemetryfields.NetworkStatusReady),
 		tracing.AttrNetworkResourceID(lbId),
 		nlbAttrLBIDKey.String(lbId),
 		nlbAttrAllocatedPortsKey.String(util.Int32SliceToString(ports, ",")),
 		nlbAttrAllocatedCountKey.Int64(int64(len(ports))),
 	)
+	span.AddEvent(tracing.EventNetworkNLBPortsAllocated, trace.WithAttributes(tracing.AttrNetworkStatus(telemetryfields.NetworkStatusReady)))
 	span.SetStatus(codes.Ok, "ports allocated successfully")
 
 	return lbId, ports

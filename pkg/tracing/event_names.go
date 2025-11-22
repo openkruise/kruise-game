@@ -15,4 +15,6 @@ const (
 	EventGameServerSetReconcileSyncPodProbeMarkerStart   = "gameserverset.reconcile.sync_podprobemarker.start"
 	EventGameServerSetReconcileSyncPodProbeMarkerWaiting = "gameserverset.reconcile.sync_podprobemarker.waiting"
 	EventGameServerSetReconcileSyncPodProbeMarkerSuccess = "gameserverset.reconcile.sync_podprobemarker.success"
+	// Network plugin events
+	EventNetworkNLBPortsAllocated = "network.nlb.ports.allocated"
 )

@@ -40,3 +40,6 @@ cover.out
 
 # Debug and temporary logs
 log_debug
+
+# Go cache
+.cache
