@@ -18,6 +18,7 @@ const (
 	SpanCreateNodePortService  = "create nodeport service"
 	SpanToggleNodePortSelector = "toggle nodeport selector"
 	SpanPublishNodePortStatus  = "publish nodeport status"
+	SpanCleanupNodePortService = "cleanup nodeport service"
 	// ALB/NLB plugin spans
 	SpanCreateNLBService     = "create nlb service"
 	SpanReconcileNLBService  = "reconcile nlb service"
