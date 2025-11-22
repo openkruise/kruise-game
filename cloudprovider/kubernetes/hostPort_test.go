@@ -359,6 +359,23 @@ func TestHostPortTracingOnPodUpdated(t *testing.T) {
 	}
 
 	t.Logf("Successfully verified %d span(s) created for OnPodUpdated", len(spans))
+
+	// Verify event for status published exists (parent span) if status Ready
+	attrs = rootSpan.Attributes()
+	statusVal, ok := attrStringValue(attrs, telemetryfields.FieldNetworkStatus)
+	if ok && statusVal == telemetryfields.NetworkStatusReady {
+		events := rootSpan.Events()
+		found := false
+		for _, e := range events {
+			if e.Name == tracing.EventNetworkHostPortStatusPublished {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected %s event in root span when network status Ready", tracing.EventNetworkHostPortStatusPublished)
+		}
+	}
 }
 
 // TestHostPortTracingErrorHandling tests error span recording
@@ -543,4 +560,100 @@ func TestHostPortTracingAllocatePortsChildSpan(t *testing.T) {
 	}
 
 	t.Logf("Successfully verified %d total span(s) for allocate ports test", len(spans))
+
+	// Find parent span and check event for ports allocated
+	var parentSpan sdktrace.ReadOnlySpan
+	for _, s := range spans {
+		if s.Name() == tracing.SpanPrepareHostPortPod {
+			parentSpan = s
+			break
+		}
+	}
+	if parentSpan == nil {
+		t.Log("Note: parent root span not found")
+	} else {
+		found := false
+		for _, ev := range parentSpan.Events() {
+			if ev.Name == tracing.EventNetworkHostPortPortsAllocated {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Logf("Warning: Event %s not found on parent span", tracing.EventNetworkHostPortPortsAllocated)
+		}
+	}
+}
+
+// TestHostPortTracingOnPodDeleted verifies that OnPodDeleted emits the release event in parent span
+func TestHostPortTracingOnPodDeleted(t *testing.T) {
+	spanRecorder := tracetest.NewSpanRecorder()
+	tracerProvider := sdktrace.NewTracerProvider(
+		sdktrace.WithSpanProcessor(spanRecorder),
+	)
+	otel.SetTracerProvider(tracerProvider)
+	defer otel.SetTracerProvider(noop.NewTracerProvider())
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pod-del",
+			Namespace: "default",
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType:   "Kubernetes-HostPort",
+				gamekruiseiov1alpha1.GameServerNetworkConf:   `[{"name":"ContainerPorts","value":"80"}]`,
+				gamekruiseiov1alpha1.GameServerNetworkStatus: `{"currentNetworkState":"Ready"}`,
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "test-node",
+			Containers: []corev1.Container{
+				{
+					Name:  "game",
+					Image: "nginx:latest",
+					Ports: []corev1.ContainerPort{{ContainerPort: 80, HostPort: 8080, Protocol: corev1.ProtocolTCP}},
+				},
+			},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.1"},
+	}
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+
+	plugin := &HostPortPlugin{}
+	// Populate podAllocated to simulate existing allocation
+	plugin.podAllocated = make(map[string]string)
+	plugin.podAllocated["default/test-pod-del"] = "8080"
+
+	ctx := context.Background()
+	_ = plugin.OnPodDeleted(fakeClient, pod, ctx)
+
+	spans := spanRecorder.Ended()
+	if len(spans) == 0 {
+		t.Fatal("Expected at least one span to be created, got none")
+	}
+
+	var rootSpan sdktrace.ReadOnlySpan
+	for _, s := range spans {
+		if s.Name() == tracing.SpanCleanupHostPortAllocation {
+			rootSpan = s
+			break
+		}
+	}
+	if rootSpan == nil {
+		t.Fatal("Root span cleanup hostport allocation not found")
+	}
+
+	found := false
+	for _, e := range rootSpan.Events() {
+		if e.Name == tracing.EventNetworkHostPortReleased {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected %s event in root span on pod deleted", tracing.EventNetworkHostPortReleased)
+	}
 }

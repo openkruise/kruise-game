@@ -101,7 +101,35 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 	// Create root span for HostPort OnPodAdded
 	tracer := otel.Tracer("okg-controller-manager")
 	ctx, span := startHostPortSpan(ctx, tracer, tracing.SpanPrepareHostPortPod, pod)
-	defer span.End()
+	// track final network status and error to ensure a single final attribute is set on the parent span
+	finalNetworkStatus := telemetryfields.NetworkStatusWaiting
+	var finalErr error
+	var finalErrorType string
+	finalStatus := codes.Ok
+	finalMessage := "pod configured with host ports successfully"
+	defer func() {
+		// Handle panic first so the span records it before finalization.
+		if r := recover(); r != nil {
+			finalErr = fmt.Errorf("panic: %v", r)
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeInternal
+			finalStatus = codes.Error
+			finalMessage = fmt.Sprintf("panic: %v", r)
+		}
+		if finalErr != nil {
+			span.RecordError(finalErr)
+			finalStatus = codes.Error
+			if finalMessage == "pod configured with host ports successfully" {
+				finalMessage = finalErr.Error()
+			}
+			if finalErrorType != "" {
+				span.SetAttributes(tracing.AttrErrorType(finalErrorType))
+			}
+		}
+		span.SetAttributes(tracing.AttrNetworkStatus(finalNetworkStatus))
+		span.SetStatus(finalStatus, finalMessage)
+		span.End()
+	}()
 	podKey := pod.GetNamespace() + "/" + pod.GetName()
 	span.SetAttributes(
 		tracing.AttrNetworkStatus(telemetryfields.NetworkStatusWaiting),
@@ -124,6 +152,9 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 		span.SetAttributes(
 			tracing.AttrErrorType(telemetryfields.ErrorTypeParameter),
 		)
+		finalErr = dupErr
+		finalErrorType = telemetryfields.ErrorTypeParameter
+		// parameter conflict (duplicate pod) is not an indication of network error -> keep parent neutral/waiting
 		return pod, errors.NewPluginError(errors.InternalError, "There is a pod with same ns/name exists in cluster")
 	}
 	if !k8serrors.IsNotFound(err) {
@@ -131,12 +162,17 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 		span.RecordError(err)
 		span.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall))
 		span.SetStatus(codes.Error, "failed to check for existing pod")
+		finalErr = err
+		finalErrorType = telemetryfields.ErrorTypeAPICall
+		finalNetworkStatus = telemetryfields.NetworkStatusError
 		return pod, errors.NewPluginError(errors.ApiCallError, err.Error())
 	}
 
 	networkManager := utils.NewNetworkManager(pod, c)
 	conf := networkManager.GetNetworkConfig()
 	containerPortsMap, containerProtocolsMap, numToAlloc := parseConfig(conf, pod)
+	// add config parsed event
+	span.AddEvent(tracing.EventNetworkHostPortConfigParsed)
 	requestedPorts := numToAlloc
 
 	var hostPorts []int32
@@ -148,10 +184,11 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 			hostPortAttrAllocatedPortsKey.String(util.Int32SliceToString(hostPorts, ",")),
 			hostPortAttrAllocatedCountKey.Int64(int64(len(hostPorts))),
 		)
+		// mark reused event
+		span.AddEvent(tracing.EventNetworkHostPortPortsReused, trace.WithAttributes(hostPortAttrAllocatedPortsKey.String(util.Int32SliceToString(hostPorts, ",")), hostPortAttrAllocatedCountKey.Int64(int64(len(hostPorts)))))
 	} else {
 		// Create child span for port allocation
 		_, allocSpan := startHostPortSpan(ctx, tracer, tracing.SpanAllocateHostPort, pod,
-			tracing.AttrNetworkStatus(telemetryfields.NetworkStatusWaiting),
 			hostPortAttrPortsRequestedKey.Int64(int64(requestedPorts)),
 			hostPortAttrPodKey.String(podKey),
 		)
@@ -161,6 +198,8 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 			hostPortAttrAllocatedPortsKey.String(util.Int32SliceToString(hostPorts, ",")),
 			hostPortAttrAllocatedCountKey.Int64(int64(len(hostPorts))),
 		)
+		// add event on parent when allocation happened
+		span.AddEvent(tracing.EventNetworkHostPortPortsAllocated, trace.WithAttributes(hostPortAttrAllocatedPortsKey.String(util.Int32SliceToString(hostPorts, ",")), hostPortAttrAllocatedCountKey.Int64(int64(len(hostPorts)))))
 		allocSpan.SetStatus(codes.Ok, "ports allocated successfully")
 		allocSpan.End()
 	}
@@ -208,7 +247,10 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 		hostPortAttrAllocatedPortsKey.String(util.Int32SliceToString(hostPorts, ",")),
 		hostPortAttrAllocatedCountKey.Int64(int64(len(hostPorts))),
 	)
-	span.SetStatus(codes.Ok, "pod configured with host ports successfully")
+	// mark containers patched event
+	span.AddEvent(tracing.EventNetworkHostPortContainersPatched, trace.WithAttributes(hostPortAttrContainersPatchedKey.Int64(int64(len(containerPortsMap))), hostPortAttrAllocatedCountKey.Int64(int64(len(hostPorts)))))
+	// mark NotReady until OnPodUpdated verifies network; defer will set final attributes/status
+	finalNetworkStatus = telemetryfields.NetworkStatusNotReady
 
 	return pod, nil
 }
@@ -217,7 +259,34 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 	// Create root span for HostPort OnPodUpdated
 	tracer := otel.Tracer("okg-controller-manager")
 	ctx, span := startHostPortSpan(ctx, tracer, tracing.SpanProcessHostPortUpdate, pod)
-	defer span.End()
+	// track final network status and error to ensure a single final attribute is set on the parent span
+	finalNetworkStatus := telemetryfields.NetworkStatusWaiting
+	var finalErr error
+	var finalErrorType string
+	finalStatus := codes.Ok
+	finalMessage := "hostport pod processed"
+	defer func() {
+		if r := recover(); r != nil {
+			finalErr = fmt.Errorf("panic: %v", r)
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeInternal
+			finalStatus = codes.Error
+			finalMessage = fmt.Sprintf("panic: %v", r)
+		}
+		if finalErr != nil {
+			span.RecordError(finalErr)
+			finalStatus = codes.Error
+			if finalMessage == "hostport pod processed" {
+				finalMessage = finalErr.Error()
+			}
+			if finalErrorType != "" {
+				span.SetAttributes(tracing.AttrErrorType(finalErrorType))
+			}
+		}
+		span.SetAttributes(tracing.AttrNetworkStatus(finalNetworkStatus))
+		span.SetStatus(finalStatus, finalMessage)
+		span.End()
+	}()
 	span.SetAttributes(hostPortAttrPodKey.String(pod.GetNamespace() + "/" + pod.GetName()))
 
 	logger := hostPortLogger(ctx, pod).WithValues(telemetryfields.FieldOperation, "update")
@@ -230,17 +299,22 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 		if k8serrors.IsNotFound(err) {
 			logger.Error(err, "Node not found for hostport pod", telemetryfields.FieldK8sNodeName, pod.Spec.NodeName)
 			span.RecordError(err)
-			span.SetStatus(codes.Error, "node not found")
+			// mark final status as NotReady and record error type
+			finalNetworkStatus = telemetryfields.NetworkStatusNotReady
+			finalErrorType = telemetryfields.ErrorTypeResourceNotReady
+			finalErr = err
 			span.SetAttributes(
-				tracing.AttrNetworkStatus(telemetryfields.NetworkStatusNotReady),
-				tracing.AttrErrorType(telemetryfields.ErrorTypeResourceNotReady),
+				tracing.AttrNetworkStatus(finalNetworkStatus),
+				tracing.AttrErrorType(finalErrorType),
 			)
 			return pod, nil
 		}
 		logger.Error(err, "Failed to fetch node for hostport pod", telemetryfields.FieldK8sNodeName, pod.Spec.NodeName)
 		span.RecordError(err)
-		span.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall))
-		span.SetStatus(codes.Error, "failed to get node")
+		finalErr = err
+		finalNetworkStatus = telemetryfields.NetworkStatusError
+		finalErrorType = telemetryfields.ErrorTypeAPICall
+		span.SetAttributes(tracing.AttrErrorType(finalErrorType))
 		return pod, errors.NewPluginError(errors.ApiCallError, err.Error())
 	}
 	nodeIp := getAddress(node)
@@ -273,17 +347,22 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 	if len(iNetworkPorts) == 0 || len(eNetworkPorts) == 0 || pod.Status.PodIP == "" {
 		errNetworkNotReady := fmt.Errorf("pod ip or hostports missing")
 		logger.Error(errNetworkNotReady, "HostPort network not ready", telemetryfields.FieldInternalPorts, len(iNetworkPorts), telemetryfields.FieldExternalPorts, len(eNetworkPorts), telemetryfields.FieldPodIP, pod.Status.PodIP)
+		// update parent final status
+		finalNetworkStatus = telemetryfields.NetworkStatusNotReady
+		finalErr = errNetworkNotReady
+		finalErrorType = telemetryfields.ErrorTypeResourceNotReady
 		span.SetAttributes(
-			tracing.AttrNetworkStatus(telemetryfields.NetworkStatusNotReady),
+			tracing.AttrNetworkStatus(finalNetworkStatus),
 			attribute.Int(telemetryfields.FieldInternalPorts, len(iNetworkPorts)),
 			attribute.Int(telemetryfields.FieldExternalPorts, len(eNetworkPorts)),
 			hostPortAttrInternalPortCountKey.Int64(int64(len(iNetworkPorts))),
 			hostPortAttrExternalPortCountKey.Int64(int64(len(eNetworkPorts))),
 			attribute.String(telemetryfields.FieldPodIP, pod.Status.PodIP),
-			tracing.AttrErrorType(telemetryfields.ErrorTypeResourceNotReady),
+			tracing.AttrErrorType(finalErrorType),
 		)
 		span.RecordError(errNetworkNotReady)
-		span.SetStatus(codes.Error, "network not ready")
+		finalStatus = codes.Error
+		finalMessage = "network not ready"
 		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
 			CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
 		}, pod)
@@ -316,7 +395,12 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 		hostPortAttrInternalPortCountKey.Int64(int64(len(iNetworkPorts))),
 		hostPortAttrExternalPortCountKey.Int64(int64(len(eNetworkPorts))),
 	)
-	span.SetStatus(codes.Ok, "network ready")
+	// parent final network status set to Ready
+	finalNetworkStatus = telemetryfields.NetworkStatusReady
+	finalStatus = codes.Ok
+	finalMessage = "network ready"
+	// add a status published event
+	span.AddEvent(tracing.EventNetworkHostPortStatusPublished, trace.WithAttributes(hostPortAttrNodeIPKey.String(nodeIp), hostPortAttrInternalPortCountKey.Int64(int64(len(iNetworkPorts))), hostPortAttrExternalPortCountKey.Int64(int64(len(eNetworkPorts)))))
 	logger.Info("Updated hostport network status", telemetryfields.FieldNodeIP, nodeIp, telemetryfields.FieldInternalPorts, len(iNetworkPorts), telemetryfields.FieldExternalPorts, len(eNetworkPorts))
 
 	pod, err = networkManager.UpdateNetworkStatus(networkStatus, pod)
@@ -330,12 +414,39 @@ func (hpp *HostPortPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx co
 	_, span := startHostPortSpan(ctx, tracer, tracing.SpanCleanupHostPortAllocation, pod,
 		tracing.AttrNetworkStatus(telemetryfields.NetworkStatusNotReady),
 	)
-	defer span.End()
+	finalNetworkStatus := telemetryfields.NetworkStatusNotReady
+	var finalErr error
+	var finalErrorType string
+	finalStatus := codes.Ok
+	finalMessage := "hostport allocation cleaned up"
+	defer func() {
+		if r := recover(); r != nil {
+			finalErr = fmt.Errorf("panic: %v", r)
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeInternal
+			finalStatus = codes.Error
+			finalMessage = fmt.Sprintf("panic: %v", r)
+		}
+		if finalErr != nil {
+			span.RecordError(finalErr)
+			finalStatus = codes.Error
+			if finalMessage == "hostport allocation cleaned up" {
+				finalMessage = finalErr.Error()
+			}
+			if finalErrorType != "" {
+				span.SetAttributes(tracing.AttrErrorType(finalErrorType))
+			}
+		}
+		span.SetAttributes(tracing.AttrNetworkStatus(finalNetworkStatus))
+		span.SetStatus(finalStatus, finalMessage)
+		span.End()
+	}()
 	podKey := pod.GetNamespace() + "/" + pod.GetName()
 	span.SetAttributes(hostPortAttrPodKey.String(podKey))
 	if _, ok := hpp.podAllocated[podKey]; !ok {
 		logger.V(4).Info("No hostport allocation found for pod")
-		span.SetStatus(codes.Ok, "no hostport allocation found")
+		finalStatus = codes.Ok
+		finalMessage = "no hostport allocation found"
 		return nil
 	}
 
@@ -350,11 +461,14 @@ func (hpp *HostPortPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx co
 
 	hpp.deAllocate(hostPorts, podKey)
 	logger.Info("Released hostPorts for pod", telemetryfields.FieldHostPorts, hostPorts)
+	span.AddEvent(tracing.EventNetworkHostPortReleased, trace.WithAttributes(hostPortAttrReleasedCountKey.Int64(int64(len(hostPorts))), hostPortAttrReleasedPortsKey.String(util.Int32SliceToString(hostPorts, ","))))
 	span.SetAttributes(
 		hostPortAttrReleasedCountKey.Int64(int64(len(hostPorts))),
 		hostPortAttrReleasedPortsKey.String(util.Int32SliceToString(hostPorts, ",")),
 	)
-	span.SetStatus(codes.Ok, "hostport allocation cleaned up")
+	// mark final status OK for deleted, keep network_status as NotReady/cleanup done
+	finalMessage = "hostport allocation cleaned up"
+	finalStatus = codes.Ok
 	return nil
 }
 

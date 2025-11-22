@@ -17,4 +17,10 @@ const (
 	EventGameServerSetReconcileSyncPodProbeMarkerSuccess = "gameserverset.reconcile.sync_podprobemarker.success"
 	// Network plugin events
 	EventNetworkNLBPortsAllocated = "network.nlb.ports.allocated"
+	EventNetworkHostPortConfigParsed = "network.hostport.config.parsed"
+	EventNetworkHostPortPortsReused = "network.hostport.ports.reused"
+	EventNetworkHostPortPortsAllocated = "network.hostport.ports.allocated"
+	EventNetworkHostPortContainersPatched = "network.hostport.containers.patched"
+	EventNetworkHostPortReleased = "network.hostport.released"
+	EventNetworkHostPortStatusPublished = "network.hostport.status.published"
 )
