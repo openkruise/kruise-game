@@ -130,9 +130,16 @@ Clients can access the game server by using 47.97.227.137:512.
 
 OpenKruiseGame supports the following network plugins:
 - Kubernetes-HostPort
+- Kubernetes-NodePort
+- Kubernetes-Ingress
 - AlibabaCloud-NATGW
 - AlibabaCloud-SLB
+- AlibabaCloud-NLB
+- AlibabaCloud-Auto-NLBs
+- AlibabaCloud-EIP
 - AlibabaCloud-SLB-SharedPort
+- AlibabaCloud-NLB-SharedPort
+- Volcengine-CLB
 - Volcengine-EIP
 - HwCloud-ELB
 - HwCloud-CCE-ELB
@@ -734,6 +741,299 @@ The network status of GameServer would be as follows:
 ```
 
 Clients can access the game server by using nlb-muyo7fv6z646ygcxxx.cn-xxx.nlb.aliyuncs.com:1047
+
+---
+
+### AlibabaCloud-Auto-NLBs
+
+#### Plugin name
+
+`AlibabaCloud-Auto-NLBs`
+
+#### Cloud Provider
+
+AlibabaCloud
+
+#### Plugin description
+
+- AlibabaCloud-Auto-NLBs uses Alibaba Cloud Network Load Balancer (NLB) CRD as the carrier entity for external services. It implements fast deployment and elastic scaling of game servers through pre-created NLB instance pools and Service pools.
+
+- Compared with the traditional AlibabaCloud-NLB, this plugin has the following advantages:
+  - Automatically manages NLB instance pools, creating and managing multiple NLB instances based on GameServerSet scale
+  - Pre-creates Service pools to improve game server creation speed
+  - Supports multi-availability zone deployment for higher service availability
+  - Supports multiple ISP lines (BGP, Telecom, Unicom, etc.) for more flexible network policies
+  - Based on NLB CRD, no need to directly operate cloud resources, more cloud-native
+
+- This network plugin supports network isolation.
+
+- Prerequisites: [AlibabaCloud NLB Operator](https://github.com/chrisliu1995/AlibabaCloud-NLB-Operator) needs to be installed in the cluster
+
+#### Network parameters
+
+EipIspType
+
+- Meaning: EIP ISP line type, supports configuring multiple ISPs
+- Value format: ISP types separated by commas, e.g.: BGP,ChinaTelecom,ChinaUnicom
+- Optional values:
+  - BGP: BGP (multi-line)
+  - ChinaTelecom: China Telecom
+  - ChinaUnicom: China Unicom
+  - ChinaMobile: China Mobile
+  - intranet: internal network (need to add intranet prefix, e.g.: intranet-BGP)
+- Configuration change supported or not: yes
+
+PortProtocols
+
+- Meaning: ports and protocols exposed by the pod, supporting multiple ports/protocols
+- Value format: port1/protocol1,port2/protocol2,... (protocols must be in uppercase)
+- Example: 8080/TCP,8081/UDP
+- Configuration change supported or not: yes
+
+MinPort
+
+- Meaning: minimum value for NLB external port allocation
+- Value format: port number, default is 1000
+- Configuration change supported or not: no
+
+MaxPort
+
+- Meaning: maximum value for NLB external port allocation
+- Value format: port number, default is 1499
+- Configuration change supported or not: no
+
+BlockPorts
+
+- Meaning: list of ports to be blocked and not used
+- Value format: port1,port2,port3...  Example: 1010,1020,1030
+- Configuration change supported or not: no
+
+ZoneMaps
+
+- Meaning: NLB availability zone and switch mapping relationship, must include VPC ID
+- Value format: vpc-id@zoneId1:vSwitchId1,zoneId2:vSwitchId2,...
+- Example: vpc-abc123@cn-hangzhou-h:vsw-xxx,cn-hangzhou-i:vsw-yyy
+- Note: at least 2 availability zones need to be configured
+- Configuration change supported or not: no
+
+ReserveNlbNum
+
+- Meaning: number of reserved NLB instances for fast scaling
+- Value format: number, default is 1
+- Configuration change supported or not: no
+
+ExternalTrafficPolicyType
+
+- Meaning: Service traffic policy type
+- Value format: Local or Cluster, default is Local
+- Note: Local can preserve client source IP address
+- Configuration change supported or not: no
+
+AllowNotReadyContainers
+
+- Meaning: container names allowed to not be ready during in-place upgrade
+- Value format: {containerName_0},{containerName_1},... Example: sidecar
+- Configuration change supported or not: cannot be changed during in-place upgrade process
+
+LBHealthCheckFlag
+
+- Meaning: whether to enable health check
+- Value format: "on" means enabled, "off" means disabled. Default is on
+- Configuration change supported or not: yes
+
+LBHealthCheckType
+
+- Meaning: health check protocol
+- Value format: "tcp" or "http", default is tcp
+- Configuration change supported or not: yes
+
+LBHealthCheckConnectPort
+
+- Meaning: server port for health check
+- Value format: value range [0, 65535]. Default is "0"
+- Configuration change supported or not: yes
+
+LBHealthCheckConnectTimeout
+
+- Meaning: maximum timeout for health check response
+- Value format: unit: seconds. Value range [1, 300]. Default is "5"
+- Configuration change supported or not: yes
+
+LBHealthyThreshold
+
+- Meaning: number of consecutive successful health checks before server status changes from failure to success
+- Value format: value range [2, 10]. Default is "2"
+- Configuration change supported or not: yes
+
+LBUnhealthyThreshold
+
+- Meaning: number of consecutive failed health checks before server status changes from success to failure
+- Value format: value range [2, 10]. Default is "2"
+- Configuration change supported or not: yes
+
+LBHealthCheckInterval
+
+- Meaning: health check interval
+- Value format: unit: seconds. Value range [1, 50]. Default is "10"
+- Configuration change supported or not: yes
+
+LBHealthCheckUri
+
+- Meaning: corresponding URI when health check type is HTTP
+- Value format: length is 1~80 characters, can only use letters, numbers, and characters. Must start with forward slash (/)
+- Configuration change supported or not: yes
+
+LBHealthCheckDomain
+
+- Meaning: corresponding domain when health check type is HTTP
+- Value format: specific domain length is limited to 1~80 characters, can only use lowercase letters, numbers, dashes (-), and periods (.)
+- Configuration change supported or not: yes
+
+LBHealthCheckMethod
+
+- Meaning: corresponding method when health check type is HTTP
+- Value format: "GET" or "HEAD"
+- Configuration change supported or not: yes
+
+#### Plugin configuration
+
+None
+
+#### Example
+
+**Basic Example: Single-line Deployment**
+
+```yaml
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: gs-auto-nlb
+  namespace: default
+spec:
+  replicas: 10
+  updateStrategy:
+    rollingUpdate:
+      podUpdatePolicy: InPlaceIfPossible
+  network:
+    networkType: AlibabaCloud-Auto-NLBs
+    networkConf:
+    - name: EipIspType
+      value: "BGP"
+    - name: PortProtocols
+      value: "8080/TCP,8081/UDP"
+    - name: MinPort
+      value: "10000"
+    - name: MaxPort
+      value: "10999"
+    - name: ZoneMaps
+      value: "vpc-abc123@cn-hangzhou-h:vsw-xxx,cn-hangzhou-i:vsw-yyy"
+    - name: ReserveNlbNum
+      value: "2"
+    - name: LBHealthCheckFlag
+      value: "on"
+  gameServerTemplate:
+    spec:
+      containers:
+        - image: registry.cn-hangzhou.aliyuncs.com/gs-demo/gameserver:network
+          name: gameserver
+EOF
+```
+
+**Advanced Example: Multi-line Deployment**
+
+```yaml
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: gs-auto-nlb-multi
+  namespace: default
+spec:
+  replicas: 50
+  updateStrategy:
+    rollingUpdate:
+      podUpdatePolicy: InPlaceIfPossible
+  network:
+    networkType: AlibabaCloud-Auto-NLBs
+    networkConf:
+    - name: EipIspType
+      # Configure multiple ISP lines
+      value: "BGP,ChinaTelecom,ChinaUnicom"
+    - name: PortProtocols
+      value: "7777/TCP,7778/UDP"
+    - name: MinPort
+      value: "20000"
+    - name: MaxPort
+      value: "21999"
+    - name: BlockPorts
+      # Block specific ports
+      value: "20100,20200,20300"
+    - name: ZoneMaps
+      # Configure three availability zones
+      value: "vpc-xyz789@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb,cn-hangzhou-j:vsw-ccc"
+    - name: ReserveNlbNum
+      value: "3"
+    - name: ExternalTrafficPolicyType
+      value: "Local"
+    - name: AllowNotReadyContainers
+      value: "sidecar"
+    - name: LBHealthCheckFlag
+      value: "on"
+    - name: LBHealthCheckType
+      value: "http"
+    - name: LBHealthCheckUri
+      value: "/health"
+    - name: LBHealthCheckMethod
+      value: "GET"
+  gameServerTemplate:
+    spec:
+      containers:
+        - image: registry.cn-hangzhou.aliyuncs.com/gs-demo/gameserver:v1.0
+          name: gameserver
+        - image: registry.cn-hangzhou.aliyuncs.com/gs-demo/sidecar:v1.0
+          name: sidecar
+EOF
+```
+
+The network status of GameServer would be as follows:
+
+```yaml
+  networkStatus:
+    createTime: "2025-01-10T10:30:00Z"
+    currentNetworkState: Ready
+    desiredNetworkState: Ready
+    externalAddresses:
+    - endPoint: nlb-xxx.cn-hangzhou.nlb.aliyuncs.com
+      ip: ""
+      ports:
+      - name: "8080"
+        port: 10053
+        protocol: TCP
+      - name: "8081"
+        port: 10053
+        protocol: UDP
+    internalAddresses:
+    - ip: 172.16.0.10
+      ports:
+      - name: "8080"
+        port: 8080
+        protocol: TCP
+      - name: "8081"
+        port: 8081
+        protocol: UDP
+    lastTransitionTime: "2025-01-10T10:30:05Z"
+    networkType: AlibabaCloud-Auto-NLBs
+```
+
+Clients can access the game server by using nlb-xxx.cn-hangzhou.nlb.aliyuncs.com:10053.
+
+**Architecture Description**
+
+This plugin adopts a resource pooling design:
+
+1. **NLB Instance Pool**: Automatically calculates and creates the required number of NLB instances based on GameServerSet scale and port configuration
+2. **Pre-created Services**: Pre-creates corresponding Services for each Pod to avoid delays caused by dynamic creation when Pods start
+3. **Automatic Port Allocation**: Automatically assigns unique external ports to each game server based on MinPort, MaxPort, and BlockPorts configuration
+4. **Multi-line Support**: When multiple EipIspTypes are configured, independent NLB instance pools are created for each ISP to implement traffic isolation
 
 ---
 

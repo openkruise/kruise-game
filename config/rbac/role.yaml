@@ -200,3 +200,43 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - nlboperator.alibabacloud.com
+  resources:
+  - nlbs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - nlboperator.alibabacloud.com
+  resources:
+  - nlbs/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - eip.alibabacloud.com
+  resources:
+  - eips
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - eip.alibabacloud.com
+  resources:
+  - eips/status
+  verbs:
+  - get
+  - patch
+  - update

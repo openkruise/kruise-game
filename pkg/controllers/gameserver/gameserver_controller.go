@@ -109,8 +109,8 @@ type GameServerReconciler struct {
 }
 
 func watchPod(mgr manager.Manager, c controller.Controller) error {
-	if err := c.Watch(source.Kind(mgr.GetCache(), &corev1.Pod{}, &handler.TypedFuncs[*corev1.Pod]{
-		CreateFunc: func(ctx context.Context, createEvent event.TypedCreateEvent[*corev1.Pod], limitingInterface workqueue.RateLimitingInterface) {
+	if err := c.Watch(source.Kind(mgr.GetCache(), &corev1.Pod{}, &handler.TypedFuncs[*corev1.Pod, reconcile.Request]{
+		CreateFunc: func(ctx context.Context, createEvent event.TypedCreateEvent[*corev1.Pod], limitingInterface workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 			pod := createEvent.Object
 			if _, exist := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; exist {
 				limitingInterface.Add(reconcile.Request{NamespacedName: types.NamespacedName{
@@ -119,7 +119,7 @@ func watchPod(mgr manager.Manager, c controller.Controller) error {
 				}})
 			}
 		},
-		UpdateFunc: func(ctx context.Context, updateEvent event.TypedUpdateEvent[*corev1.Pod], limitingInterface workqueue.RateLimitingInterface) {
+		UpdateFunc: func(ctx context.Context, updateEvent event.TypedUpdateEvent[*corev1.Pod], limitingInterface workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 			newPod := updateEvent.ObjectNew
 			if _, exist := newPod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; exist {
 				limitingInterface.Add(reconcile.Request{NamespacedName: types.NamespacedName{
@@ -128,7 +128,7 @@ func watchPod(mgr manager.Manager, c controller.Controller) error {
 				}})
 			}
 		},
-		DeleteFunc: func(ctx context.Context, deleteEvent event.TypedDeleteEvent[*corev1.Pod], limitingInterface workqueue.RateLimitingInterface) {
+		DeleteFunc: func(ctx context.Context, deleteEvent event.TypedDeleteEvent[*corev1.Pod], limitingInterface workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 			pod := deleteEvent.Object
 			if _, exist := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; exist {
 				limitingInterface.Add(reconcile.Request{
@@ -149,8 +149,8 @@ func watchNode(mgr manager.Manager, c controller.Controller) error {
 	cli := mgr.GetClient()
 
 	// watch node condition change
-	if err := c.Watch(source.Kind(mgr.GetCache(), &corev1.Node{}, &handler.TypedFuncs[*corev1.Node]{
-		UpdateFunc: func(ctx context.Context, updateEvent event.TypedUpdateEvent[*corev1.Node], limitingInterface workqueue.RateLimitingInterface) {
+	if err := c.Watch(source.Kind(mgr.GetCache(), &corev1.Node{}, &handler.TypedFuncs[*corev1.Node, reconcile.Request]{
+		UpdateFunc: func(ctx context.Context, updateEvent event.TypedUpdateEvent[*corev1.Node], limitingInterface workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 			nodeNew := updateEvent.ObjectNew
 			nodeOld := updateEvent.ObjectOld
 			if reflect.DeepEqual(nodeNew.Status.Conditions, nodeOld.Status.Conditions) {

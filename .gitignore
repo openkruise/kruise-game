@@ -24,3 +24,4 @@ testbin/*
 *.swo
 *~
 .vscode
+.DS_Store
