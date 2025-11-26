@@ -2,11 +2,50 @@
 
 This guide targets OpenKruiseGame operators (SRE, DevOps, platform engineers). It explains how to enable the OpenTelemetry pipeline, where each signal comes from, and how to read controller/network health from the exported data.
 
+## Quick Start
+
+The fastest way to experience OpenKruiseGame observability is with the **kruise-game-observability-demo** Helm chart. It deploys a complete, pre-configured stack in minutes:
+
+```bash
+# 1. Create a local cluster with multi-node support
+kind create cluster --name okg-demo \
+  --config charts/versions/kruise-game-observability-demo/0.1.0/kind-conf.yaml
+
+# 2. Install the demo chart (idempotent, with dependency resolution)
+cd charts/versions/kruise-game-observability-demo/0.1.0
+helm upgrade --install okg-demo . \
+  --namespace okg-demo --create-namespace \
+  --wait --timeout 10m --dependency-update
+
+# 3. Access Grafana (use the provided script)
+./port-forward-grafana.sh
+# Open http://localhost:3000 (admin/admin)
+```
+
+**What you get:**
+- OpenKruise + KruiseGame controller (telemetry enabled)
+- OpenTelemetry Collector (pre-configured pipelines)
+- Prometheus, Loki, Tempo (local storage)
+- Grafana with pre-loaded KruiseGame dashboards
+- Demo Minecraft GameServerSet (generates controller reconciliation activity)
+
+This zero-config setup lets you explore the full observability experience. Once you understand the value, you can migrate to production by:
+1. Pointing the collector to your existing backends
+2. Adjusting sampling rates and retention policies
+3. Integrating with your alerting infrastructure
+
+**Production handoff:**
+- Replace demo endpoints with your own in the chart values (collector, Tempo/Loki/Prometheus remote write). Start from the upstream values file and override the sinks that matter in your environment: https://github.com/openkruise/charts/blob/main/charts/versions/kruise-game-observability-demo/0.1.0/values.yaml
+- Keep `kruise-game.manager.otel.enabled=true`, set `kruise-game.manager.otel.endpoint` to your collector, and tune `kruise-game.manager.otel.samplingRate`.
+- Point Grafana datasources to your production backends or reuse an existing Grafana instance. The demo stack is local-only; storage/creds are intentionally minimal and should be replaced before real use.
+
+---
+
 ## 1. Enable the pipeline
 
 The controller manager binary already contains log, trace, and metric instrumentation. You only need to:
 
-1. Deploy an OpenTelemetry Collector (see §5). The manifests under `test/e2e/manifests` are production-ready samples.
+1. Deploy an OpenTelemetry Collector (see §5). The **kruise-game-observability-demo** chart provides a ready-to-use stack; the manifests under `test/e2e/manifests` offer advanced configurations including Grafana Cloud dual-write for CI environments.
 2. Pass the following flags to the `kruise-game-controller-manager` container:
 
    ```yaml
@@ -74,27 +113,42 @@ These are registered in `pkg/metrics/prometheus_metrics.go` and exposed at the m
 | `okg_gameserver_ready_duration_seconds` | Gauge | `gsName`, `gsNs`, `gssName` | Time from creation to `Ready`. |
 | `okg_gameserver_network_ready_duration_seconds` | Gauge | `gsName`, `gsNs`, `gssName` | Time until `NetworkStatus.Ready`. Spikes indicate plugin issues. |
 
-Suggested alerts/dashboards:
-- `histogram_quantile(0.95, rate(okg_gameserver_network_ready_duration_seconds[5m]))` > SLA
-- `okg_gameservers_state_count{state="NetworkNotReady"}` cresting triggers scaling or plugin investigation
+What you get out of the box (Grafana dashboard `OKG Metrics Statics`):
+- Current GameServer counts by state/opsState (stat cards + pie + time series)
+- Per-GameServer deletion/update priority
+- GameServerSet replicas by status (current / available / maintaining / waitToBeDeleted)
+- Network readiness duration (`okg_gameserver_network_ready_duration_seconds`) as a time series to spot spikes
+
+Dashboard overview:  
+![OKG metrics overview](./okg_metric_statistics.png)
 
 ### 4.2 Span-derived network metrics (`okg_network` namespace)
 
-The collector’s `spanmetrics` connector turns network spans into Prometheus metrics:
+The collector’s spanmetrics connector emits `okg_network_*` metrics:
 
-- **Counters**: span count per plugin/operation/status (RED “R”).
-- **Histograms**: latency of port allocation/service operations (RED “L”). Buckets are defined in the manifest (`0.01s`, `0.1s`, … `10s`).
-- **Error ratios**: filter by `status.code="ERROR"` or `game.kruise.io.network.status="error"` to see failure percentages.
-- **Exemplars**: enabled so Grafana panels can link directly back to Tempo traces.
+- `okg_network_calls_total` — counts spans by plugin/phase/status (the dashboard shows Ready/Waiting/NotReady/Error rates by plugin + cloud provider)
+- `okg_network_latency_seconds_bucket` — latency histograms per span name (dashboard has avg/P95 by phase, by plugin + cloud provider, and by network status)
+- Exemplars are enabled so you can jump from panels to traces.
 
-Use these metrics to answer questions such as “Which provider is causing 5xx latency?” (`sum(rate(okg_network_calls_total{cloud_provider="alibaba_cloud",status_code="ERROR"}[5m]))`) or “Is NLB port allocation exceeding 500 ms?” (`histogram_quantile(0.95, rate(okg_network_latency_seconds_bucket{game_kruise_io_network_plugin_name="AlibabaCloud-NLB"}[5m]))`).
+Dashboard filters: namespace/gssName/gsName, span (phase), cloud_provider, network plugin. This makes it easy to slice by plugin or provider when investigating readiness drops or latency spikes.
+
+Tip: Grafana Explore → Traces has built-in RED views (“Rate, Errors, Duration”) sourced from Tempo’s spanmetrics. They surface spans/sec, failing spans, and latency heatmaps for whatever span filters you apply—handy for spotting spikes before diving into full traces.
+
+RED + exceptions view (Drilldown/Traces):  
+![Trace RED metrics and exceptions](./okg_trace_red_metrics.png)
 
 ## 5. Collector deployment
 
-You can reuse the sample stack from `test/e2e/manifests` (namespace `observability`). Two variants are available:
+**Recommended:** Use the **kruise-game-observability-demo** Helm chart for the simplest setup. It bundles a pre-configured OTel Collector with all necessary pipelines.
+
+**Advanced reference:** The `test/e2e/manifests` directory contains standalone manifests (namespace `observability`) with additional features for contributors and CI environments:
 
 - `01-otel-collector.yaml`: local stack (Tempo/Loki/Prometheus inside the cluster).
 - `01-otel-collector-grafana.yaml`: dual-write stack that mirrors everything to Grafana Cloud via OTLP / Prometheus Remote Write while keeping the local sinks.
+
+The dual-write variant is particularly useful for debugging tests running on ephemeral CI runners, where local storage disappears after the job completes.
+
+Two collector variants are available in the e2e manifests:
 
 - **Receivers**:
   - OTLP gRPC/HTTP (`traces`, `logs`)
@@ -249,89 +303,51 @@ Following this guide provides end-to-end visibility across controller reconciles
 
 ## 7. Diagnosis Scenarios (Cookbook)
 
-This section demonstrates how to leverage the correlation between **Metrics**, **Traces**, and **Logs** to diagnose complex issues in OpenKruiseGame. We use real-world examples to show how to move from a high-level alert to the root cause.
+This section demonstrates how to use the correlation between **Metrics**, **Traces**, and **Logs** to diagnose issues in OpenKruiseGame. The examples below are based on real scenarios discovered during development.
 
-### Scenario 1: Debugging Network Plugin "Not Ready" Errors
-**Problem:** You observe a spike in the **Network Error Rate** dashboard, or users report that GameServers are taking longer than expected to reach the `Ready` state.
+### Workflow Overview
 
-**Investigation Steps:**
+The general diagnosis workflow is:
 
-1.  **Identify the Spike:**
-    Open the Grafana Dashboard. Locate the "Network Operation Status" or "Error Rate" panel. You notice a cluster of errors associated with the `kubernetes-hostport` plugin.
-    > **[Screenshot Placeholder]**
-    > *Action:* Capture the Grafana panel showing a red line/spike in error rate.
-    > *Highlight:* Hover over a data point to show the **Exemplar** (the small dot linking to a trace).
+1. **Start with Metrics/Dashboard and Drilldown/Traces** → Identify anomalies (error spikes, latency increases)
+2. **Drill Down via Exemplars** → Click the exemplar dot to jump to a specific trace
+3. **Analyze Span Attributes** → Read structured fields to understand what happened
+4. **Correlate with Logs** → Use `trace_id` to find related log entries
+5. **Reach Conclusion** → Determine if it's a real issue or expected behavior
 
-2.  **Drill Down via Exemplar:**
-    Click on one of the **Exemplars** on the graph. This automatically opens the corresponding Trace ID in Tempo (or your tracing backend).
-    > **[Screenshot Placeholder]**
-    > *Action:* Capture the "Query with Tempo" button or the direct jump to the Trace view.
+### Key Span Attributes Reference
 
-3.  **Analyze Span Attributes:**
-    In the Trace view, identify the failed span (marked in red). In this example, the span `process hostport update` failed. Look at the **Attributes** panel on the right.
-    *   `game.kruise.io.network.internal_ports`: `1` (Correct)
-    *   `game.kruise.io.network.external_ports`: `1` (Correct)
-    *   `game.kruise.io.k8s.pod_ip`: `""` (Empty String)
-    > **[Screenshot Placeholder]**
-    > *Action:* Capture the Tempo trace view, highlighting the Attributes section where `game.kruise.io.k8s.pod_ip` is empty but ports are correct.
+When analyzing traces, these attributes provide diagnostic context:
 
-4.  **Conclusion:**
-    The trace reveals that the Webhook was triggered **after** the Pod was scheduled (NodeName exists) but **before** the CNI plugin assigned an IP address.
-    *   **Verdict:** This is a transient issue caused by the timing difference between Kubelet updates and CNI operations. It will resolve automatically in the next retry.
-    *   **Why OTel shines here:** Without these attributes, you might waste time checking port configurations or Node status. The trace immediately pinpointed the *missing dependency* (Pod IP).
+| Attribute | Description |
+|-----------|-------------|
+| `game.kruise.io.game_server.name` | The GameServer being processed |
+| `game.kruise.io.game_server_set.name` | Parent GameServerSet |
+| `game.kruise.io.network.plugin.name` | Network plugin invoked (e.g., `kubernetes_hostport`) |
+| `game.kruise.io.network.status` | Network state: `ready`, `not_ready`, `error`, `waiting` |
+| `game.kruise.io.k8s.pod_ip` | Pod IP (empty if CNI hasn't assigned one yet) |
+| `game.kruise.io.error.type` | Error category: `resource_not_ready`, `api_call_error`, etc. |
 
+---
 
-### Scenario 2: Investigating Controller Race Conditions
-**Problem:** You see intermittent error logs regarding "StatefulSet already exists" during GameServerSet scaling, but the system seems to recover eventually. You want to understand if this is a logic bug.
+### Case study: NodePort service creation fails (api_call_error)
 
-**Investigation Steps:**
+**Situation.** You start a local kind cluster using `charts/versions/kruise-game-observability-demo/0.1.0/kind-conf.yaml`, then install the demo chart with NodePort enabled but leave a HostPort-style network config (for example: `--set demoGameServer.network.type=Kubernetes-NodePort --set demoGameServer.network.containerPorts="minecraft:25565/TCP"`). The Helm install succeeds and the `minecraft-0` Pod is Running, but the Network status annotation stays `NotReady` and the dashboard shows NotReady spikes for the `kubernetes_nodeport` plugin.
 
-1.  **Isolate the Trace:**
-    Search for traces with `status=error` and `service.name=okg-controller-manager`. Open a trace that shows a short duration (e.g., < 20ms).
-    > **[Screenshot Placeholder]**
-    > *Action:* Capture a Trace timeline showing a very short, single red bar (fast fail).
+**What you see in Grafana.** On the Network panels, exemplar dots appear over the NotReady rate. Clicking one opens a trace in Tempo where the `create nodeport service` span is red: `service.type=NodePort`, `service.name=minecraft-0`, `service_port_count=0`, and an exception message from the API server: `Service "minecraft-0" is invalid: spec.ports: Required value`. Opening “Logs for this span” shows the same error emitted from the webhook, correlated by `trace_id`.
 
-2.  **Correlate with Events & Logs:**
-    Click the failed span to expand details.
-    *   **Span Events:** You see an exception event: `statefulsets... "default-gss" already exists`.
-    *   **Logs:** Click the **"Logs for this span"** button. It jumps directly to the log line generated *during this specific request*.
-    > **[Screenshot Placeholder]**
-    > *Action:* Capture the detailed view showing the "Logs" tab or split screen with the error log: "failed to create Advanced StatefulSet".
+Trace view (red span) and correlated structured logs:  
+![NodePort service creation validation trace](./okg-nodeport-service-creation-validation-trace.png)  
+![Structured logs from trace span](./okg_structured_logs_from_trace_span.png)
 
-3.  **Root Cause Analysis:**
-    The log indicates the error occurred in the `initAsts` function.
-    *   **Logic Trace:** The code only enters `initAsts` (Creation) if the previous `Get` call returned `NotFound`.
-    *   **Conflict:** However, the Creation failed because the API Server reported it `AlreadyExists`.
-    > **[Screenshot Placeholder]**
-    > *Action:* (Optional) Capture the log line showing the specific code path (file/line number) provided by `otelzap`.
+**Interpretation.** The pod is healthy and the cluster is fine; the problem is that the chart rendered a NodePort Service with zero ports. From the trace you can immediately see that:
+- the failing component is the Kubernetes NodePort network plugin;
+- the resource in question is the `minecraft-0` Service;
+- the failure is a validation error on `spec.ports`, not a CNI, node, or cloud-provider issue.
 
-4.  **Conclusion:**
-    This confirms a classic Kubernetes **Informer Cache Race Condition**. The local cache was stale (reporting "Not Found"), but the API Server had the latest state.
-    *   **Verdict:** Benign noise. The controller's retry mechanism handles this gracefully.
-    *   **Why OTel shines here:** The timeline view (19ms duration) visually confirms this is a **logic fast-fail**, ruling out network timeouts or slow API calls instantly.
+**Resolution.** Adjust the demo chart values so the NodePort configuration produces a valid port list (or remove conflicting Services with the same name). After the next reconcile, the NodePort Service is created with ports, Network status becomes `Ready`, and the NotReady rate on the dashboard drops back to normal.
 
+Network NotReady spikes before the fix:  
+![Network NotReady spike](./okg-network-status-spiky-metrics.png)
 
-### Scenario 3: Contextual Log Analysis (Bottom-Up)
-**Problem:** You find a generic error log in your console or Loki (e.g., "failed to update workload") and need to know *which* GameServer caused it and *what* happened before.
-
-**Investigation Steps:**
-
-1.  **Locate the Log:**
-    In Grafana Explore (Loki), expand the log line. Notice the `trace_id` and `span_id` fields automatically injected by the OKG instrumentation.
-    > **[Screenshot Placeholder]**
-    > *Action:* Capture a log line in Loki expanded to show the `trace_id` field.
-
-2.  **Pivot to Trace:**
-    Click the **TraceID** link (or "Derived Field" button). This opens the full transaction history.
-    > **[Screenshot Placeholder]**
-    > *Action:* Capture the "Split View" where the log is on one side and the trace has opened on the other.
-
-3.  **Gain Context:**
-    Now you can see the **parent span**.
-    *   **Question:** Who triggered this update?
-    *   **Answer:** Look at the `game.kruise.io.game_server_set.name` attribute in the parent span.
-    *   **Question:** Did the previous steps (e.g., PodProbeMarker sync) succeed?
-    *   **Answer:** Yes, you can see the `sync_podprobemarker.success` event in the timeline *before* the error occurred.
-
-
-**Note:** The screenshots above demonstrate the standard workflow using Grafana, Tempo, and Loki, but the same principles apply to any OTel-compatible backend.
+For transient/benign patterns (CNI race, informer cache fast-fail, etc.) and guidance on adjusting error levels, see the contributor-facing design notes in `observability-design.md`.

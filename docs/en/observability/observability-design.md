@@ -94,6 +94,22 @@ Instead of manually instrumenting every network plugin with Prometheus counters,
 
 ## 4. Development Guide
 
+### Quick Start: Demo Chart vs E2E Infrastructure
+
+**For users and initial exploration**, use the **kruise-game-observability-demo** Helm chart:
+- Location: https://github.com/openkruise/charts/tree/main/charts/versions/kruise-game-observability-demo/0.1.0/
+- Purpose: Zero-config local stack for experiencing OKG observability
+- Includes: OTel Collector, Prometheus, Loki, Tempo, Grafana (all local)
+- Use case: Quick demos, learning, local development
+
+**For contributors and CI testing**, use the **e2e manifests**:
+- Location: `kruise-game/test/e2e/manifests/`
+- Purpose: CI-grade infrastructure with dual-write capability
+- Includes: Same stack + optional Grafana Cloud remote write
+- Use case: Debugging ephemeral CI runners, long-term trace/log retention, multi-cluster aggregation
+
+The key difference is **data persistence**: demo chart uses local storage (deleted with the cluster), while e2e infra can mirror data to Grafana Cloud for post-mortem analysis of CI test failures.
+
 ### Adding New Spans
 
 Use the `pkg/tracing` helper constants and functions.
@@ -143,3 +159,31 @@ To run these tests in your own fork or environment:
 4.  Set the variable `GRAFANA_CLOUD_ENABLED` to `true` in your workflow or repository variables.
 
 The CI workflow (`e2e-1.34.yaml`) will automatically detect these secrets, configure the OTel Collector to export data to Grafana Cloud, and run the observability verification tests.
+
+---
+
+## 5. Using Observability in Development & CI
+
+For contributors and maintainers the main payoff is faster debugging, especially on ephemeral CI runners where the cluster disappears as soon as the job completes. When GitHub Actions is configured with Grafana Cloud secrets, each e2e run streams traces/logs/metrics to Grafana Cloud; you debug in Grafana, not by re-running tests locally or fishing through CI dumps. While iterating on a new network plugin, you add spans/logs, push a commit, wait for CI, and then open Grafana Cloud to see the full trace tree and correlated logs for that run. No extra plumbing beyond the OTel defaults and the secrets from §4.
+
+### Case Studies: Debugging with OTel Traces
+
+**Case study 1 – CNI race, discovered from traces**
+
+- Situation: an e2e run intermittently reported Network NotReady, but the CI artifacts only showed that Pods were scheduled and CNI logs looked normal at first glance.
+- What we saw in Grafana Cloud: error spans with `game.kruise.io.network.status=not_ready` and `game.kruise.io.k8s.pod_ip=""`, even though internal/external ports were present. The webhook span fired <100ms after the scheduler placed the Pod.
+- Interpretation: the webhook was legitimately running in the window between “Pod scheduled” and “CNI assigned PodIP”. This is normal Kubernetes timing, not a plugin bug.
+- Outcome: instead of chasing this as a production error, we could treated it as a transient condition and marked it as a candidate for `codes.Ok` + `span.AddEvent()`, so error-rate panels reflect only issues that need attention.
+
+**Case study 2 – Informer cache staleness during scale-out**
+
+- Situation: during GameServerSet scale-out, CI occasionally logged "Advanced StatefulSet already exists" and failed a test. The raw dump suggested a logic bug in the creation path.
+- What we saw in Grafana Cloud: very short error spans (<50ms) on the create path, with `exception.message` containing `AlreadyExists`. The trace showed the controller deciding “resource missing → create”, while the API server already had the object.
+- Interpretation: classic informer cache lag between controller-runtime’s cache and the API server. The retry loop handles it transparently; there was no long-latency or external API failure in the timeline.
+- Outcome: we kept the retry logic, documented this as an expected pattern, and again treated it as a candidate to be downgraded from error span to event.
+
+### Takeaways for contributors
+
+- Use Grafana Cloud traces/logs as the primary artifact for debugging observability and networking issues in CI; the free tier is sufficient for correlating reconcilers, webhooks, and plugins.
+- Let actionability drive span status: persistent, operator-facing problems stay `codes.Error`; expected transient states should be `codes.Ok` + events. This keeps spanmetrics-based error rates meaningful.
+- Keep attributes low-cardinality and consistent (via `telemetryfields.*` helpers) so spanmetrics remain queryable across runs and dashboards stay stable.
