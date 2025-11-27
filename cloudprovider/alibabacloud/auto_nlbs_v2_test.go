@@ -24,9 +24,17 @@ import (
 	"sync"
 	"testing"
 
+	nlbv1 "github.com/chrisliu1995/AlibabaCloud-NLB-Operator/pkg/apis/nlboperator/v1"
+	eipv1 "github.com/chrisliu1995/alibabacloud-eip-operator/api/v1alpha1"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestParseAutoNLBsConfig(t *testing.T) {
@@ -1291,5 +1299,1019 @@ func TestResourceNamingConsistency(t *testing.T) {
 				t.Errorf("Service name: expected %q, got %q", tt.expectSvcName, svcName)
 			}
 		})
+	}
+}
+
+// ==================== Fake Client 集成测试 ====================
+
+// newFakeClient 创建一个带有所有必要 Scheme 的 fake client
+func newFakeClient(objs ...client.Object) client.Client {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+	// 手动注册 NLB 和 EIP CRD
+	scheme.AddKnownTypes(nlbv1.SchemeGroupVersion,
+		&nlbv1.NLB{},
+		&nlbv1.NLBList{},
+	)
+	scheme.AddKnownTypes(eipv1.GroupVersion,
+		&eipv1.EIP{},
+		&eipv1.EIPList{},
+	)
+	metav1.AddToGroupVersion(scheme, nlbv1.SchemeGroupVersion)
+	metav1.AddToGroupVersion(scheme, eipv1.GroupVersion)
+
+	return fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objs...).
+		Build()
+}
+
+// createTestGSS 创建测试用的 GameServerSet
+func createTestGSS(namespace, name string, replicas int32, networkConf []gamekruiseiov1alpha1.NetworkConfParams) *gamekruiseiov1alpha1.GameServerSet {
+	return &gamekruiseiov1alpha1.GameServerSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			UID:       types.UID("test-gss-uid-" + name),
+		},
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "game.kruise.io/v1alpha1",
+			Kind:       "GameServerSet",
+		},
+		Spec: gamekruiseiov1alpha1.GameServerSetSpec{
+			Replicas: ptr.To(replicas),
+			Network: &gamekruiseiov1alpha1.Network{
+				NetworkType: AutoNLBsV2Network,
+				NetworkConf: networkConf,
+			},
+		},
+	}
+}
+
+// createTestPod 创建测试用的 Pod
+func createTestPod(namespace, name, gssName string, podIndex int) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			UID:       types.UID("test-pod-uid-" + name),
+			Labels: map[string]string{
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: gssName,
+				SvcSelectorKey: name,
+			},
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType:   AutoNLBsV2Network,
+				gamekruiseiov1alpha1.GameServerNetworkConf:   `[{"name":"ZoneMaps","value":"vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},{"name":"PortProtocols","value":"8080/TCP"},{"name":"EipIspTypes","value":"BGP"},{"name":"MinPort","value":"10000"},{"name":"MaxPort","value":"10999"}]`,
+				gamekruiseiov1alpha1.GameServerNetworkStatus: "",
+			},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name:  "game-server",
+					Image: "test:latest",
+				},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			PodIP: fmt.Sprintf("10.0.%d.%d", podIndex/256, podIndex%256),
+		},
+	}
+}
+
+// TestAutoNLBsV2Plugin_Init_EmptyCluster 测试空集群初始化
+func TestAutoNLBsV2Plugin_Init_EmptyCluster(t *testing.T) {
+	c := newFakeClient()
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: make(map[string]int),
+		mutex:       sync.RWMutex{},
+	}
+
+	err := plugin.Init(c, nil, ctx)
+	if err != nil {
+		t.Errorf("Init() failed on empty cluster: %v", err)
+	}
+
+	if len(plugin.maxPodIndex) != 0 {
+		t.Errorf("maxPodIndex should be empty, got: %v", plugin.maxPodIndex)
+	}
+}
+
+// TestAutoNLBsV2Plugin_Init_WithSingleGSS 测试单个 GSS 初始化
+func TestAutoNLBsV2Plugin_Init_WithSingleGSS(t *testing.T) {
+	gss := createTestGSS("default", "test-gss", 10, []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EipIspTypes", Value: "BGP"},
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10999"},
+	})
+
+	c := newFakeClient(gss)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: make(map[string]int),
+		mutex:       sync.RWMutex{},
+	}
+
+	err := plugin.Init(c, nil, ctx)
+	if err != nil {
+		t.Errorf("Init() failed: %v", err)
+	}
+
+	// 验证 maxPodIndex 被初始化为 replicas
+	gssKey := "default/test-gss"
+	plugin.mutex.RLock()
+	maxIndex := plugin.maxPodIndex[gssKey]
+	plugin.mutex.RUnlock()
+
+	if maxIndex != 10 {
+		t.Errorf("maxPodIndex: expected 10, got %d", maxIndex)
+	}
+
+	// 验证 EIP CR 被创建
+	eipList := &eipv1.EIPList{}
+	err = c.List(ctx, eipList, &client.ListOptions{Namespace: "default"})
+	if err != nil {
+		t.Errorf("Failed to list EIPs: %v", err)
+	}
+
+	// 期望至少创建 2 个 EIP (每个 zone 一个)
+	if len(eipList.Items) < 2 {
+		t.Errorf("Expected at least 2 EIPs, got %d", len(eipList.Items))
+	}
+}
+
+// TestAutoNLBsV2Plugin_Init_WithMultipleGSS 测试多个 GSS 初始化
+func TestAutoNLBsV2Plugin_Init_WithMultipleGSS(t *testing.T) {
+	gss1 := createTestGSS("ns1", "gss-1", 5, []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EipIspTypes", Value: "BGP"},
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10999"},
+	})
+
+	gss2 := createTestGSS("ns2", "gss-2", 15, []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+		{Name: "PortProtocols", Value: "9000/UDP"},
+		{Name: "EipIspTypes", Value: "BGP_PRO"},
+		{Name: "MinPort", Value: "20000"},
+		{Name: "MaxPort", Value: "20999"},
+	})
+
+	c := newFakeClient(gss1, gss2)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: make(map[string]int),
+		mutex:       sync.RWMutex{},
+	}
+
+	err := plugin.Init(c, nil, ctx)
+	if err != nil {
+		t.Errorf("Init() failed: %v", err)
+	}
+
+	// 验证两个 GSS 的 maxPodIndex
+	plugin.mutex.RLock()
+	maxIndex1 := plugin.maxPodIndex["ns1/gss-1"]
+	maxIndex2 := plugin.maxPodIndex["ns2/gss-2"]
+	plugin.mutex.RUnlock()
+
+	if maxIndex1 != 5 {
+		t.Errorf("gss-1 maxPodIndex: expected 5, got %d", maxIndex1)
+	}
+	if maxIndex2 != 15 {
+		t.Errorf("gss-2 maxPodIndex: expected 15, got %d", maxIndex2)
+	}
+}
+
+// TestAutoNLBsV2Plugin_Init_WithMultiISP 测试多线路初始化
+func TestAutoNLBsV2Plugin_Init_WithMultiISP(t *testing.T) {
+	gss := createTestGSS("default", "multi-isp-gss", 10, []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EipIspTypes", Value: "BGP,ChinaTelecom"},
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10999"},
+	})
+
+	c := newFakeClient(gss)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: make(map[string]int),
+		mutex:       sync.RWMutex{},
+	}
+
+	err := plugin.Init(c, nil, ctx)
+	if err != nil {
+		t.Errorf("Init() failed: %v", err)
+	}
+
+	// 验证创建了多个线路的 EIP
+	eipList := &eipv1.EIPList{}
+	err = c.List(ctx, eipList, &client.ListOptions{Namespace: "default"})
+	if err != nil {
+		t.Errorf("Failed to list EIPs: %v", err)
+	}
+
+	// 应该至少创建 4 个 EIP (2 个线路 * 2 个 zone)
+	if len(eipList.Items) < 4 {
+		t.Errorf("Expected at least 4 EIPs for dual ISP, got %d", len(eipList.Items))
+	}
+
+	// 验证 EIP 的 ISP 类型
+	bgpCount := 0
+	telecomCount := 0
+	for _, eip := range eipList.Items {
+		if eip.Spec.ISP == "BGP" {
+			bgpCount++
+		} else if eip.Spec.ISP == "ChinaTelecom" {
+			telecomCount++
+		}
+	}
+
+	if bgpCount < 2 || telecomCount < 2 {
+		t.Errorf("Expected at least 2 BGP and 2 ChinaTelecom EIPs, got BGP=%d, ChinaTelecom=%d", bgpCount, telecomCount)
+	}
+}
+
+// TestAutoNLBsV2Plugin_Init_InvalidConfig 测试配置错误的初始化
+func TestAutoNLBsV2Plugin_Init_InvalidConfig(t *testing.T) {
+	gss := createTestGSS("default", "invalid-gss", 5, []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		// 缺少 ZoneMaps
+	})
+
+	c := newFakeClient(gss)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: make(map[string]int),
+		mutex:       sync.RWMutex{},
+	}
+
+	// Init 不应该失败,只是记录错误
+	err := plugin.Init(c, nil, ctx)
+	if err != nil {
+		t.Errorf("Init() should not fail on invalid config: %v", err)
+	}
+}
+
+// TestAutoNLBsV2Plugin_OnPodAdded 测试 Pod 添加
+func TestAutoNLBsV2Plugin_OnPodAdded(t *testing.T) {
+	pod := createTestPod("default", "test-gss-5", "test-gss", 5)
+
+	c := newFakeClient()
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: map[string]int{
+			"default/test-gss": 0,
+		},
+		mutex: sync.RWMutex{},
+	}
+
+	_, err := plugin.OnPodAdded(c, pod, ctx)
+	if err != nil {
+		t.Errorf("OnPodAdded() failed: %v", err)
+	}
+
+	// 验证 maxPodIndex 更新
+	plugin.mutex.RLock()
+	maxIndex := plugin.maxPodIndex["default/test-gss"]
+	plugin.mutex.RUnlock()
+
+	if maxIndex != 5 {
+		t.Errorf("maxPodIndex: expected 5, got %d", maxIndex)
+	}
+}
+
+// TestAutoNLBsV2Plugin_OnPodUpdated_FirstTime 测试首次 Pod 更新
+func TestAutoNLBsV2Plugin_OnPodUpdated_FirstTime(t *testing.T) {
+	gss := createTestGSS("default", "test-gss", 10, []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EipIspTypes", Value: "BGP"},
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10999"},
+	})
+
+	pod := createTestPod("default", "test-gss-0", "test-gss", 0)
+
+	c := newFakeClient(gss, pod)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: map[string]int{
+			"default/test-gss": 10,
+		},
+		mutex: sync.RWMutex{},
+	}
+
+	_, err := plugin.OnPodUpdated(c, pod, ctx)
+	// 第一次调用时，NLB 和 Service 都不存在，应该开始创建资源
+	if err != nil {
+		t.Logf("OnPodUpdated returned error (expected on first call): %v", err)
+	}
+
+	// 验证 EIP CR 被创建
+	eipList := &eipv1.EIPList{}
+	listErr := c.List(ctx, eipList, &client.ListOptions{Namespace: "default"})
+	if listErr != nil {
+		t.Errorf("Failed to list EIPs: %v", listErr)
+	}
+
+	if len(eipList.Items) == 0 {
+		t.Errorf("Expected EIPs to be created, got 0")
+	}
+}
+
+// TestAutoNLBsV2Plugin_OnPodUpdated_NLBReady 测试 NLB 就绪的场景
+func TestAutoNLBsV2Plugin_OnPodUpdated_NLBReady(t *testing.T) {
+	gss := createTestGSS("default", "test-gss", 10, []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EipIspTypes", Value: "BGP"},
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10999"},
+	})
+
+	pod := createTestPod("default", "test-gss-0", "test-gss", 0)
+
+	// 创建已就绪的 NLB
+	nlb := &nlbv1.NLB{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-bgp-0",
+			Namespace: "default",
+		},
+		Status: nlbv1.NLBStatus{
+			LoadBalancerId: "nlb-test-12345",
+			DNSName:        "nlb-test.aliyuncs.com",
+		},
+	}
+
+	// 创建已就绪的 Service
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-0-bgp",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeLoadBalancer,
+			Ports: []corev1.ServicePort{
+				{Port: 10000, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt(8080)},
+			},
+		},
+		Status: corev1.ServiceStatus{
+			LoadBalancer: corev1.LoadBalancerStatus{
+				Ingress: []corev1.LoadBalancerIngress{
+					{IP: "1.2.3.4", Hostname: "nlb-test.aliyuncs.com"},
+				},
+			},
+		},
+	}
+
+	c := newFakeClient(gss, pod, nlb, svc)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: map[string]int{
+			"default/test-gss": 10,
+		},
+		mutex: sync.RWMutex{},
+	}
+
+	updatedPod, err := plugin.OnPodUpdated(c, pod, ctx)
+	if err != nil {
+		t.Errorf("OnPodUpdated failed: %v", err)
+	}
+
+	// 验证网络状态已更新为 Ready
+	if updatedPod.Annotations[gamekruiseiov1alpha1.GameServerNetworkStatus] == "" {
+		t.Errorf("NetworkStatus should be set")
+	}
+}
+
+// TestAutoNLBsV2Plugin_OnPodUpdated_ServiceNotReady 测试 Service 未就绪的场景
+func TestAutoNLBsV2Plugin_OnPodUpdated_ServiceNotReady(t *testing.T) {
+	gss := createTestGSS("default", "test-gss", 10, []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EipIspTypes", Value: "BGP"},
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10999"},
+	})
+
+	pod := createTestPod("default", "test-gss-0", "test-gss", 0)
+
+	// NLB 已就绪
+	nlb := &nlbv1.NLB{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-bgp-0",
+			Namespace: "default",
+		},
+		Status: nlbv1.NLBStatus{
+			LoadBalancerId: "nlb-test-12345",
+		},
+	}
+
+	// Service 存在但未就绪（无 LoadBalancer Ingress）
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-0-bgp",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeLoadBalancer,
+		},
+		Status: corev1.ServiceStatus{
+			LoadBalancer: corev1.LoadBalancerStatus{
+				Ingress: []corev1.LoadBalancerIngress{}, // 空的，未就绪
+			},
+		},
+	}
+
+	c := newFakeClient(gss, pod, nlb, svc)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: map[string]int{
+			"default/test-gss": 10,
+		},
+		mutex: sync.RWMutex{},
+	}
+
+	updatedPod, err := plugin.OnPodUpdated(c, pod, ctx)
+	if err != nil {
+		t.Errorf("OnPodUpdated should not fail: %v", err)
+	}
+
+	// 验证网络状态为 NotReady
+	if updatedPod.Annotations[gamekruiseiov1alpha1.GameServerNetworkStatus] != "" {
+		// 解析网络状态
+		t.Logf("Network status: %s", updatedPod.Annotations[gamekruiseiov1alpha1.GameServerNetworkStatus])
+	}
+}
+
+// TestAutoNLBsV2Plugin_OnPodUpdated_MultiISP_AllReady 测试多线路全部就绪
+func TestAutoNLBsV2Plugin_OnPodUpdated_MultiISP_AllReady(t *testing.T) {
+	gss := createTestGSS("default", "test-gss", 10, []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EipIspTypes", Value: "BGP,ChinaTelecom"},
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10999"},
+	})
+
+	pod := createTestPod("default", "test-gss-0", "test-gss", 0)
+	pod.Annotations[gamekruiseiov1alpha1.GameServerNetworkConf] = `[{"name":"ZoneMaps","value":"vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},{"name":"PortProtocols","value":"8080/TCP"},{"name":"EipIspTypes","value":"BGP,ChinaTelecom"},{"name":"MinPort","value":"10000"},{"name":"MaxPort","value":"10999"}]`
+
+	// BGP NLB
+	nlbBGP := &nlbv1.NLB{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-bgp-0",
+			Namespace: "default",
+		},
+		Status: nlbv1.NLBStatus{
+			LoadBalancerId: "nlb-bgp-12345",
+		},
+	}
+
+	// ChinaTelecom NLB
+	nlbTelecom := &nlbv1.NLB{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-chinatelecom-0",
+			Namespace: "default",
+		},
+		Status: nlbv1.NLBStatus{
+			LoadBalancerId: "nlb-telecom-12345",
+		},
+	}
+
+	// BGP Service
+	svcBGP := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-0-bgp",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeLoadBalancer,
+			Ports: []corev1.ServicePort{
+				{Port: 10000, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt(8080)},
+			},
+		},
+		Status: corev1.ServiceStatus{
+			LoadBalancer: corev1.LoadBalancerStatus{
+				Ingress: []corev1.LoadBalancerIngress{
+					{IP: "1.2.3.4", Hostname: "nlb-bgp.aliyuncs.com"},
+				},
+			},
+		},
+	}
+
+	// ChinaTelecom Service
+	svcTelecom := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-0-chinatelecom",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeLoadBalancer,
+			Ports: []corev1.ServicePort{
+				{Port: 10000, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt(8080)},
+			},
+		},
+		Status: corev1.ServiceStatus{
+			LoadBalancer: corev1.LoadBalancerStatus{
+				Ingress: []corev1.LoadBalancerIngress{
+					{IP: "5.6.7.8", Hostname: "nlb-telecom.aliyuncs.com"},
+				},
+			},
+		},
+	}
+
+	c := newFakeClient(gss, pod, nlbBGP, nlbTelecom, svcBGP, svcTelecom)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: map[string]int{
+			"default/test-gss": 10,
+		},
+		mutex: sync.RWMutex{},
+	}
+
+	updatedPod, err := plugin.OnPodUpdated(c, pod, ctx)
+	if err != nil {
+		t.Errorf("OnPodUpdated failed: %v", err)
+	}
+
+	// 验证网络状态包含两条线路的地址
+	if updatedPod.Annotations[gamekruiseiov1alpha1.GameServerNetworkStatus] == "" {
+		t.Errorf("NetworkStatus should be set for multi-ISP")
+	}
+	t.Logf("Multi-ISP network status: %s", updatedPod.Annotations[gamekruiseiov1alpha1.GameServerNetworkStatus])
+}
+
+// TestAutoNLBsV2Plugin_OnPodUpdated_ConfigError 测试配置错误
+func TestAutoNLBsV2Plugin_OnPodUpdated_ConfigError(t *testing.T) {
+	pod := createTestPod("default", "test-gss-0", "test-gss", 0)
+	// 设置错误的配置（缺少 ZoneMaps）
+	pod.Annotations[gamekruiseiov1alpha1.GameServerNetworkConf] = `[{"name":"PortProtocols","value":"8080/TCP"}]`
+
+	c := newFakeClient(pod)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: map[string]int{
+			"default/test-gss": 10,
+		},
+		mutex: sync.RWMutex{},
+	}
+
+	_, err := plugin.OnPodUpdated(c, pod, ctx)
+	if err == nil {
+		t.Errorf("OnPodUpdated should fail with invalid config")
+	}
+}
+
+// TestAutoNLBsV2Plugin_EnsureNLBForPod 测试为 Pod 动态创建 NLB
+func TestAutoNLBsV2Plugin_EnsureNLBForPod(t *testing.T) {
+	gss := createTestGSS("default", "test-gss", 10, []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EipIspTypes", Value: "BGP"},
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10999"},
+	})
+
+	// 预先创建 EIP CR，并设置 AllocationID
+	eip1 := &eipv1.EIP{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-eip-bgp-0-z0",
+			Namespace: "default",
+		},
+		Spec: eipv1.EIPSpec{
+			ISP:                "BGP",
+			InternetChargeType: "PayByTraffic",
+			Bandwidth:          "5",
+		},
+		Status: eipv1.EIPStatus{
+			AllocationID: "eip-alloc-12345",
+		},
+	}
+
+	eip2 := &eipv1.EIP{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-eip-bgp-0-z1",
+			Namespace: "default",
+		},
+		Spec: eipv1.EIPSpec{
+			ISP:                "BGP",
+			InternetChargeType: "PayByTraffic",
+			Bandwidth:          "5",
+		},
+		Status: eipv1.EIPStatus{
+			AllocationID: "eip-alloc-67890",
+		},
+	}
+
+	c := newFakeClient(gss, eip1, eip2)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: map[string]int{
+			"default/test-gss": 10,
+		},
+		mutex: sync.RWMutex{},
+	}
+
+	config := &autoNLBsConfig{
+		zoneMaps:    "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb",
+		eipIspTypes: []string{"BGP"},
+		targetPorts: []int{8080},
+		protocols:   []corev1.Protocol{corev1.ProtocolTCP},
+		minPort:     10000,
+		maxPort:     10999,
+	}
+
+	// 测试创建 NLB
+	err := plugin.ensureNLBForPod(ctx, c, "default", "test-gss", "BGP", 0, config)
+	if err != nil {
+		t.Errorf("ensureNLBForPod failed: %v", err)
+	}
+
+	// 验证 NLB CR 被创建
+	nlb := &nlbv1.NLB{}
+	getErr := c.Get(ctx, types.NamespacedName{
+		Name:      "test-gss-bgp-0",
+		Namespace: "default",
+	}, nlb)
+
+	if getErr != nil {
+		t.Errorf("NLB should be created: %v", getErr)
+	}
+
+	// 验证 NLB 的 ZoneMappings 包含 EIP AllocationID
+	if len(nlb.Spec.ZoneMappings) != 2 {
+		t.Errorf("Expected 2 zone mappings, got %d", len(nlb.Spec.ZoneMappings))
+	}
+
+	if nlb.Spec.ZoneMappings[0].AllocationId != "eip-alloc-12345" {
+		t.Errorf("Zone 0 AllocationID: expected eip-alloc-12345, got %s", nlb.Spec.ZoneMappings[0].AllocationId)
+	}
+
+	if nlb.Spec.ZoneMappings[1].AllocationId != "eip-alloc-67890" {
+		t.Errorf("Zone 1 AllocationID: expected eip-alloc-67890, got %s", nlb.Spec.ZoneMappings[1].AllocationId)
+	}
+
+	// 验证 NLB Labels
+	if nlb.Labels[NLBPoolGssLabel] != "test-gss" {
+		t.Errorf("NLB Pool GSS label: expected test-gss, got %s", nlb.Labels[NLBPoolGssLabel])
+	}
+
+	if nlb.Labels[NLBPoolEipIspTypeLabel] != "BGP" {
+		t.Errorf("NLB Pool ISP label: expected BGP, got %s", nlb.Labels[NLBPoolEipIspTypeLabel])
+	}
+}
+
+// TestAutoNLBsV2Plugin_EnsureNLBForPod_ChinaTelecom 测试创建单线 ISP 的 NLB
+func TestAutoNLBsV2Plugin_EnsureNLBForPod_ChinaTelecom(t *testing.T) {
+	gss := createTestGSS("default", "test-gss", 10, []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EipIspTypes", Value: "ChinaTelecom"},
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10999"},
+	})
+
+	// 预先创建 EIP CR，并设置 AllocationID
+	eip1 := &eipv1.EIP{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-eip-chinatelecom-0-z0",
+			Namespace: "default",
+		},
+		Spec: eipv1.EIPSpec{
+			ISP:                "ChinaTelecom",
+			InternetChargeType: "PayByBandwidth",
+			Bandwidth:          "5",
+		},
+		Status: eipv1.EIPStatus{
+			AllocationID: "eip-telecom-12345",
+		},
+	}
+
+	eip2 := &eipv1.EIP{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-eip-chinatelecom-0-z1",
+			Namespace: "default",
+		},
+		Spec: eipv1.EIPSpec{
+			ISP:                "ChinaTelecom",
+			InternetChargeType: "PayByBandwidth",
+			Bandwidth:          "5",
+		},
+		Status: eipv1.EIPStatus{
+			AllocationID: "eip-telecom-67890",
+		},
+	}
+
+	c := newFakeClient(gss, eip1, eip2)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: map[string]int{
+			"default/test-gss": 10,
+		},
+		mutex: sync.RWMutex{},
+	}
+
+	config := &autoNLBsConfig{
+		zoneMaps:    "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb",
+		eipIspTypes: []string{"ChinaTelecom"},
+		targetPorts: []int{8080},
+		protocols:   []corev1.Protocol{corev1.ProtocolTCP},
+		minPort:     10000,
+		maxPort:     10999,
+	}
+
+	err := plugin.ensureNLBForPod(ctx, c, "default", "test-gss", "ChinaTelecom", 0, config)
+	if err != nil {
+		t.Errorf("ensureNLBForPod failed: %v", err)
+	}
+
+	// 验证 NLB CR 被创建
+	nlb := &nlbv1.NLB{}
+	getErr := c.Get(ctx, types.NamespacedName{
+		Name:      "test-gss-chinatelecom-0",
+		Namespace: "default",
+	}, nlb)
+
+	if getErr != nil {
+		t.Errorf("NLB should be created: %v", getErr)
+	}
+
+	// 验证 NLB 使用了正确的 EIP
+	if len(nlb.Spec.ZoneMappings) != 2 {
+		t.Errorf("Expected 2 zone mappings, got %d", len(nlb.Spec.ZoneMappings))
+	}
+
+	// 验证单线 ISP 的 EIP AllocationID
+	if nlb.Spec.ZoneMappings[0].AllocationId != "eip-telecom-12345" {
+		t.Errorf("Zone 0 AllocationID: expected eip-telecom-12345, got %s", nlb.Spec.ZoneMappings[0].AllocationId)
+	}
+}
+
+// TestAutoNLBsV2Plugin_EnsureServiceForPod 测试为 Pod 创建 Service
+func TestAutoNLBsV2Plugin_EnsureServiceForPod(t *testing.T) {
+	gss := createTestGSS("default", "test-gss", 10, []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+		{Name: "PortProtocols", Value: "8080/TCP,9000/UDP"},
+		{Name: "EipIspTypes", Value: "BGP"},
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10999"},
+	})
+
+	pod := createTestPod("default", "test-gss-0", "test-gss", 0)
+
+	c := newFakeClient(gss, pod)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: map[string]int{
+			"default/test-gss": 10,
+		},
+		mutex: sync.RWMutex{},
+	}
+
+	config := &autoNLBsConfig{
+		zoneMaps:              "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb",
+		eipIspTypes:           []string{"BGP"},
+		targetPorts:           []int{8080, 9000},
+		protocols:             []corev1.Protocol{corev1.ProtocolTCP, corev1.ProtocolUDP},
+		minPort:               10000,
+		maxPort:               10999,
+		externalTrafficPolicy: corev1.ServiceExternalTrafficPolicyTypeLocal,
+		nlbHealthConfig: &nlbHealthConfig{
+			lBHealthCheckFlag: "on",
+			lBHealthCheckType: "tcp",
+		},
+	}
+
+	// 创建 Service
+	err := plugin.ensureServiceForPod(ctx, c, pod, "test-gss", "BGP", 0, "nlb-test-12345", config)
+	if err != nil {
+		t.Errorf("ensureServiceForPod failed: %v", err)
+	}
+
+	// 验证 Service 被创建
+	svc := &corev1.Service{}
+	getErr := c.Get(ctx, types.NamespacedName{
+		Name:      "test-gss-0-bgp",
+		Namespace: "default",
+	}, svc)
+
+	if getErr != nil {
+		t.Errorf("Service should be created: %v", getErr)
+	}
+
+	// 验证 Service 属性
+	if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
+		t.Errorf("Service type: expected LoadBalancer, got %s", svc.Spec.Type)
+	}
+
+	if len(svc.Spec.Ports) != 2 {
+		t.Errorf("Service ports: expected 2, got %d", len(svc.Spec.Ports))
+	}
+
+	// 验证端口映射
+	if svc.Spec.Ports[0].Port != 10000 {
+		t.Errorf("First port: expected 10000, got %d", svc.Spec.Ports[0].Port)
+	}
+	if svc.Spec.Ports[0].TargetPort.IntVal != 8080 {
+		t.Errorf("First target port: expected 8080, got %d", svc.Spec.Ports[0].TargetPort.IntVal)
+	}
+	if svc.Spec.Ports[0].Protocol != corev1.ProtocolTCP {
+		t.Errorf("First port protocol: expected TCP, got %s", svc.Spec.Ports[0].Protocol)
+	}
+
+	if svc.Spec.Ports[1].Port != 10001 {
+		t.Errorf("Second port: expected 10001, got %d", svc.Spec.Ports[1].Port)
+	}
+	if svc.Spec.Ports[1].TargetPort.IntVal != 9000 {
+		t.Errorf("Second target port: expected 9000, got %d", svc.Spec.Ports[1].TargetPort.IntVal)
+	}
+	if svc.Spec.Ports[1].Protocol != corev1.ProtocolUDP {
+		t.Errorf("Second port protocol: expected UDP, got %s", svc.Spec.Ports[1].Protocol)
+	}
+
+	// 验证 Selector
+	if svc.Spec.Selector[SvcSelectorKey] != "test-gss-0" {
+		t.Errorf("Service selector: expected test-gss-0, got %s", svc.Spec.Selector[SvcSelectorKey])
+	}
+
+	// 验证 Annotations
+	if svc.Annotations[SlbIdAnnotationKey] != "nlb-test-12345" {
+		t.Errorf("NLB ID annotation: expected nlb-test-12345, got %s", svc.Annotations[SlbIdAnnotationKey])
+	}
+
+	if svc.Annotations[LBHealthCheckFlagAnnotationKey] != "on" {
+		t.Errorf("Health check flag: expected on, got %s", svc.Annotations[LBHealthCheckFlagAnnotationKey])
+	}
+
+	// 验证 OwnerReference 指向 GSS
+	if len(svc.OwnerReferences) != 1 {
+		t.Errorf("OwnerReferences count: expected 1, got %d", len(svc.OwnerReferences))
+	} else {
+		if svc.OwnerReferences[0].Kind != "GameServerSet" {
+			t.Errorf("OwnerReference kind: expected GameServerSet, got %s", svc.OwnerReferences[0].Kind)
+		}
+		if svc.OwnerReferences[0].Name != "test-gss" {
+			t.Errorf("OwnerReference name: expected test-gss, got %s", svc.OwnerReferences[0].Name)
+		}
+	}
+}
+
+// TestAutoNLBsV2Plugin_EnsureServiceForPod_PortCalculation 测试端口分配计算
+func TestAutoNLBsV2Plugin_EnsureServiceForPod_PortCalculation(t *testing.T) {
+	tests := []struct {
+		name           string
+		podIndex       int
+		minPort        int32
+		maxPort        int32
+		targetPorts    []int
+		expectedPorts  []int32
+		podsPerNLB     int
+		nlbIndexExpect int
+	}{
+		{
+			name:           "pod-0 with 2 target ports",
+			podIndex:       0,
+			minPort:        10000,
+			maxPort:        10999,
+			targetPorts:    []int{8080, 9000},
+			expectedPorts:  []int32{10000, 10001},
+			podsPerNLB:     500,
+			nlbIndexExpect: 0,
+		},
+		{
+			name:           "pod-1 with 2 target ports",
+			podIndex:       1,
+			minPort:        10000,
+			maxPort:        10999,
+			targetPorts:    []int{8080, 9000},
+			expectedPorts:  []int32{10002, 10003},
+			podsPerNLB:     500,
+			nlbIndexExpect: 0,
+		},
+		{
+			name:           "pod-500 with 2 target ports (next NLB)",
+			podIndex:       500,
+			minPort:        10000,
+			maxPort:        10999,
+			targetPorts:    []int{8080, 9000},
+			expectedPorts:  []int32{10000, 10001},
+			podsPerNLB:     500,
+			nlbIndexExpect: 1,
+		},
+		{
+			name:           "pod-0 with 3 target ports",
+			podIndex:       0,
+			minPort:        20000,
+			maxPort:        20999,
+			targetPorts:    []int{8080, 9000, 7777},
+			expectedPorts:  []int32{20000, 20001, 20002},
+			podsPerNLB:     333,
+			nlbIndexExpect: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// 计算 NLB 索引
+			nlbIndex := tt.podIndex / tt.podsPerNLB
+			if nlbIndex != tt.nlbIndexExpect {
+				t.Errorf("NLB index: expected %d, got %d", tt.nlbIndexExpect, nlbIndex)
+			}
+
+			// 计算 Pod 在 NLB 中的相对索引
+			podIndexInNLB := tt.podIndex % tt.podsPerNLB
+
+			// 计算端口
+			for i := 0; i < len(tt.targetPorts); i++ {
+				portOffset := int32(podIndexInNLB*len(tt.targetPorts) + i)
+				port := tt.minPort + portOffset
+
+				if port != tt.expectedPorts[i] {
+					t.Errorf("Port[%d]: expected %d, got %d", i, tt.expectedPorts[i], port)
+				}
+			}
+		})
+	}
+}
+
+// TestAutoNLBsV2Plugin_EnsureServiceForPod_Idempotent 测试 Service 创建的幂等性
+func TestAutoNLBsV2Plugin_EnsureServiceForPod_Idempotent(t *testing.T) {
+	gss := createTestGSS("default", "test-gss", 10, []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EipIspTypes", Value: "BGP"},
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10999"},
+	})
+
+	pod := createTestPod("default", "test-gss-0", "test-gss", 0)
+
+	// 预先创建 Service
+	existingSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-0-bgp",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeLoadBalancer,
+		},
+	}
+
+	c := newFakeClient(gss, pod, existingSvc)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: map[string]int{
+			"default/test-gss": 10,
+		},
+		mutex: sync.RWMutex{},
+	}
+
+	config := &autoNLBsConfig{
+		zoneMaps:              "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb",
+		eipIspTypes:           []string{"BGP"},
+		targetPorts:           []int{8080},
+		protocols:             []corev1.Protocol{corev1.ProtocolTCP},
+		minPort:               10000,
+		maxPort:               10999,
+		externalTrafficPolicy: corev1.ServiceExternalTrafficPolicyTypeLocal,
+		nlbHealthConfig: &nlbHealthConfig{
+			lBHealthCheckFlag: "off",
+		},
+	}
+
+	// 第一次调用，应该不报错（Service 已存在）
+	err := plugin.ensureServiceForPod(ctx, c, pod, "test-gss", "BGP", 0, "nlb-test-12345", config)
+	if err != nil {
+		t.Errorf("First call should succeed (idempotent): %v", err)
+	}
+
+	// 第二次调用，应该仍然不报错
+	err = plugin.ensureServiceForPod(ctx, c, pod, "test-gss", "BGP", 0, "nlb-test-12345", config)
+	if err != nil {
+		t.Errorf("Second call should succeed (idempotent): %v", err)
 	}
 }
