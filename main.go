@@ -27,6 +27,8 @@ import (
 	"time"
 
 	ackv1alpha1 "github.com/aws-controllers-k8s/elbv2-controller/apis/v1alpha1"
+	nlbv1 "github.com/chrisliu1995/AlibabaCloud-NLB-Operator/pkg/apis/nlboperator/v1"
+	eipv1 "github.com/chrisliu1995/alibabacloud-eip-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
@@ -80,6 +82,10 @@ func init() {
 
 	utilruntime.Must(ackv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(elbv2api.AddToScheme(scheme))
+
+	// Register NLB and EIP CRD schemes for AutoNLBs-V2
+	utilruntime.Must(nlbv1.SchemeBuilder.AddToScheme(scheme))
+	utilruntime.Must(eipv1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 

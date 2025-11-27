@@ -10,7 +10,7 @@ on:
 
 env:
   # Common versions
-  GO_VERSION: '1.22'
+  GO_VERSION: '1.23'
   KIND_VERSION: 'v0.30.0'
   KIND_IMAGE: 'kindest/node:v1.34.0'
   KUBECTL_VERSION: 'v1.34.0'

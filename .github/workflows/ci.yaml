@@ -17,7 +17,7 @@ permissions:
 
 env:
   # Common versions
-  GO_VERSION: '1.22'
+  GO_VERSION: '1.23'
   GOLANGCI_VERSION: 'v1.58'
   DOCKER_BUILDX_VERSION: 'v0.4.2'
 
