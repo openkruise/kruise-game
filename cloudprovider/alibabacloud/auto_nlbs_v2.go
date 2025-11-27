@@ -138,7 +138,7 @@ func (a *AutoNLBsV2Plugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 	conf, err := parseAutoNLBsConfig(networkConfig)
 	if err != nil {
 		log.Errorf("[%s] Failed to parse config for pod %s/%s: %v", AutoNLBsV2Network, pod.GetNamespace(), pod.GetName(), err)
-		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
 	}
 
 	gssName := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]
@@ -202,7 +202,7 @@ func (a *AutoNLBsV2Plugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 			}
 		} else if err != nil {
 			log.Errorf("[%s] Failed to get NLB %s: %v", AutoNLBsV2Network, nlbName, err)
-			return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 		}
 
 		// 检查 NLB 状态
@@ -246,7 +246,7 @@ func (a *AutoNLBsV2Plugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 			}
 		} else if err != nil {
 			log.Errorf("[%s] Failed to get Service %s: %v", AutoNLBsV2Network, svcName, err)
-			return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 		}
 
 		// 禁用网络
@@ -268,7 +268,7 @@ func (a *AutoNLBsV2Plugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 		}
 
 		// 网络未就绪
-		if svc.Status.LoadBalancer.Ingress == nil {
+		if len(svc.Status.LoadBalancer.Ingress) == 0 {
 			log.Infof("[%s] Service %s LoadBalancer not ready yet", AutoNLBsV2Network, svcName)
 			allServicesReady = false
 			continue

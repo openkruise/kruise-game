@@ -115,13 +115,13 @@ func (a *AutoNLBsPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx contex
 	networkConfig := networkManager.GetNetworkConfig()
 	conf, err := parseAutoNLBsConfig(networkConfig)
 	if err != nil {
-		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
 	}
 
 	a.ensureMaxPodIndex(pod)
 	gssName := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]
 	if err := a.ensureServices(ctx, c, pod.GetNamespace(), gssName, conf); err != nil {
-		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 	}
 
 	containerPorts := make([]corev1.ContainerPort, 0)
@@ -169,7 +169,7 @@ func (a *AutoNLBsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx cont
 	networkConfig := networkManager.GetNetworkConfig()
 	conf, err := parseAutoNLBsConfig(networkConfig)
 	if err != nil {
-		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
 	}
 
 	if networkStatus == nil {
@@ -201,10 +201,10 @@ func (a *AutoNLBsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx cont
 			Namespace: pod.GetNamespace(),
 		}, svc)
 		if err != nil {
-			return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 		}
 
-		if svc.Status.LoadBalancer.Ingress == nil || len(svc.Status.LoadBalancer.Ingress) == 0 {
+		if len(svc.Status.LoadBalancer.Ingress) == 0 {
 			networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 			pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 			return pod, cperrors.ToPluginError(err, cperrors.InternalError)

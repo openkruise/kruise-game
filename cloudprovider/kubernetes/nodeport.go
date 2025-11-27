@@ -67,7 +67,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 	networkConfig := networkManager.GetNetworkConfig()
 	npc, err := parseNodePortConfig(networkConfig)
 	if err != nil {
-		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
 	}
 
 	if networkStatus == nil {
@@ -87,7 +87,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 		if errors.IsNotFound(err) {
 			return pod, cperrors.ToPluginError(client.Create(ctx, consNodePortSvc(npc, pod, client, ctx)), cperrors.ApiCallError)
 		}
-		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 	}
 
 	// update svc
@@ -95,7 +95,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		if err != nil {
-			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.InternalError, err.Error())
 		}
 		return pod, cperrors.ToPluginError(client.Update(ctx, consNodePortSvc(npc, pod, client, ctx)), cperrors.ApiCallError)
 	}
@@ -139,7 +139,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 		Name: pod.Spec.NodeName,
 	}, node)
 	if err != nil {
-		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 	}
 
 	if pod.Status.PodIP == "" {

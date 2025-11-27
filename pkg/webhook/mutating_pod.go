@@ -65,6 +65,7 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 		pod, err = patchContainers(pmh.Client, pod, ctx)
 		if err != nil {
 			msg := fmt.Sprintf("Pod %s/%s patchContainers failed, because of %s", pod.Namespace, pod.Name, err.Error())
+			//nolint:staticcheck // SA1006: admission.Denied is not a printf-style function
 			return admission.Denied(msg)
 		}
 	}
@@ -73,7 +74,7 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 	plugin, ok := pmh.CloudProviderManager.FindAvailablePlugins(pod)
 	if !ok {
 		msg := fmt.Sprintf("Pod %s/%s has no available plugin", pod.Namespace, pod.Name)
-		klog.Infof(msg)
+		klog.Info(msg)
 		return getAdmissionResponse(req, patchResult{pod: pod, err: nil})
 	}
 
@@ -96,8 +97,8 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 		}
 		if pluginError != nil {
 			msg := fmt.Sprintf("Failed to %s pod %s/%s ,because of %s", req.Operation, pod.Namespace, pod.Name, pluginError.Error())
-			klog.Warningf(msg)
-			pmh.eventRecorder.Eventf(pod, corev1.EventTypeWarning, string(pluginError.Type()), msg)
+			klog.Warning(msg)
+			pmh.eventRecorder.Event(pod, corev1.EventTypeWarning, string(pluginError.Type()), msg)
 			newPod = pod.DeepCopy()
 		}
 		resultCh <- patchResult{
@@ -110,7 +111,8 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 	// timeout
 	case <-ctx.Done():
 		msg := fmt.Sprintf("Failed to %s pod %s/%s, because plugin %s exec timed out", req.Operation, pod.Namespace, pod.Name, plugin.Name())
-		pmh.eventRecorder.Eventf(pod, corev1.EventTypeWarning, mutatingTimeoutReason, msg)
+		pmh.eventRecorder.Event(pod, corev1.EventTypeWarning, mutatingTimeoutReason, msg)
+		//nolint:staticcheck // SA1006: admission.Allowed is not a printf-style function
 		return admission.Allowed(msg)
 	// completed before timeout
 	case result := <-resultCh:
@@ -130,6 +132,7 @@ func getPodFromRequest(req admission.Request, decoder admission.Decoder) (*corev
 
 func getAdmissionResponse(req admission.Request, result patchResult) admission.Response {
 	if result.err != nil {
+		//nolint:staticcheck // SA1006: admission.Denied is not a printf-style function
 		return admission.Denied(result.err.Error())
 	}
 	if req.Operation == admissionv1.Delete {

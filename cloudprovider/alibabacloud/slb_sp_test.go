@@ -2,13 +2,14 @@ package alibabacloud
 
 import (
 	"fmt"
+	"reflect"
+	"sync"
+	"testing"
+
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"reflect"
-	"sync"
-	"testing"
 )
 
 func TestSlpSpAllocate(t *testing.T) {
@@ -67,7 +68,7 @@ func TestSlpSpAllocate(t *testing.T) {
 			},
 			numBackends: map[string]int{"lb-xxa": 200},
 			podSlbId:    map[string]string{"a-ns/a-name": "lb-xxa"},
-			expErr:      fmt.Errorf(ErrorUpperLimit),
+			expErr:      fmt.Errorf("%s", ErrorUpperLimit),
 		},
 	}
 

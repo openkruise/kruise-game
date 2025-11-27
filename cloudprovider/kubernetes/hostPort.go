@@ -81,10 +81,10 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 	}, podNow)
 	if err == nil {
 		log.Infof("There is a pod with same ns/name(%s/%s) exists in cluster, do not allocate", pod.GetNamespace(), pod.GetName())
-		return pod, errors.NewPluginError(errors.InternalError, "There is a pod with same ns/name exists in cluster")
+		return pod, errors.NewPluginErrorWithMessage(errors.InternalError, "There is a pod with same ns/name exists in cluster")
 	}
 	if !k8serrors.IsNotFound(err) {
-		return pod, errors.NewPluginError(errors.ApiCallError, err.Error())
+		return pod, errors.NewPluginErrorWithMessage(errors.ApiCallError, err.Error())
 	}
 
 	networkManager := utils.NewNetworkManager(pod, c)
@@ -149,7 +149,7 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 		if k8serrors.IsNotFound(err) {
 			return pod, nil
 		}
-		return pod, errors.NewPluginError(errors.ApiCallError, err.Error())
+		return pod, errors.NewPluginErrorWithMessage(errors.ApiCallError, err.Error())
 	}
 	nodeIp := getAddress(node)
 

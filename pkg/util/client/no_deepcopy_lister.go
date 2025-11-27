@@ -162,7 +162,7 @@ func (r *noDeepCopyLister) objectTypeForListObject(list client.ObjectList) (*sch
 		// http://knowyourmeme.com/memes/this-is-fine
 		elemType := reflect.Indirect(reflect.ValueOf(itemsPtr)).Type().Elem()
 		if elemType.Kind() != reflect.Ptr {
-			elemType = reflect.PtrTo(elemType)
+			elemType = reflect.PointerTo(elemType)
 		}
 
 		cacheTypeValue := reflect.Zero(elemType)

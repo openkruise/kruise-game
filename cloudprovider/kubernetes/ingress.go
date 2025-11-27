@@ -94,7 +94,7 @@ func (i IngressPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 	conf := networkManager.GetNetworkConfig()
 	ic, err := parseIngConfig(conf, pod)
 	if err != nil {
-		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
 	}
 
 	// get svc
@@ -107,21 +107,21 @@ func (i IngressPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 		if errors.IsNotFound(err) {
 			return pod, cperrors.ToPluginError(c.Create(ctx, consSvc(ic, pod, c, ctx)), cperrors.ApiCallError)
 		}
-		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 	}
 	// update svc
 	if util.GetHash(ic.ports) != svc.GetAnnotations()[ServiceHashKey] {
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		if err != nil {
-			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.InternalError, err.Error())
 		}
 
 		newSvc := consSvc(ic, pod, c, ctx)
 		patchSvc := map[string]interface{}{"metadata": map[string]map[string]string{"annotations": newSvc.Annotations}, "spec": newSvc.Spec}
 		patchSvcBytes, err := json.Marshal(patchSvc)
 		if err != nil {
-			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.InternalError, err.Error())
 		}
 
 		return pod, cperrors.ToPluginError(c.Patch(ctx, svc, client.RawPatch(types.MergePatchType, patchSvcBytes)), cperrors.ApiCallError)
@@ -137,7 +137,7 @@ func (i IngressPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 		if errors.IsNotFound(err) {
 			return pod, cperrors.ToPluginError(c.Create(ctx, consIngress(ic, pod, c, ctx)), cperrors.ApiCallError)
 		}
-		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 	}
 
 	// update ingress
@@ -145,7 +145,7 @@ func (i IngressPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		if err != nil {
-			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.InternalError, err.Error())
 		}
 		return pod, cperrors.ToPluginError(c.Update(ctx, consIngress(ic, pod, c, ctx)), cperrors.ApiCallError)
 	}

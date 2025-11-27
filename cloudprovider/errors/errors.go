@@ -16,8 +16,6 @@ limitations under the License.
 
 package errors
 
-import "fmt"
-
 // PluginErrorType describes a high-level category of a given error
 type PluginErrorType string
 
@@ -53,11 +51,11 @@ func (c pluginErrorImplErrorImpl) Type() PluginErrorType {
 	return c.errorType
 }
 
-// NewPluginError returns new plugin error with a message constructed from format string
-func NewPluginError(errorType PluginErrorType, msg string, args ...interface{}) PluginError {
+// NewPluginErrorWithMessage returns new plugin error with a simple message string
+func NewPluginErrorWithMessage(errorType PluginErrorType, msg string) PluginError {
 	return pluginErrorImplErrorImpl{
 		errorType: errorType,
-		msg:       fmt.Sprintf(msg, args...),
+		msg:       msg,
 	}
 }
 

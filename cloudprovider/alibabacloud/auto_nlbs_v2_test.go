@@ -17,6 +17,7 @@ limitations under the License.
 package alibabacloud
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ import (
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestParseAutoNLBsConfig(t *testing.T) {
@@ -914,4 +916,380 @@ func intSliceEqual(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+// 测试 Alias 方法
+func TestAutoNLBsV2Plugin_Alias(t *testing.T) {
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: make(map[string]int),
+		mutex:       sync.RWMutex{},
+	}
+
+	alias := plugin.Alias()
+	expectedAlias := AliasAutoNLBs
+
+	if alias != expectedAlias {
+		t.Errorf("Alias(): expected %q, got %q", expectedAlias, alias)
+	}
+}
+
+// 测试 OnPodDeleted 方法
+func TestAutoNLBsV2Plugin_OnPodDeleted(t *testing.T) {
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: make(map[string]int),
+		mutex:       sync.RWMutex{},
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-0",
+			Namespace: "default",
+			Labels: map[string]string{
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+			},
+		},
+	}
+
+	err := plugin.OnPodDeleted(nil, pod, context.Background())
+	if err != nil {
+		t.Errorf("OnPodDeleted() should return nil, got error: %v", err)
+	}
+}
+
+// 测试 consServiceForPod 方法
+func TestAutoNLBsV2Plugin_ConsServiceForPod(t *testing.T) {
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: make(map[string]int),
+		mutex:       sync.RWMutex{},
+	}
+
+	gss := &gamekruiseiov1alpha1.GameServerSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss",
+			Namespace: "default",
+			UID:       "test-uid-123",
+		},
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "game.kruise.io/v1alpha1",
+			Kind:       "GameServerSet",
+		},
+	}
+
+	config := &autoNLBsConfig{
+		targetPorts:           []int{8080, 9000},
+		protocols:             []corev1.Protocol{corev1.ProtocolTCP, corev1.ProtocolUDP},
+		externalTrafficPolicy: corev1.ServiceExternalTrafficPolicyTypeLocal,
+		nlbHealthConfig: &nlbHealthConfig{
+			lBHealthCheckFlag: "on",
+			lBHealthCheckType: "tcp",
+		},
+	}
+
+	ports := []int32{10000, 10001}
+	svcName := "test-gss-0-bgp"
+	podName := "test-gss-0"
+	gssName := "test-gss"
+	nlbId := "nlb-test-12345"
+
+	svc := plugin.consServiceForPod("default", svcName, podName, gssName, nlbId, ports, config, gss)
+
+	// 验证 Service 基本属性
+	if svc.Name != svcName {
+		t.Errorf("Service Name: expected %q, got %q", svcName, svc.Name)
+	}
+
+	if svc.Namespace != "default" {
+		t.Errorf("Service Namespace: expected %q, got %q", "default", svc.Namespace)
+	}
+
+	if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
+		t.Errorf("Service Type: expected %q, got %q", corev1.ServiceTypeLoadBalancer, svc.Spec.Type)
+	}
+
+	if svc.Spec.ExternalTrafficPolicy != config.externalTrafficPolicy {
+		t.Errorf("ExternalTrafficPolicy: expected %q, got %q", config.externalTrafficPolicy, svc.Spec.ExternalTrafficPolicy)
+	}
+
+	// 验证 Selector
+	if svc.Spec.Selector[SvcSelectorKey] != podName {
+		t.Errorf("Selector: expected pod name %q, got %q", podName, svc.Spec.Selector[SvcSelectorKey])
+	}
+
+	// 验证 LoadBalancerClass
+	if svc.Spec.LoadBalancerClass == nil || *svc.Spec.LoadBalancerClass != "alibabacloud.com/nlb" {
+		t.Errorf("LoadBalancerClass: expected %q, got %v", "alibabacloud.com/nlb", svc.Spec.LoadBalancerClass)
+	}
+
+	// 验证 Annotations
+	if svc.Annotations[SlbIdAnnotationKey] != nlbId {
+		t.Errorf("SlbIdAnnotation: expected %q, got %q", nlbId, svc.Annotations[SlbIdAnnotationKey])
+	}
+
+	if svc.Annotations[LBHealthCheckFlagAnnotationKey] != "on" {
+		t.Errorf("LBHealthCheckFlag: expected %q, got %q", "on", svc.Annotations[LBHealthCheckFlagAnnotationKey])
+	}
+
+	// 验证 Ports
+	if len(svc.Spec.Ports) != len(config.targetPorts) {
+		t.Errorf("Ports count: expected %d, got %d", len(config.targetPorts), len(svc.Spec.Ports))
+	}
+
+	for i, port := range svc.Spec.Ports {
+		if port.Port != ports[i] {
+			t.Errorf("Port[%d]: expected %d, got %d", i, ports[i], port.Port)
+		}
+		if port.Protocol != config.protocols[i] {
+			t.Errorf("Protocol[%d]: expected %q, got %q", i, config.protocols[i], port.Protocol)
+		}
+		if port.TargetPort.IntVal != int32(config.targetPorts[i]) {
+			t.Errorf("TargetPort[%d]: expected %d, got %d", i, config.targetPorts[i], port.TargetPort.IntVal)
+		}
+	}
+
+	// 验证 OwnerReferences
+	if len(svc.OwnerReferences) != 1 {
+		t.Errorf("OwnerReferences count: expected 1, got %d", len(svc.OwnerReferences))
+	} else {
+		if svc.OwnerReferences[0].Name != gss.Name {
+			t.Errorf("OwnerReference Name: expected %q, got %q", gss.Name, svc.OwnerReferences[0].Name)
+		}
+		if svc.OwnerReferences[0].UID != gss.UID {
+			t.Errorf("OwnerReference UID: expected %q, got %q", gss.UID, svc.OwnerReferences[0].UID)
+		}
+	}
+
+	// 验证 Labels
+	if svc.Labels[gamekruiseiov1alpha1.GameServerOwnerGssKey] != gssName {
+		t.Errorf("GSS Label: expected %q, got %q", gssName, svc.Labels[gamekruiseiov1alpha1.GameServerOwnerGssKey])
+	}
+}
+
+// 测试 consServiceForPod 方法 - HTTP 健康检查
+func TestAutoNLBsV2Plugin_ConsServiceForPod_HTTPHealthCheck(t *testing.T) {
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: make(map[string]int),
+		mutex:       sync.RWMutex{},
+	}
+
+	gss := &gamekruiseiov1alpha1.GameServerSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss",
+			Namespace: "default",
+			UID:       "test-uid-123",
+		},
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "game.kruise.io/v1alpha1",
+			Kind:       "GameServerSet",
+		},
+	}
+
+	config := &autoNLBsConfig{
+		targetPorts:           []int{8080},
+		protocols:             []corev1.Protocol{corev1.ProtocolTCP},
+		externalTrafficPolicy: corev1.ServiceExternalTrafficPolicyTypeCluster,
+		nlbHealthConfig: &nlbHealthConfig{
+			lBHealthCheckFlag:   "on",
+			lBHealthCheckType:   "http",
+			lBHealthCheckDomain: "example.com",
+			lBHealthCheckUri:    "/health",
+			lBHealthCheckMethod: "GET",
+		},
+	}
+
+	ports := []int32{10000}
+	svc := plugin.consServiceForPod("default", "test-svc", "test-pod", "test-gss", "nlb-123", ports, config, gss)
+
+	// 验证 HTTP 健康检查注解
+	if svc.Annotations[LBHealthCheckTypeAnnotationKey] != "http" {
+		t.Errorf("HealthCheckType: expected %q, got %q", "http", svc.Annotations[LBHealthCheckTypeAnnotationKey])
+	}
+
+	if svc.Annotations[LBHealthCheckDomainAnnotationKey] != "example.com" {
+		t.Errorf("HealthCheckDomain: expected %q, got %q", "example.com", svc.Annotations[LBHealthCheckDomainAnnotationKey])
+	}
+
+	if svc.Annotations[LBHealthCheckUriAnnotationKey] != "/health" {
+		t.Errorf("HealthCheckUri: expected %q, got %q", "/health", svc.Annotations[LBHealthCheckUriAnnotationKey])
+	}
+
+	if svc.Annotations[LBHealthCheckMethodAnnotationKey] != "GET" {
+		t.Errorf("HealthCheckMethod: expected %q, got %q", "GET", svc.Annotations[LBHealthCheckMethodAnnotationKey])
+	}
+}
+
+// 测试端口分配逻辑 - 边界条件
+func TestPortAllocationEdgeCases(t *testing.T) {
+	tests := []struct {
+		name             string
+		minPort          int32
+		maxPort          int32
+		blockPorts       []int32
+		targetPortCount  int
+		expectPodsPerNLB int
+		expectError      bool
+	}{
+		{
+			name:             "exact division",
+			minPort:          10000,
+			maxPort:          10999,
+			blockPorts:       []int32{},
+			targetPortCount:  2,
+			expectPodsPerNLB: 500,
+			expectError:      false,
+		},
+		{
+			name:             "with remainder",
+			minPort:          10000,
+			maxPort:          10999,
+			blockPorts:       []int32{},
+			targetPortCount:  3,
+			expectPodsPerNLB: 333,
+			expectError:      false,
+		},
+		{
+			name:             "minimum range",
+			minPort:          10000,
+			maxPort:          10001,
+			blockPorts:       []int32{},
+			targetPortCount:  1,
+			expectPodsPerNLB: 2,
+			expectError:      false,
+		},
+		{
+			name:             "all ports blocked",
+			minPort:          10000,
+			maxPort:          10002,
+			blockPorts:       []int32{10000, 10001, 10002},
+			targetPortCount:  1,
+			expectPodsPerNLB: 0,
+			expectError:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lenRange := int(tt.maxPort) - int(tt.minPort) - len(tt.blockPorts) + 1
+			podsPerNLB := lenRange / tt.targetPortCount
+
+			if podsPerNLB != tt.expectPodsPerNLB {
+				t.Errorf("podsPerNLB: expected %d, got %d", tt.expectPodsPerNLB, podsPerNLB)
+			}
+		})
+	}
+}
+
+// 测试 maxPodIndex 并发安全性
+func TestMaxPodIndexConcurrency(t *testing.T) {
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: make(map[string]int),
+		mutex:       sync.RWMutex{},
+	}
+
+	gssKey := "default/test-gss"
+	plugin.maxPodIndex[gssKey] = 0
+
+	// 并发更新 maxPodIndex
+	var wg sync.WaitGroup
+	for i := 1; i <= 100; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("test-gss-%d", index),
+					Namespace: "default",
+					Labels: map[string]string{
+						gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+					},
+				},
+			}
+			plugin.updateMaxPodIndex(pod)
+		}(i)
+	}
+	wg.Wait()
+
+	// 验证最终值
+	plugin.mutex.RLock()
+	finalMax := plugin.maxPodIndex[gssKey]
+	plugin.mutex.RUnlock()
+
+	if finalMax != 100 {
+		t.Errorf("maxPodIndex after concurrent updates: expected 100, got %d", finalMax)
+	}
+}
+
+// 测试资源命名规范的一致性
+func TestResourceNamingConsistency(t *testing.T) {
+	tests := []struct {
+		name          string
+		gssName       string
+		eipIspType    string
+		nlbIndex      int
+		zoneIndex     int
+		podIndex      int
+		expectNLBName string
+		expectEIPName string
+		expectSvcName string
+	}{
+		{
+			name:          "BGP single line",
+			gssName:       "game-server",
+			eipIspType:    "BGP",
+			nlbIndex:      0,
+			zoneIndex:     0,
+			podIndex:      0,
+			expectNLBName: "game-server-bgp-0",
+			expectEIPName: "game-server-eip-bgp-0-z0",
+			expectSvcName: "game-server-0-bgp",
+		},
+		{
+			name:          "ChinaTelecom multi-zone",
+			gssName:       "my-gss",
+			eipIspType:    "ChinaTelecom",
+			nlbIndex:      3,
+			zoneIndex:     2,
+			podIndex:      750,
+			expectNLBName: "my-gss-chinatelecom-3",
+			expectEIPName: "my-gss-eip-chinatelecom-3-z2",
+			expectSvcName: "my-gss-750-chinatelecom",
+		},
+		{
+			name:          "BGP_PRO advanced",
+			gssName:       "test",
+			eipIspType:    "BGP_PRO",
+			nlbIndex:      10,
+			zoneIndex:     1,
+			podIndex:      2500,
+			expectNLBName: "test-bgp_pro-10",
+			expectEIPName: "test-eip-bgp_pro-10-z1",
+			expectSvcName: "test-2500-bgp_pro",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// 验证 NLB 命名
+			nlbName := tt.gssName + "-" + strings.ToLower(tt.eipIspType) + "-" + strconv.Itoa(tt.nlbIndex)
+			if nlbName != tt.expectNLBName {
+				t.Errorf("NLB name: expected %q, got %q", tt.expectNLBName, nlbName)
+			}
+
+			// 验证 EIP 命名
+			eipName := fmt.Sprintf("%s-eip-%s-%d-z%d",
+				tt.gssName,
+				strings.ToLower(tt.eipIspType),
+				tt.nlbIndex,
+				tt.zoneIndex)
+			if eipName != tt.expectEIPName {
+				t.Errorf("EIP name: expected %q, got %q", tt.expectEIPName, eipName)
+			}
+
+			// 验证 Service 命名
+			basePodName := tt.gssName + "-" + strconv.Itoa(tt.podIndex)
+			svcName := basePodName + "-" + strings.ToLower(tt.eipIspType)
+			if svcName != tt.expectSvcName {
+				t.Errorf("Service name: expected %q, got %q", tt.expectSvcName, svcName)
+			}
+		})
+	}
 }
