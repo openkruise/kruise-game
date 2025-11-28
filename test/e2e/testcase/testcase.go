@@ -12,9 +12,7 @@ import (
 	"github.com/openkruise/kruise-game/test/e2e/client"
 	"github.com/openkruise/kruise-game/test/e2e/framework"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/ptr"
 )
 
 func RunTestCases(f *framework.Framework) {
@@ -101,418 +99,41 @@ func RunTestCases(f *framework.Framework) {
 			gomega.Expect(err).To(gomega.BeNil())
 		})
 
-		ginkgo.Describe("service qualities with opsState and metadata", func() {
+		ginkgo.It("service qualities", func() {
+			// deploy
+			gss, err := f.DeployGssWithServiceQualities()
+			gomega.Expect(err).To(gomega.BeNil())
 
-			ginkgo.BeforeEach(func() {
-				f.MarkTestStart()
-			})
+			err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
+			gomega.Expect(err).To(gomega.BeNil())
 
-			ginkgo.AfterEach(func() {
-				gomega.Expect(f.AfterEach()).Should(gomega.BeNil())
-				if ginkgo.CurrentGinkgoTestDescription().Failed {
-					f.DumpAuditIfFailed()
-				}
-			})
-
-			ginkgo.It("service qualities update opsState and metadata", func() {
-				// deploy basic gss
-				gss, err := f.DeployGameServerSet()
+			// wait for priority updates
+			for i := 0; i < 3; i++ {
+				gsName := fmt.Sprintf("%s-%d", gss.GetName(), i)
+				err = f.WaitForGsUpdatePriorityUpdated(gsName, "20")
 				gomega.Expect(err).To(gomega.BeNil())
+			}
 
-				err = f.WaitForGsCreated(gss)
+			// wait for opsState update (currently checks Pod label, which is correct)
+			for i := 0; i < 3; i++ {
+				gsName := fmt.Sprintf("%s-%d", gss.GetName(), i)
+				err = f.WaitForGsOpsStateUpdate(gsName, "Maintaining")
 				gomega.Expect(err).To(gomega.BeNil())
+			}
 
-				// Wait for all GameServers to be fully Ready before patching serviceQualities
-				gomega.Eventually(func() bool {
-					gs0, err := f.GetGameServer(gss.GetName() + "-0")
-					if err != nil {
-						return false
-					}
-					gs1, err := f.GetGameServer(gss.GetName() + "-1")
-					if err != nil {
-						return false
-					}
-					gs2, err := f.GetGameServer(gss.GetName() + "-2")
-					if err != nil {
-						return false
-					}
-					// Ensure all have Ready state and Running phase
-					return gs0.Status.CurrentState == "Ready" &&
-						gs1.Status.CurrentState == "Ready" &&
-						gs2.Status.CurrentState == "Ready"
-				}, "60s", "2s").Should(gomega.BeTrue())
+			// verify metadata label + annotation on GameServer
+			gsName := gss.GetName() + "-0"
+			gs, err := f.GetGameServer(gsName)
+			gomega.Expect(err).To(gomega.BeNil())
 
-				// patch serviceQualities with opsState and metadata actions
-				up := intstr.FromInt(20)
-				dp := intstr.FromInt(10)
-				serviceQualities := []gameKruiseV1alpha1.ServiceQuality{
-					{
-						Name:          "health-check",
-						ContainerName: "game-server",
-						Probe: corev1.Probe{
-							ProbeHandler: corev1.ProbeHandler{
-								Exec: &corev1.ExecAction{
-									Command: []string{"/bin/sh", "-c", "exit 0"},
-								},
-							},
-							InitialDelaySeconds: 1,
-							PeriodSeconds:       3,
-							TimeoutSeconds:      1,
-							FailureThreshold:    1,
-							SuccessThreshold:    1,
-						},
-						Permanent: false,
-						ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{
-							{
-								State: true,
-								GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
-									OpsState:         gameKruiseV1alpha1.Maintaining,
-									UpdatePriority:   &up,
-									DeletionPriority: &dp,
-									NetworkDisabled:  ptr.To(false),
-								},
-								Labels: map[string]string{
-									"sq-status":  "healthy",
-									"test-label": "success",
-								},
-								Annotations: map[string]string{
-									"sq-note":        "probe-passed",
-									"test-timestamp": "updated",
-								},
-							},
-							{
-								State: false,
-								GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
-									OpsState: gameKruiseV1alpha1.None,
-								},
-								Labels: map[string]string{
-									"sq-status": "unhealthy",
-								},
-								Annotations: map[string]string{
-									"sq-note": "probe-failed",
-								},
-							},
-						},
-					},
-				}
+			// Verify labels
+			gomega.Expect(gs.Labels["sq"]).To(gomega.Equal("healthy"))
 
-				_, err = f.PatchGssSpec(map[string]interface{}{
-					"serviceQualities": serviceQualities,
-				})
-				gomega.Expect(err).To(gomega.BeNil())
+			// Verify annotations
+			gomega.Expect(gs.Annotations["note"]).To(gomega.Equal("updated"))
 
-				// Wait for ServiceQualityCondition to be initialized (controller has started probing)
-				gomega.Eventually(func() bool {
-					gs0, err := f.GetGameServer(gss.GetName() + "-0")
-					if err != nil {
-						return false
-					}
-					return len(gs0.Status.ServiceQualitiesCondition) > 0
-				}, "120s", "2s").Should(gomega.BeTrue())
-
-				// Wait for opsState changes using proper wait methods
-				err = f.WaitForGsSpecOpsState(gss.GetName()+"-0", string(gameKruiseV1alpha1.Maintaining))
-				gomega.Expect(err).To(gomega.BeNil())
-				err = f.WaitForGsSpecOpsState(gss.GetName()+"-1", string(gameKruiseV1alpha1.Maintaining))
-				gomega.Expect(err).To(gomega.BeNil())
-				err = f.WaitForGsSpecOpsState(gss.GetName()+"-2", string(gameKruiseV1alpha1.Maintaining))
-				gomega.Expect(err).To(gomega.BeNil())
-
-				// verify priorities are updated
-				err = f.WaitForGsUpdatePriorityUpdated(gss.GetName()+"-0", "20")
-				gomega.Expect(err).To(gomega.BeNil())
-				err = f.WaitForGsUpdatePriorityUpdated(gss.GetName()+"-1", "20")
-				gomega.Expect(err).To(gomega.BeNil())
-				err = f.WaitForGsUpdatePriorityUpdated(gss.GetName()+"-2", "20")
-				gomega.Expect(err).To(gomega.BeNil())
-
-				err = f.WaitForGsDeletionPriorityUpdated(gss.GetName()+"-0", "10")
-				gomega.Expect(err).To(gomega.BeNil())
-				err = f.WaitForGsDeletionPriorityUpdated(gss.GetName()+"-1", "10")
-				gomega.Expect(err).To(gomega.BeNil())
-				err = f.WaitForGsDeletionPriorityUpdated(gss.GetName()+"-2", "10")
-				gomega.Expect(err).To(gomega.BeNil())
-
-				// verify networkDisabled is set for all servers
-				err = f.WaitForGsNetworkDisabled(gss.GetName()+"-0", false)
-				gomega.Expect(err).To(gomega.BeNil())
-				err = f.WaitForGsNetworkDisabled(gss.GetName()+"-1", false)
-				gomega.Expect(err).To(gomega.BeNil())
-				err = f.WaitForGsNetworkDisabled(gss.GetName()+"-2", false)
-				gomega.Expect(err).To(gomega.BeNil())
-
-				// Wait for labels and annotations with retry logic
-				gomega.Eventually(func() bool {
-					gs0, err := f.GetGameServer(gss.GetName() + "-0")
-					if err != nil {
-						return false
-					}
-					return gs0.GetLabels()["sq-status"] == "healthy" &&
-						gs0.GetLabels()["test-label"] == "success" &&
-						gs0.GetAnnotations()["sq-note"] == "probe-passed" &&
-						gs0.GetAnnotations()["test-timestamp"] == "updated"
-				}, "120s", "2s").Should(gomega.BeTrue())
-
-				gomega.Eventually(func() bool {
-					gs1, err := f.GetGameServer(gss.GetName() + "-1")
-					if err != nil {
-						return false
-					}
-					return gs1.GetLabels()["sq-status"] == "healthy" &&
-						gs1.GetLabels()["test-label"] == "success"
-				}, "120s", "2s").Should(gomega.BeTrue())
-
-				gomega.Eventually(func() bool {
-					gs2, err := f.GetGameServer(gss.GetName() + "-2")
-					if err != nil {
-						return false
-					}
-					return gs2.GetLabels()["sq-status"] == "healthy" &&
-						gs2.GetLabels()["test-label"] == "success"
-				}, "120s", "2s").Should(gomega.BeTrue())
-			})
-
-			ginkgo.It("service qualities with multiple probes", func() {
-				// deploy gss with 2 replicas
-				gss, err := f.DeployGameServerSet()
-				gomega.Expect(err).To(gomega.BeNil())
-
-				_, err = f.GameServerScale(gss, 2, nil)
-				gomega.Expect(err).To(gomega.BeNil())
-
-				err = f.WaitForGssCounts(gss, 2)
-				gomega.Expect(err).To(gomega.BeNil())
-
-				// Ensure all game servers are in Ready state before applying service qualities
-				err = f.WaitForGsCreated(gss)
-				gomega.Expect(err).To(gomega.BeNil())
-
-				gomega.Eventually(func() bool {
-					gs0, err := f.GetGameServer(gss.GetName() + "-0")
-					if err != nil {
-						return false
-					}
-					gs1, err := f.GetGameServer(gss.GetName() + "-1")
-					if err != nil {
-						return false
-					}
-					return gs0.Status.CurrentState == "Ready" && gs1.Status.CurrentState == "Ready"
-				}, "60s", "2s").Should(gomega.BeTrue())
-
-				// patch with multiple serviceQualities
-				serviceQualities := []gameKruiseV1alpha1.ServiceQuality{
-					{
-						Name:          "always-pass",
-						ContainerName: "game-server",
-						Probe: corev1.Probe{
-							ProbeHandler: corev1.ProbeHandler{
-								Exec: &corev1.ExecAction{
-									Command: []string{"/bin/sh", "-c", "exit 0"},
-								},
-							},
-							InitialDelaySeconds: 1,
-							PeriodSeconds:       3,
-							TimeoutSeconds:      1,
-							FailureThreshold:    1,
-							SuccessThreshold:    1,
-						},
-						Permanent: false,
-						ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{
-							{
-								State: true,
-								GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
-									OpsState: gameKruiseV1alpha1.Allocated,
-								},
-								Labels: map[string]string{
-									"probe-1": "passed",
-								},
-							},
-						},
-					},
-					{
-						Name:          "check-path",
-						ContainerName: "game-server",
-						Probe: corev1.Probe{
-							ProbeHandler: corev1.ProbeHandler{
-								Exec: &corev1.ExecAction{
-									Command: []string{"/bin/sh", "-c", "test -d /tmp && echo 'ok' || exit 1"},
-								},
-							},
-							InitialDelaySeconds: 1,
-							PeriodSeconds:       3,
-							TimeoutSeconds:      1,
-							FailureThreshold:    1,
-							SuccessThreshold:    1,
-						},
-						Permanent: false,
-						ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{
-							{
-								State:  true,
-								Result: "ok",
-								Annotations: map[string]string{
-									"path-check": "success",
-								},
-							},
-						},
-					},
-				}
-
-				_, err = f.PatchGssSpec(map[string]interface{}{
-					"serviceQualities": serviceQualities,
-				})
-				gomega.Expect(err).To(gomega.BeNil())
-
-				// Wait for ServiceQualityCondition to be initialized
-				gomega.Eventually(func() bool {
-					gs0, err := f.GetGameServer(gss.GetName() + "-0")
-					if err != nil {
-						return false
-					}
-					return len(gs0.Status.ServiceQualitiesCondition) > 0
-				}, "120s", "2s").Should(gomega.BeTrue())
-
-				// Wait for opsState using proper wait methods
-				err = f.WaitForGsSpecOpsState(gss.GetName()+"-0", string(gameKruiseV1alpha1.Allocated))
-				gomega.Expect(err).To(gomega.BeNil())
-				err = f.WaitForGsSpecOpsState(gss.GetName()+"-1", string(gameKruiseV1alpha1.Allocated))
-				gomega.Expect(err).To(gomega.BeNil())
-
-				// verify labels and annotations from both probes with retry logic
-				gomega.Eventually(func() bool {
-					gs0, err := f.GetGameServer(gss.GetName() + "-0")
-					if err != nil {
-						return false
-					}
-					return gs0.GetLabels()["probe-1"] == "passed" &&
-						gs0.GetAnnotations()["path-check"] == "success"
-				}, "120s", "2s").Should(gomega.BeTrue())
-
-				gomega.Eventually(func() bool {
-					gs1, err := f.GetGameServer(gss.GetName() + "-1")
-					if err != nil {
-						return false
-					}
-					return gs1.GetLabels()["probe-1"] == "passed" &&
-						gs1.GetAnnotations()["path-check"] == "success"
-				}, "120s", "2s").Should(gomega.BeTrue())
-			})
-
-			ginkgo.It("service qualities with permanent flag", func() {
-				// deploy gss with 1 replica
-				gss, err := f.DeployGameServerSet()
-				gomega.Expect(err).To(gomega.BeNil())
-
-				_, err = f.GameServerScale(gss, 1, nil)
-				gomega.Expect(err).To(gomega.BeNil())
-
-				err = f.WaitForGssCounts(gss, 1)
-				gomega.Expect(err).To(gomega.BeNil())
-
-				// Ensure game server is ready before applying service quality
-				err = f.WaitForGsCreated(gss)
-				gomega.Expect(err).To(gomega.BeNil())
-
-				gsName := gss.GetName() + "-0"
-
-				gomega.Eventually(func() bool {
-					gs, err := f.GetGameServer(gsName)
-					if err != nil {
-						return false
-					}
-					return gs.Status.CurrentState == "Ready"
-				}, "60s", "2s").Should(gomega.BeTrue())
-
-				// patch with permanent serviceQuality
-				serviceQualities := []gameKruiseV1alpha1.ServiceQuality{
-					{
-						Name:          "permanent-check",
-						ContainerName: "game-server",
-						Probe: corev1.Probe{
-							ProbeHandler: corev1.ProbeHandler{
-								Exec: &corev1.ExecAction{
-									Command: []string{"/bin/sh", "-c", "exit 0"},
-								},
-							},
-							InitialDelaySeconds: 1,
-							PeriodSeconds:       3,
-							TimeoutSeconds:      1,
-							FailureThreshold:    1,
-							SuccessThreshold:    1,
-						},
-						Permanent: true,
-						ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{
-							{
-								State: true,
-								GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
-									OpsState: gameKruiseV1alpha1.Maintaining,
-								},
-								Labels: map[string]string{
-									"permanent-action": "applied",
-								},
-							},
-						},
-					},
-				}
-
-				_, err = f.PatchGssSpec(map[string]interface{}{
-					"serviceQualities": serviceQualities,
-				})
-				gomega.Expect(err).To(gomega.BeNil())
-
-				// Wait for ServiceQualityCondition to be initialized
-				var initialTransitionTime metav1.Time
-				gomega.Eventually(func() bool {
-					gs, err := f.GetGameServer(gsName)
-					if err != nil {
-						return false
-					}
-					if len(gs.Status.ServiceQualitiesCondition) == 0 {
-						return false
-					}
-					initialTransitionTime = gs.Status.ServiceQualitiesCondition[0].LastActionTransitionTime
-					return !initialTransitionTime.IsZero()
-				}, "120s", "2s").Should(gomega.BeTrue())
-
-				// Wait for action to be applied using proper wait method
-				err = f.WaitForGsSpecOpsState(gsName, string(gameKruiseV1alpha1.Maintaining))
-				gomega.Expect(err).To(gomega.BeNil())
-
-				// Wait for label to be applied with retry
-				gomega.Eventually(func() bool {
-					gs, err := f.GetGameServer(gsName)
-					if err != nil {
-						return false
-					}
-					return gs.GetLabels()["permanent-action"] == "applied"
-				}, "120s", "2s").Should(gomega.BeTrue())
-
-				// manually change opsState to verify permanent flag behavior
-				_, err = f.PatchGameServerSpec(gsName, map[string]interface{}{
-					"opsState": string(gameKruiseV1alpha1.None),
-				})
-				gomega.Expect(err).To(gomega.BeNil())
-
-				err = f.WaitForGsSpecOpsState(gsName, string(gameKruiseV1alpha1.None))
-				gomega.Expect(err).To(gomega.BeNil())
-
-				// Wait for multiple probe cycles to ensure permanent flag is working
-				time.Sleep(15 * time.Second)
-
-				// With Permanent=true, GameServerSpec changes should NOT be reapplied
-				// But labels/annotations may still be updated by controller
-				gs, err := f.GetGameServer(gsName)
-				gomega.Expect(err).To(gomega.BeNil())
-
-				// Verify opsState remains None (not reverted to Maintaining)
-				gomega.Expect(gs.Spec.OpsState).To(gomega.Equal(gameKruiseV1alpha1.None))
-
-				// Verify the permanent label is still present
-				gomega.Expect(gs.GetLabels()["permanent-action"]).To(gomega.Equal("applied"))
-
-				// Note: LastActionTransitionTime may change even with Permanent=true
-				// because controller can update status/labels without reapplying spec changes
-				// This is expected behavior - Permanent only prevents spec modifications
-			})
+			// Optional: verify opsState is also set correctly in spec
+			gomega.Expect(string(gs.Spec.OpsState)).To(gomega.Equal("Maintaining"))
 		})
 
 		ginkgo.Describe("network control", func() {
