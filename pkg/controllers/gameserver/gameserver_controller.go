@@ -282,7 +282,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		span.AddEvent(tracing.EventGameServerReconcileBootstrap,
 			trace.WithAttributes(
 				attribute.String("action", "init gameserver from pod"),
-				attribute.String("pod.uid", string(pod.GetUID())),
+				attribute.String(telemetryfields.FieldK8sPodUID, string(pod.GetUID())),
 			))
 		gss, err := r.getGameServerSet(ctx, pod)
 		if err != nil {
@@ -339,7 +339,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	span.AddEvent(tracing.EventGameServerReconcileManagerReady,
 		trace.WithAttributes(
 			tracing.AttrGameServerName(gs.GetName()),
-			attribute.String("pod.uid", string(pod.GetUID())),
+			attribute.String(telemetryfields.FieldK8sPodUID, string(pod.GetUID())),
 		))
 	gss, err := r.getGameServerSet(ctx, pod)
 	if err != nil {
@@ -367,8 +367,8 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 	span.AddEvent(tracing.EventGameServerReconcileSyncGsToPodSuccess,
 		trace.WithAttributes(
-			attribute.Int("pod.label.count", len(pod.GetLabels())),
-			attribute.Int("pod.annotation.count", len(pod.GetAnnotations())),
+			attribute.Int(telemetryfields.FieldPodLabelCount, len(pod.GetLabels())),
+			attribute.Int(telemetryfields.FieldPodAnnotationCount, len(pod.GetAnnotations())),
 		))
 
 	span.AddEvent(tracing.EventGameServerReconcileSyncPodToGsStart,
@@ -384,7 +384,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 	span.AddEvent(tracing.EventGameServerReconcileSyncPodToGsSuccess,
 		trace.WithAttributes(
-			attribute.String("gameserver.resourceVersion", gs.ResourceVersion),
+			attribute.String(telemetryfields.FieldGameServerResourceVersion, gs.ResourceVersion),
 		))
 
 	if gsm.WaitOrNot() {

@@ -87,14 +87,14 @@ The controller manager binary already contains log, trace, and metric instrument
 - Controllers emit spans for every `GameServer` and `GameServerSet` reconcile. Attributes include:
   - `game.kruise.io.game_server.name` / `.namespace`
   - `game.kruise.io.game_server_set.name`
-  - `game.kruise.io.network.status` (e.g., `waiting`, `ready`, `error`)
+  - `game.kruise.io.network.status` (e.g., `ready`, `not_ready`, `error`, `waiting`)
 - `GameServerManager` writes a `game.kruise.io/traceparent` annotation onto Pods. The admission webhook reads it, links its own span to the reconcile trace, and records the network plugin it invoked.
 - Cloud provider plugins (Alibaba NLB, Kubernetes NodePort/HostPort) wrap every allocate/deallocate/service operation in spans so you can inspect latency or errors per plugin.
 
 **Operational tips**
 
 - Spans fall back to a no-op provider when OTLP dialing fails; the controller logs `Tracing initialization failed, using no-op tracer` in that case.
-- Search for traces & logs by attributes like `game.kruise.io.game_server.name`, `game.kruise.io.network.plugin.name`, `cloud.provider`, or `k8s.namespace.name` (use `tracing.AttrK8sNamespaceName(ns)` or `telemetryfields.FieldK8sNamespaceName`), you can find them at `pkg/tracing/attributes.go`.
+- Search for traces & logs by attributes like `game.kruise.io.game_server.name`, `game.kruise.io.network.plugin.name`, `cloud.provider`, or `k8s.namespace.name`. Span names/attribute helpers are centralized under `pkg/tracing/span_names.go` and `pkg/telemetryfields/fields.go` for easier discovery.
 
 ## 4. Metrics
 

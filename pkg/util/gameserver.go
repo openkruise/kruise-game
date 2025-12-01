@@ -221,20 +221,26 @@ func GetGsTemplateMetadataHash(gss *gameKruiseV1alpha1.GameServerSet) string {
 	})
 }
 
+// Prefix constants for annotations and labels
+const (
+	PrefixGameKruise = "game.kruise.io/"
+	PrefixGsSync     = "gs-sync/"
+)
+
 func AddPrefixGameKruise(s string) string {
-	return "game.kruise.io/" + s
+	return PrefixGameKruise + s
 }
 
 func AddPrefixGsSyncToPod(s string) string {
-	return "gs-sync/" + s
+	return PrefixGsSync + s
 }
 
 func IsHasPrefixGsSyncToPod(s string) bool {
-	return strings.HasPrefix(s, "gs-sync/")
+	return strings.HasPrefix(s, PrefixGsSync)
 }
 
 func RemovePrefixGameKruise(s string) string {
-	return strings.TrimPrefix(s, "game.kruise.io/")
+	return strings.TrimPrefix(s, PrefixGameKruise)
 }
 
 func GetGameServerSetOfPod(pod *corev1.Pod, c client.Client, ctx context.Context) (*gameKruiseV1alpha1.GameServerSet, error) {

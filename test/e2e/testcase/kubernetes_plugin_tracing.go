@@ -133,7 +133,7 @@ func RunKubernetesPluginTracingTest(f *framework.Framework) {
 				// Check pod labels
 				ginkgo.By("Diagnostic 1: Checking if pods have the required label...")
 				for i, pod := range podList.Items {
-					ownerLabel, hasLabel := pod.Labels["game.kruise.io/owner-gss"]
+					ownerLabel, hasLabel := pod.Labels[gamekruiseiov1alpha1.GameServerOwnerGssKey]
 					if hasLabel {
 						ginkgo.By(fmt.Sprintf("  Pod %d (%s): ✓ Has owner-gss label = %s", i, pod.Name, ownerLabel))
 					} else {
@@ -652,7 +652,7 @@ func RunKubernetesPluginTracingTest(f *framework.Framework) {
 			ginkgo.By("Step 3: Verify traceparent annotation is NOT persisted to etcd")
 			// Check all pods - none should have the traceparent annotation
 			for _, pod := range podList.Items {
-				traceparent, hasTraceparent := pod.Annotations["game.kruise.io/traceparent"]
+				traceparent, hasTraceparent := pod.Annotations[telemetryfields.AnnotationTraceparent]
 				gomega.Expect(hasTraceparent).To(gomega.BeFalse(),
 					fmt.Sprintf("Pod %s should NOT have traceparent annotation in etcd", pod.Name))
 				if hasTraceparent {

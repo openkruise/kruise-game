@@ -3,6 +3,7 @@ package telemetryfields
 const (
 	FieldK8sNamespaceName        = "k8s.namespace.name"
 	FieldK8sPodName              = "k8s.pod.name"
+	FieldK8sPodUID               = "k8s.pod.uid"
 	FieldK8sNodeName             = "k8s.node.name"
 	FieldServiceName             = "service.name"
 	FieldServiceNamespace        = "service.namespace"
@@ -114,4 +115,25 @@ const (
 	FieldTraceparent                  = "game.kruise.io.traceparent"
 	FieldLinkReason                   = "link.reason"
 	FieldTSDirectory                  = "game.kruise.io.fs.ts_directory"
+
+	// Annotation keys (using slash separator for K8s annotations)
+	// AnnotationTraceparent is the K8s annotation key for W3C traceparent propagation.
+	// Note: FieldTraceparent uses dot separator for telemetry fields, while this uses slash for K8s annotations.
+	AnnotationTraceparent = "game.kruise.io/traceparent"
+
+	FieldPluginAvailable           = "game.kruise.io.plugin.available"
+	FieldPluginTimeout             = "game.kruise.io.plugin.timeout"
+	FieldPodLabelCount             = "game.kruise.io.pod.label_count"
+	FieldPodAnnotationCount        = "game.kruise.io.pod.annotation_count"
+	FieldReplicasOld               = "game.kruise.io.replicas.old"
+	FieldReplicasNew               = "game.kruise.io.replicas.new"
+	FieldPodsCount                 = "game.kruise.io.pods.count"
+	FieldPodProbeMarkerSynced      = "game.kruise.io.pod_probe_marker.synced"
+	FieldGameServerResourceVersion = "game.kruise.io.game_server.resource_version"
+	FieldNetworkDesired            = "game.kruise.io.network.desired"
+	FieldNetworkCurrent            = "game.kruise.io.network.current"
+	FieldK8sServiceType            = "game.kruise.io.k8s.service.type"
+	FieldSelectorAction            = "game.kruise.io.selector.action"
+	FieldPortName                  = "game.kruise.io.port.name"
+	EventServiceReady              = "service.ready"
 )

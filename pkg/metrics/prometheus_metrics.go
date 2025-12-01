@@ -21,6 +21,30 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
+// Metric names
+const (
+	MetricGameServersStateCount          = "okg_gameservers_state_count"
+	MetricGameServersOpsStateCount       = "okg_gameservers_opsState_count"
+	MetricGameServersTotal               = "okg_gameservers_total"
+	MetricGameServerSetsReplicasCount    = "okg_gameserversets_replicas_count"
+	MetricGameServerDeletionPriority     = "okg_gameserver_deletion_priority"
+	MetricGameServerUpdatePriority       = "okg_gameserver_update_priority"
+	MetricGameServerReadyDuration        = "okg_gameserver_ready_duration_seconds"
+	MetricGameServerNetworkReadyDuration = "okg_gameserver_network_ready_duration_seconds"
+)
+
+// Metric label names
+const (
+	LabelState     = "state"
+	LabelOpsState  = "opsState"
+	LabelGSSName   = "gssName"
+	LabelGSSNs     = "gssNs"
+	LabelGSName    = "gsName"
+	LabelGSNs      = "gsNs"
+	LabelGSStatus  = "gsStatus"
+	LabelNamespace = "namespace"
+)
+
 func init() {
 	metrics.Registry.MustRegister(GameServersStateCount)
 	metrics.Registry.MustRegister(GameServersOpsStateCount)
@@ -35,58 +59,58 @@ func init() {
 var (
 	GameServersStateCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "okg_gameservers_state_count",
+			Name: MetricGameServersStateCount,
 			Help: "The number of gameservers per state",
 		},
-		[]string{"state"},
+		[]string{LabelState},
 	)
 	GameServersOpsStateCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "okg_gameservers_opsState_count",
+			Name: MetricGameServersOpsStateCount,
 			Help: "The number of gameservers per opsState",
 		},
-		[]string{"opsState", "gssName", "namespace"},
+		[]string{LabelOpsState, LabelGSSName, LabelNamespace},
 	)
 	GameServersTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "okg_gameservers_total",
+			Name: MetricGameServersTotal,
 			Help: "The total of gameservers",
 		},
 		[]string{},
 	)
 	GameServerSetsReplicasCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "okg_gameserversets_replicas_count",
+			Name: MetricGameServerSetsReplicasCount,
 			Help: "The number of replicas per gameserverset)",
 		},
-		[]string{"gssName", "gssNs", "gsStatus"},
+		[]string{LabelGSSName, LabelGSSNs, LabelGSStatus},
 	)
 	GameServerDeletionPriority = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "okg_gameserver_deletion_priority",
+			Name: MetricGameServerDeletionPriority,
 			Help: "The deletionPriority of gameserver.)",
 		},
-		[]string{"gsName", "gsNs"},
+		[]string{LabelGSName, LabelGSNs},
 	)
 	GameServerUpdatePriority = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "okg_gameserver_update_priority",
+			Name: MetricGameServerUpdatePriority,
 			Help: "The updatePriority of gameserver.)",
 		},
-		[]string{"gsName", "gsNs"},
+		[]string{LabelGSName, LabelGSNs},
 	)
 	GameServerReadyDuration = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "okg_gameserver_ready_duration_seconds",
+			Name: MetricGameServerReadyDuration,
 			Help: "duration seconds of gameserver from creating to ready",
 		},
-		[]string{"gsName", "gsNs", "gssName"},
+		[]string{LabelGSName, LabelGSNs, LabelGSSName},
 	)
 	GameServerNetworkReadyDuration = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "okg_gameserver_network_ready_duration_seconds",
+			Name: MetricGameServerNetworkReadyDuration,
 			Help: "duration seconds of gameserver from creating to network ready",
 		},
-		[]string{"gsName", "gsNs", "gssName"},
+		[]string{LabelGSName, LabelGSNs, LabelGSSName},
 	)
 )

@@ -17,11 +17,12 @@ limitations under the License.
 package metrics
 
 import (
+	"testing"
+
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"testing"
 
 	gamekruisev1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/client/clientset/versioned/fake"
@@ -65,7 +66,7 @@ func TestController_RecordGsWhenAdd(t *testing.T) {
 			Name:      "test-gs",
 			Namespace: "default",
 			Labels: map[string]string{
-				"game.kruise.io/owner-gss": "test-gss",
+				gamekruisev1alpha1.GameServerOwnerGssKey: "test-gss",
 			},
 		},
 		Spec: gamekruisev1alpha1.GameServerSpec{
@@ -112,7 +113,7 @@ func TestController_RecordGsWhenUpdate(t *testing.T) {
 			Name:      "test-gs",
 			Namespace: "default",
 			Labels: map[string]string{
-				"game.kruise.io/owner-gss": "test-gss",
+				gamekruisev1alpha1.GameServerOwnerGssKey: "test-gss",
 			},
 			CreationTimestamp: metav1.Now(),
 		},
@@ -188,7 +189,7 @@ func TestController_RecordGsWhenDelete(t *testing.T) {
 			Name:      "test-gs",
 			Namespace: "default",
 			Labels: map[string]string{
-				"game.kruise.io/owner-gss": "test-gss",
+				gamekruisev1alpha1.GameServerOwnerGssKey: "test-gss",
 			},
 		},
 		Spec: gamekruisev1alpha1.GameServerSpec{

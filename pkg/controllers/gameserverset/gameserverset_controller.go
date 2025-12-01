@@ -235,7 +235,7 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return reconcile.Result{}, err
 	} else if !done {
 		span.AddEvent(tracing.EventGameServerSetReconcileSyncPodProbeMarkerWaiting)
-		span.SetAttributes(attribute.Bool("podprobemarker.synced", false))
+		span.SetAttributes(attribute.Bool(telemetryfields.FieldPodProbeMarkerSynced, false))
 		return reconcile.Result{}, nil
 	}
 	span.AddEvent(tracing.EventGameServerSetReconcileSyncPodProbeMarkerSuccess)
@@ -280,7 +280,7 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return reconcile.Result{}, err
 	}
 
-	span.SetAttributes(attribute.Int("pods.count", len(podList.Items)))
+	span.SetAttributes(attribute.Int(telemetryfields.FieldPodsCount, len(podList.Items)))
 
 	gsm.SyncStsAndPodList(asts, podList.Items)
 
@@ -289,8 +289,8 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if *gss.Spec.Replicas != *newReplicas {
 		span.SetAttributes(
 			tracing.AttrReconcileAction("kill_gameservers"),
-			attribute.Int("replicas.old", int(*gss.Spec.Replicas)),
-			attribute.Int("replicas.new", int(*newReplicas)),
+			attribute.Int(telemetryfields.FieldReplicasOld, int(*gss.Spec.Replicas)),
+			attribute.Int(telemetryfields.FieldReplicasNew, int(*newReplicas)),
 		)
 		gss.Spec.Replicas = newReplicas
 		err = r.Update(ctx, gss)

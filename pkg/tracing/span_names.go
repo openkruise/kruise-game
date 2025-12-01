@@ -34,4 +34,7 @@ const (
 	SpanAllocateHostPort          = "allocate hostport"
 	SpanProcessHostPortUpdate     = "process hostport update"
 	SpanCleanupHostPortAllocation = "cleanup hostport allocation"
+
+	// Webhook plugin execution span
+	SpanExecuteNetworkPlugin = "execute network plugin"
 )

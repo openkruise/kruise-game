@@ -20,6 +20,13 @@ import (
 	"flag"
 )
 
+// Flag names for tracing configuration
+const (
+	FlagEnableTracing         = "enable-tracing"
+	FlagOtelCollectorEndpoint = "otel-collector-endpoint"
+	FlagOtelSamplingRate      = "otel-sampling-rate"
+)
+
 // TracingOptions holds configuration for OpenTelemetry tracing
 type TracingOptions struct {
 	// Enabled controls whether tracing is enabled
@@ -44,13 +51,13 @@ func NewOptions() *TracingOptions {
 
 // AddFlags adds tracing-related flags to the given FlagSet
 func (o *TracingOptions) AddFlags(fs *flag.FlagSet) {
-	fs.BoolVar(&o.Enabled, "enable-tracing", o.Enabled,
+	fs.BoolVar(&o.Enabled, FlagEnableTracing, o.Enabled,
 		"Enable OpenTelemetry distributed tracing. If disabled, uses no-op tracer.")
 
-	fs.StringVar(&o.CollectorEndpoint, "otel-collector-endpoint", o.CollectorEndpoint,
+	fs.StringVar(&o.CollectorEndpoint, FlagOtelCollectorEndpoint, o.CollectorEndpoint,
 		"OpenTelemetry Collector OTLP gRPC endpoint (e.g., 'otel-collector.observability.svc.cluster.local:4317')")
 
-	fs.Float64Var(&o.SamplingRate, "otel-sampling-rate", o.SamplingRate,
+	fs.Float64Var(&o.SamplingRate, FlagOtelSamplingRate, o.SamplingRate,
 		"OpenTelemetry trace sampling rate (0.0 to 1.0). 1.0 samples all traces, 0.1 samples 10%.")
 }
 

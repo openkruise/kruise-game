@@ -243,7 +243,7 @@ func (manager GameServerManager) SyncGsToPod(ctx context.Context) error {
 	if len(newLabels) != 0 || len(newAnnotations) != 0 || containers != nil {
 		addManagerSpanEvent(ctx, "gameserver.manager.patch_pod",
 			tracing.AttrGameServerName(gs.GetName()),
-			attribute.String("pod.name", pod.GetName()),
+			attribute.String(telemetryfields.FieldK8sPodName, pod.GetName()),
 			attribute.Int("labels", len(newLabels)),
 			attribute.Int("annotations", len(newAnnotations)),
 			attribute.Bool("containersUpdated", containers != nil),
@@ -257,7 +257,7 @@ func (manager GameServerManager) SyncGsToPod(ctx context.Context) error {
 				if len(newAnnotations) == 0 {
 					newAnnotations = make(map[string]string)
 				}
-				newAnnotations["game.kruise.io/traceparent"] = traceparent
+				newAnnotations[telemetryfields.AnnotationTraceparent] = traceparent
 			}
 		}
 
@@ -402,8 +402,8 @@ func (manager GameServerManager) SyncPodToGs(ctx context.Context, gss *gameKruis
 			tracing.AttrGameServerName(gs.GetName()),
 			attribute.String("currentState", string(newStatus.CurrentState)),
 			attribute.String("desiredState", string(newStatus.DesiredState)),
-			attribute.String("network.desired", string(newStatus.NetworkStatus.DesiredNetworkState)),
-			attribute.String("network.current", string(newStatus.NetworkStatus.CurrentNetworkState)),
+			attribute.String(telemetryfields.FieldNetworkDesired, string(newStatus.NetworkStatus.DesiredNetworkState)),
+			attribute.String(telemetryfields.FieldNetworkCurrent, string(newStatus.NetworkStatus.CurrentNetworkState)),
 		)
 		jsonPatchStatus, err := json.Marshal(patchStatus)
 		if err != nil {

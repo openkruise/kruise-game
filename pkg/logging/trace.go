@@ -20,6 +20,7 @@ import (
 	"context"
 
 	"github.com/go-logr/logr"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"go.opentelemetry.io/otel/trace"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -56,7 +57,7 @@ func FromContextWithTrace(ctx context.Context) logr.Logger {
 	// - trace_id: 32-character hex string (128-bit), e.g., "4bf92f3577b34da6a3ce929d0e0e4736"
 	// - span_id: 16-character hex string (64-bit), e.g., "00f067aa0ba902b7"
 	return logger.WithValues(
-		"trace_id", spanCtx.TraceID().String(),
-		"span_id", spanCtx.SpanID().String(),
+		telemetryfields.FieldTraceID, spanCtx.TraceID().String(),
+		telemetryfields.FieldSpanID, spanCtx.SpanID().String(),
 	)
 }

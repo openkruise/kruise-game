@@ -177,7 +177,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 			defer createSpan.End()
 			svcToCreate := consNodePortSvc(npc, pod, client, ctx)
 			createSpan.SetAttributes(
-				attribute.String("service.type", string(corev1.ServiceTypeNodePort)),
+				attribute.String(telemetryfields.FieldK8sServiceType, string(corev1.ServiceTypeNodePort)),
 				nodePortAttrServicePortsKey.String(formatNodePortServicePorts(svcToCreate.Spec.Ports)),
 				nodePortAttrSelectorKey.String(formatNodePortSelector(svcToCreate.Spec.Selector)),
 			)
@@ -232,7 +232,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 			nodePortSelectorBefore, formatNodePortSelector(selectorBefore),
 			nodePortSelectorAfter, formatNodePortSelector(selectorAfter))
 		_, toggleSpan := startNodePortSpan(ctx, tracer, tracing.SpanToggleNodePortSelector, pod,
-			attribute.String("selector.action", "disable"),
+			attribute.String(telemetryfields.FieldSelectorAction, "disable"),
 			tracing.AttrServiceName(svc.GetName()),
 			nodePortAttrSelectorBeforeKey.String(formatNodePortSelector(selectorBefore)),
 			nodePortAttrSelectorAfterKey.String(formatNodePortSelector(selectorAfter)),
@@ -250,7 +250,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 			logger.Info("Disabled NodePort selector", telemetryfields.FieldService, serviceKey)
 			toggleSpan.SetStatus(codes.Ok, "nodeport selector disabled")
 			span.AddEvent(tracing.EventNetworkNodePortSelectorToggled, trace.WithAttributes(
-				attribute.String("selector.action", "disable"),
+				attribute.String(telemetryfields.FieldSelectorAction, "disable"),
 				nodePortAttrSelectorBeforeKey.String(formatNodePortSelector(selectorBefore)),
 				nodePortAttrSelectorAfterKey.String(formatNodePortSelector(selectorAfter)),
 			))
@@ -268,7 +268,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 			nodePortSelectorBefore, formatNodePortSelector(selectorBefore),
 			nodePortSelectorAfter, formatNodePortSelector(selectorAfter))
 		_, toggleSpan := startNodePortSpan(ctx, tracer, tracing.SpanToggleNodePortSelector, pod,
-			attribute.String("selector.action", "enable"),
+			attribute.String(telemetryfields.FieldSelectorAction, "enable"),
 			tracing.AttrServiceName(svc.GetName()),
 			nodePortAttrSelectorBeforeKey.String(formatNodePortSelector(selectorBefore)),
 			nodePortAttrSelectorAfterKey.String(formatNodePortSelector(selectorAfter)),
@@ -286,7 +286,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 			logger.Info("Enabled NodePort selector", telemetryfields.FieldService, serviceKey)
 			toggleSpan.SetStatus(codes.Ok, "nodeport selector enabled")
 			span.AddEvent(tracing.EventNetworkNodePortSelectorToggled, trace.WithAttributes(
-				attribute.String("selector.action", "enable"),
+				attribute.String(telemetryfields.FieldSelectorAction, "enable"),
 				nodePortAttrSelectorBeforeKey.String(formatNodePortSelector(selectorBefore)),
 				nodePortAttrSelectorAfterKey.String(formatNodePortSelector(selectorAfter)),
 			))
@@ -364,7 +364,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 			finalNetworkStatus = telemetryfields.NetworkStatusNotReady
 			finalStatus = codes.Error
 			// record an event on parent to indicate waiting for node port
-			span.AddEvent(tracing.EventGameServerReconcileWaitNetworkState, trace.WithAttributes(attribute.String("port.name", port.Name)))
+			span.AddEvent(tracing.EventGameServerReconcileWaitNetworkState, trace.WithAttributes(attribute.String(telemetryfields.FieldPortName, port.Name)))
 			networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 			pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 			return pod, cperrors.ToPluginError(err, cperrors.InternalError)

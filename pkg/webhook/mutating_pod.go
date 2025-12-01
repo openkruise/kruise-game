@@ -129,7 +129,7 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 	span.SetAttributes(tracing.AttrNetworkStatus(initialNetworkStatus))
 
 	// Parse traceparent from Pod annotation and add Link to Reconcile span
-	if traceparent, ok := pod.Annotations["game.kruise.io/traceparent"]; ok {
+	if traceparent, ok := pod.Annotations[telemetryfields.AnnotationTraceparent]; ok {
 		remoteSpanContext, err := tracing.ParseTraceparent(traceparent)
 		if err != nil {
 			logger.Error(err, "Failed to parse traceparent from pod annotation", telemetryfields.FieldTraceparent, traceparent)
@@ -178,7 +178,7 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 		msg := fmt.Sprintf("Pod %s/%s has no available plugin (network-type annotation: %s=%v, available plugins: %v)",
 			pod.Namespace, pod.Name, networkType, hasNetworkType, availablePlugins)
 		logger.Info("No available network plugin", telemetryfields.FieldMessage, msg, telemetryfields.FieldNetworkType, networkType, telemetryfields.FieldNetworkTypeAnnotationPresent, hasNetworkType)
-		span.SetAttributes(attribute.Bool("plugin.available", false))
+		span.SetAttributes(attribute.Bool(telemetryfields.FieldPluginAvailable, false))
 		span.SetStatus(codes.Ok, "no plugin needed")
 		return getAdmissionResponse(ctx, req, patchResult{pod: pod, err: nil})
 	}
@@ -214,7 +214,7 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 		pluginLogger := logger.WithValues(telemetryfields.FieldPluginOperation, operation)
 		pluginSpanAttrs := buildPluginSpanAttributes(spanAttrs, operation, initialNetworkStatus)
 		pluginCtx, pluginSpan := tracer.Start(ctx,
-			fmt.Sprintf("plugin.%s.%s", pluginName, operation),
+			tracing.SpanExecuteNetworkPlugin,
 			trace.WithSpanKind(trace.SpanKindInternal),
 			trace.WithAttributes(pluginSpanAttrs...),
 		)
@@ -256,7 +256,7 @@ func (pmh *PodMutatingHandler) Handle(ctx context.Context, req admission.Request
 		logger.Error(ctx.Err(), "Plugin execution timed out")
 		pmh.eventRecorder.Eventf(pod, corev1.EventTypeWarning, mutatingTimeoutReason, msg)
 		span.SetStatus(codes.Error, "plugin execution timeout")
-		span.SetAttributes(attribute.Bool("plugin.timeout", true))
+		span.SetAttributes(attribute.Bool(telemetryfields.FieldPluginTimeout, true))
 		span.SetAttributes(tracing.AttrNetworkStatus(telemetryfields.NetworkStatusError))
 		return admission.Allowed(msg)
 	// completed before timeout
@@ -306,8 +306,8 @@ func getAdmissionResponse(ctx context.Context, req admission.Request, result pat
 	// - "Patches set here will override any patches in the response"
 	pod := result.pod.DeepCopy()
 	if pod.Annotations != nil {
-		if _, exists := pod.Annotations["game.kruise.io/traceparent"]; exists {
-			delete(pod.Annotations, "game.kruise.io/traceparent")
+		if _, exists := pod.Annotations[telemetryfields.AnnotationTraceparent]; exists {
+			delete(pod.Annotations, telemetryfields.AnnotationTraceparent)
 			if ctx != nil {
 				logging.FromContextWithTrace(ctx).V(4).Info("Removed traceparent annotation before generating patch",
 					telemetryfields.FieldK8sNamespaceName, req.Namespace,

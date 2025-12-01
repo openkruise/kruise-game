@@ -1429,7 +1429,7 @@ func TestGameServerSetManager_SyncPodProbeMarker(t *testing.T) {
 					Spec: kruiseV1alpha1.PodProbeMarkerSpec{
 						Selector: &metav1.LabelSelector{
 							MatchLabels: map[string]string{
-								"game.kruise.io/owner-gss": "case0",
+								gameKruiseV1alpha1.GameServerOwnerGssKey: "case0",
 							},
 						},
 						Probes: []kruiseV1alpha1.PodContainerProbe{
@@ -1498,7 +1498,7 @@ func TestGameServerSetManager_SyncPodProbeMarker(t *testing.T) {
 					Spec: kruiseV1alpha1.PodProbeMarkerSpec{
 						Selector: &metav1.LabelSelector{
 							MatchLabels: map[string]string{
-								"game.kruise.io/owner-gss": "case0",
+								gameKruiseV1alpha1.GameServerOwnerGssKey: "case0",
 							},
 						},
 						Probes: []kruiseV1alpha1.PodContainerProbe{
@@ -1531,7 +1531,7 @@ func TestGameServerSetManager_SyncPodProbeMarker(t *testing.T) {
 					Spec: kruiseV1alpha1.PodProbeMarkerSpec{
 						Selector: &metav1.LabelSelector{
 							MatchLabels: map[string]string{
-								"game.kruise.io/owner-gss": "case0",
+								gameKruiseV1alpha1.GameServerOwnerGssKey: "case0",
 							},
 						},
 						Probes: []kruiseV1alpha1.PodContainerProbe{
@@ -1600,7 +1600,7 @@ func TestGameServerSetManager_SyncPodProbeMarker(t *testing.T) {
 					Spec: kruiseV1alpha1.PodProbeMarkerSpec{
 						Selector: &metav1.LabelSelector{
 							MatchLabels: map[string]string{
-								"game.kruise.io/owner-gss": "case0",
+								gameKruiseV1alpha1.GameServerOwnerGssKey: "case0",
 							},
 						},
 						Probes: []kruiseV1alpha1.PodContainerProbe{
@@ -1636,7 +1636,7 @@ func TestGameServerSetManager_SyncPodProbeMarker(t *testing.T) {
 					Spec: kruiseV1alpha1.PodProbeMarkerSpec{
 						Selector: &metav1.LabelSelector{
 							MatchLabels: map[string]string{
-								"game.kruise.io/owner-gss": "case0",
+								gameKruiseV1alpha1.GameServerOwnerGssKey: "case0",
 							},
 						},
 						Probes: []kruiseV1alpha1.PodContainerProbe{
