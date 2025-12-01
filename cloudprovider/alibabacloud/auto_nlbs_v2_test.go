@@ -63,6 +63,7 @@ func TestParseAutoNLBsConfig(t *testing.T) {
 				maxPort:               10499,
 				reserveNlbNum:         1,
 				externalTrafficPolicy: corev1.ServiceExternalTrafficPolicyTypeLocal,
+				retainNLBOnDelete:     true, // 默认值
 			},
 			expectError: false,
 		},
@@ -85,6 +86,7 @@ func TestParseAutoNLBsConfig(t *testing.T) {
 				maxPort:               20999,
 				reserveNlbNum:         2,
 				externalTrafficPolicy: corev1.ServiceExternalTrafficPolicyTypeLocal,
+				retainNLBOnDelete:     true, // 默认值
 			},
 			expectError: false,
 		},
@@ -105,6 +107,30 @@ func TestParseAutoNLBsConfig(t *testing.T) {
 				maxPort:               30999,
 				reserveNlbNum:         1,
 				externalTrafficPolicy: corev1.ServiceExternalTrafficPolicyTypeLocal,
+				retainNLBOnDelete:     true, // 默认值
+			},
+			expectError: false,
+		},
+		{
+			name: "RetainNLBOnDelete set to false",
+			conf: []gamekruiseiov1alpha1.NetworkConfParams{
+				{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+				{Name: "PortProtocols", Value: "8080/TCP"},
+				{Name: "EipIspTypes", Value: "BGP"},
+				{Name: "MinPort", Value: "10000"},
+				{Name: "MaxPort", Value: "10999"},
+				{Name: "RetainNLBOnDelete", Value: "false"},
+			},
+			expectConfig: &autoNLBsConfig{
+				zoneMaps:              "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb",
+				eipIspTypes:           []string{"BGP"},
+				targetPorts:           []int{8080},
+				protocols:             []corev1.Protocol{corev1.ProtocolTCP},
+				minPort:               10000,
+				maxPort:               10999,
+				reserveNlbNum:         1,
+				externalTrafficPolicy: corev1.ServiceExternalTrafficPolicyTypeLocal,
+				retainNLBOnDelete:     false, // 用户设置为 false
 			},
 			expectError: false,
 		},
@@ -181,6 +207,10 @@ func TestParseAutoNLBsConfig(t *testing.T) {
 
 			if config.reserveNlbNum != tt.expectConfig.reserveNlbNum {
 				t.Errorf("reserveNlbNum: expected %d, got %d", tt.expectConfig.reserveNlbNum, config.reserveNlbNum)
+			}
+
+			if config.retainNLBOnDelete != tt.expectConfig.retainNLBOnDelete {
+				t.Errorf("retainNLBOnDelete: expected %v, got %v", tt.expectConfig.retainNLBOnDelete, config.retainNLBOnDelete)
 			}
 		})
 	}
@@ -2313,5 +2343,213 @@ func TestAutoNLBsV2Plugin_EnsureServiceForPod_Idempotent(t *testing.T) {
 	err = plugin.ensureServiceForPod(ctx, c, pod, "test-gss", "BGP", 0, "nlb-test-12345", config)
 	if err != nil {
 		t.Errorf("Second call should succeed (idempotent): %v", err)
+	}
+}
+
+// TestAutoNLBsV2Plugin_RetainNLBOnDelete 测试 RetainNLBOnDelete 参数控制 OwnerReference
+func TestAutoNLBsV2Plugin_RetainNLBOnDelete(t *testing.T) {
+	tests := []struct {
+		name              string
+		retainNLBOnDelete bool
+		expectNLBOwnerRef bool
+		expectEIPOwnerRef bool
+	}{
+		{
+			name:              "RetainNLBOnDelete=true (default) - no OwnerReference",
+			retainNLBOnDelete: true,
+			expectNLBOwnerRef: false,
+			expectEIPOwnerRef: false,
+		},
+		{
+			name:              "RetainNLBOnDelete=false - set OwnerReference",
+			retainNLBOnDelete: false,
+			expectNLBOwnerRef: true,
+			expectEIPOwnerRef: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gss := createTestGSS("default", "test-gss", 10, []gamekruiseiov1alpha1.NetworkConfParams{
+				{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+				{Name: "PortProtocols", Value: "8080/TCP"},
+				{Name: "EipIspTypes", Value: "BGP"},
+				{Name: "MinPort", Value: "10000"},
+				{Name: "MaxPort", Value: "10999"},
+			})
+
+			// 根据测试场景决定是否预先创建EIP
+			var c client.Client
+			if tt.retainNLBOnDelete {
+				// RetainNLBOnDelete=true 的场景：预先创建没有 OwnerReference 的 EIP
+				eip0 := &eipv1.EIP{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-gss-eip-bgp-0-z0",
+						Namespace: "default",
+					},
+					Spec: eipv1.EIPSpec{
+						Name:               "test-gss-eip-bgp-0-z0",
+						Bandwidth:          "5",
+						InternetChargeType: "PayByTraffic",
+						ISP:                "BGP",
+					},
+					Status: eipv1.EIPStatus{
+						AllocationID: "eip-bgp-zone0-12345",
+					},
+				}
+
+				eip1 := &eipv1.EIP{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-gss-eip-bgp-0-z1",
+						Namespace: "default",
+					},
+					Spec: eipv1.EIPSpec{
+						Name:               "test-gss-eip-bgp-0-z1",
+						Bandwidth:          "5",
+						InternetChargeType: "PayByTraffic",
+						ISP:                "BGP",
+					},
+					Status: eipv1.EIPStatus{
+						AllocationID: "eip-bgp-zone1-12345",
+					},
+				}
+				c = newFakeClient(gss, eip0, eip1)
+			} else {
+				// RetainNLBOnDelete=false 的场景：预先创建带有 OwnerReference 的 EIP
+				eip0 := &eipv1.EIP{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-gss-eip-bgp-0-z0",
+						Namespace: "default",
+						OwnerReferences: []metav1.OwnerReference{
+							{
+								APIVersion:         gss.APIVersion,
+								Kind:               gss.Kind,
+								Name:               gss.GetName(),
+								UID:                gss.GetUID(),
+								Controller:         ptr.To(false),
+								BlockOwnerDeletion: ptr.To(true),
+							},
+						},
+					},
+					Spec: eipv1.EIPSpec{
+						Name:               "test-gss-eip-bgp-0-z0",
+						Bandwidth:          "5",
+						InternetChargeType: "PayByTraffic",
+						ISP:                "BGP",
+					},
+					Status: eipv1.EIPStatus{
+						AllocationID: "eip-bgp-zone0-12345",
+					},
+				}
+
+				eip1 := &eipv1.EIP{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-gss-eip-bgp-0-z1",
+						Namespace: "default",
+						OwnerReferences: []metav1.OwnerReference{
+							{
+								APIVersion:         gss.APIVersion,
+								Kind:               gss.Kind,
+								Name:               gss.GetName(),
+								UID:                gss.GetUID(),
+								Controller:         ptr.To(false),
+								BlockOwnerDeletion: ptr.To(true),
+							},
+						},
+					},
+					Spec: eipv1.EIPSpec{
+						Name:               "test-gss-eip-bgp-0-z1",
+						Bandwidth:          "5",
+						InternetChargeType: "PayByTraffic",
+						ISP:                "BGP",
+					},
+					Status: eipv1.EIPStatus{
+						AllocationID: "eip-bgp-zone1-12345",
+					},
+				}
+				c = newFakeClient(gss, eip0, eip1)
+			}
+			ctx := context.Background()
+
+			plugin := &AutoNLBsV2Plugin{
+				maxPodIndex: map[string]int{
+					"default/test-gss": 10,
+				},
+				mutex: sync.RWMutex{},
+			}
+
+			config := &autoNLBsConfig{
+				zoneMaps:          "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb",
+				eipIspTypes:       []string{"BGP"},
+				targetPorts:       []int{8080},
+				protocols:         []corev1.Protocol{corev1.ProtocolTCP},
+				minPort:           10000,
+				maxPort:           10999,
+				retainNLBOnDelete: tt.retainNLBOnDelete,
+			}
+
+			// 创建 NLB 和 EIP
+			err := plugin.ensureNLBForPod(ctx, c, "default", "test-gss", "BGP", 0, config)
+			if err != nil {
+				t.Errorf("ensureNLBForPod failed: %v", err)
+				return
+			}
+
+			// 验证 NLB CR 的 OwnerReference
+			nlb := &nlbv1.NLB{}
+			err = c.Get(ctx, types.NamespacedName{
+				Name:      "test-gss-bgp-0",
+				Namespace: "default",
+			}, nlb)
+			if err != nil {
+				t.Errorf("NLB should be created: %v", err)
+				return
+			}
+
+			if tt.expectNLBOwnerRef {
+				if len(nlb.OwnerReferences) == 0 {
+					t.Errorf("NLB should have OwnerReference when RetainNLBOnDelete=false")
+				} else {
+					if nlb.OwnerReferences[0].Kind != "GameServerSet" {
+						t.Errorf("NLB OwnerReference kind: expected GameServerSet, got %s", nlb.OwnerReferences[0].Kind)
+					}
+					if nlb.OwnerReferences[0].Name != "test-gss" {
+						t.Errorf("NLB OwnerReference name: expected test-gss, got %s", nlb.OwnerReferences[0].Name)
+					}
+				}
+			} else {
+				if len(nlb.OwnerReferences) > 0 {
+					t.Errorf("NLB should NOT have OwnerReference when RetainNLBOnDelete=true")
+				}
+			}
+
+			// 验证 EIP CR 的 OwnerReference（检查zone 0的EIP）
+			eip := &eipv1.EIP{}
+			err = c.Get(ctx, types.NamespacedName{
+				Name:      "test-gss-eip-bgp-0-z0",
+				Namespace: "default",
+			}, eip)
+			if err != nil {
+				t.Errorf("EIP should exist: %v", err)
+				return
+			}
+
+			if tt.expectEIPOwnerRef {
+				if len(eip.OwnerReferences) == 0 {
+					t.Errorf("EIP should have OwnerReference when RetainNLBOnDelete=false")
+				} else {
+					if eip.OwnerReferences[0].Kind != "GameServerSet" {
+						t.Errorf("EIP OwnerReference kind: expected GameServerSet, got %s", eip.OwnerReferences[0].Kind)
+					}
+					if eip.OwnerReferences[0].Name != "test-gss" {
+						t.Errorf("EIP OwnerReference name: expected test-gss, got %s", eip.OwnerReferences[0].Name)
+					}
+				}
+			} else {
+				if len(eip.OwnerReferences) > 0 {
+					t.Errorf("EIP should NOT have OwnerReference when RetainNLBOnDelete=true")
+				}
+			}
+		})
 	}
 }

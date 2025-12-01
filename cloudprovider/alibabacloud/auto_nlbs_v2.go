@@ -44,6 +44,9 @@ import (
 const (
 	AutoNLBsV2Network = "AlibabaCloud-AutoNLBs-V2"
 
+	// 配置参数常量
+	RetainNLBOnDeleteConfigName = "RetainNLBOnDelete" // 是否在 GSS 删除时保留 NLB 和 EIP（默认 true）
+
 	// NLB CRD 相关标签
 	NLBPoolLabel           = "game.kruise.io/nlb-pool"
 	NLBPoolIndexLabel      = "game.kruise.io/nlb-pool-index"
@@ -424,13 +427,13 @@ func (a *AutoNLBsV2Plugin) ensurePrewarming(ctx context.Context, c client.Client
 				AutoNLBsV2Network, i, namespace, gssName, eipIspType)
 
 			// 创建 EIP CR（为每个 zone）
-			if err := a.ensureEIPsForNLB(ctx, c, namespace, gssName, eipIspType, i, config); err != nil {
+			if err := a.ensureEIPsForNLB(ctx, c, namespace, gssName, eipIspType, i, config, gss); err != nil {
 				log.Errorf("[%s] Failed to ensure EIPs for NLB %d: %v", AutoNLBsV2Network, i, err)
 				// 继续创建下一个
 			}
 
 			// 创建 NLB CR（幂等）
-			if err := a.createNLBInstanceCR(ctx, c, namespace, gssName, eipIspType, i, config); err != nil {
+			if err := a.createNLBInstanceCR(ctx, c, namespace, gssName, eipIspType, i, config, gss); err != nil {
 				log.Errorf("[%s] Failed to create NLB instance %d: %v", AutoNLBsV2Network, i, err)
 				// 继续创建下一个
 			}
@@ -448,7 +451,7 @@ func (a *AutoNLBsV2Plugin) ensurePrewarming(ctx context.Context, c client.Client
 }
 
 // ensureEIPsForNLB 为指定的 NLB 实例创建所有 zone 的 EIP CR
-func (a *AutoNLBsV2Plugin) ensureEIPsForNLB(ctx context.Context, c client.Client, namespace, gssName, eipIspType string, nlbIndex int, config *autoNLBsConfig) error {
+func (a *AutoNLBsV2Plugin) ensureEIPsForNLB(ctx context.Context, c client.Client, namespace, gssName, eipIspType string, nlbIndex int, config *autoNLBsConfig, gss *gamekruiseiov1alpha1.GameServerSet) error {
 	// 解析 ZoneMaps，获取 zone 数量
 	zoneMappings, _, err := parseZoneMaps(config.zoneMaps)
 	if err != nil {
@@ -458,7 +461,7 @@ func (a *AutoNLBsV2Plugin) ensureEIPsForNLB(ctx context.Context, c client.Client
 
 	// 为每个 zone 创建 EIP CR
 	for zoneIdx := range zoneMappings {
-		_, err := a.ensureEIPCR(ctx, c, namespace, gssName, eipIspType, nlbIndex, zoneIdx)
+		_, err := a.ensureEIPCR(ctx, c, namespace, gssName, eipIspType, nlbIndex, zoneIdx, config, gss)
 		if err != nil {
 			log.Errorf("[%s] Failed to ensure EIP CR for NLB %d zone %d: %v",
 				AutoNLBsV2Network, nlbIndex, zoneIdx, err)
@@ -561,6 +564,17 @@ func (a *AutoNLBsV2Plugin) ensureNLBForPod(ctx context.Context, c client.Client,
 	log.Infof("[%s] ensureNLBForPod: namespace=%s, gssName=%s, eipIspType=%s, nlbIndex=%d",
 		AutoNLBsV2Network, namespace, gssName, eipIspType, nlbIndex)
 
+	// 获取 GameServerSet
+	gss := &gamekruiseiov1alpha1.GameServerSet{}
+	err := c.Get(ctx, types.NamespacedName{
+		Namespace: namespace,
+		Name:      gssName,
+	}, gss)
+	if err != nil {
+		log.Errorf("[%s] Failed to get GameServerSet %s/%s: %v", AutoNLBsV2Network, namespace, gssName, err)
+		return err
+	}
+
 	// 解析 ZoneMaps，获取 zone 数量
 	zoneMappings, _, err := parseZoneMaps(config.zoneMaps)
 	if err != nil {
@@ -570,7 +584,7 @@ func (a *AutoNLBsV2Plugin) ensureNLBForPod(ctx context.Context, c client.Client,
 
 	// 步骤1: 确保所有 zone 的 EIP CR 存在
 	for zoneIdx := range zoneMappings {
-		_, err := a.ensureEIPCR(ctx, c, namespace, gssName, eipIspType, nlbIndex, zoneIdx)
+		_, err := a.ensureEIPCR(ctx, c, namespace, gssName, eipIspType, nlbIndex, zoneIdx, config, gss)
 		if err != nil {
 			log.Errorf("[%s] Failed to ensure EIP CR for NLB %d zone %d: %v",
 				AutoNLBsV2Network, nlbIndex, zoneIdx, err)
@@ -579,7 +593,7 @@ func (a *AutoNLBsV2Plugin) ensureNLBForPod(ctx context.Context, c client.Client,
 	}
 
 	// 步骤2: 创建 NLB CR（如果不存在）
-	err = a.createNLBInstanceCR(ctx, c, namespace, gssName, eipIspType, nlbIndex, config)
+	err = a.createNLBInstanceCR(ctx, c, namespace, gssName, eipIspType, nlbIndex, config, gss)
 	return err
 }
 
@@ -706,7 +720,7 @@ func (a *AutoNLBsV2Plugin) consServiceForPod(namespace, svcName, podName, gssNam
 
 // ensureMaxPodIndex 更新 Pod 最大索引
 // createNLBInstanceCR 创建一个 NLB 实例(使用 NLB CRD)
-func (a *AutoNLBsV2Plugin) createNLBInstanceCR(ctx context.Context, c client.Client, namespace, gssName, eipIspType string, index int, config *autoNLBsConfig) error {
+func (a *AutoNLBsV2Plugin) createNLBInstanceCR(ctx context.Context, c client.Client, namespace, gssName, eipIspType string, index int, config *autoNLBsConfig, gss *gamekruiseiov1alpha1.GameServerSet) error {
 	// 将 eipIspType 转换为小写以符合 Kubernetes 资源命名规范
 	nlbName := gssName + "-" + strings.ToLower(eipIspType) + "-" + strconv.Itoa(index)
 	log.Infof("createNLBInstanceCR: nlbName=%s, namespace=%s, eipIspType=%s, index=%d",
@@ -821,8 +835,6 @@ func (a *AutoNLBsV2Plugin) createNLBInstanceCR(ctx context.Context, c client.Cli
 				NLBPoolEipIspTypeLabel: eipIspType,
 				NLBPoolGssLabel:        gssName,
 			},
-			// 不设置 OwnerReference，允许 NLB 实例在 GSS 删除时保留
-			// 实现 NLB 资源池复用，降低成本和创建时间
 		},
 		Spec: nlbv1.NLBSpec{
 			LoadBalancerName: nlbName,
@@ -831,6 +843,26 @@ func (a *AutoNLBsV2Plugin) createNLBInstanceCR(ctx context.Context, c client.Cli
 			VpcId:            vpcId,
 			ZoneMappings:     nlbZoneMappings,
 		},
+	}
+
+	// 根据 RetainNLBOnDelete 配置决定是否设置 OwnerReference
+	if !config.retainNLBOnDelete {
+		// 如果不保留，设置 OwnerReference 指向 GSS，GSS 删除时 NLB 会级联删除
+		nlbCR.OwnerReferences = []metav1.OwnerReference{
+			{
+				APIVersion:         gss.APIVersion,
+				Kind:               gss.Kind,
+				Name:               gss.GetName(),
+				UID:                gss.GetUID(),
+				Controller:         ptr.To(false), // NLB 不是由 GSS 控制器管理
+				BlockOwnerDeletion: ptr.To(true),
+			},
+		}
+		log.Infof("[%s] NLB CR %s will be deleted with GSS (RetainNLBOnDelete=false)", AutoNLBsV2Network, nlbName)
+	} else {
+		// 保留模式：不设置 OwnerReference，允许 NLB 实例在 GSS 删除时保留
+		// 实现 NLB 资源池复用，降低成本和创建时间
+		log.Infof("[%s] NLB CR %s will be retained after GSS deletion (RetainNLBOnDelete=true)", AutoNLBsV2Network, nlbName)
 	}
 
 	// 创建 NLB CR
@@ -907,7 +939,7 @@ func parseZoneMaps(zoneMapsStr string) ([]interface{}, string, error) {
 // ensureEIPCR 确保 EIP CR 存在并返回 AllocationID
 // eipIspType: EIP 线路类型（如 BGP、BGP_PRO、ChinaTelecom、ChinaMobile 等）
 // zoneIndex: zone 索引，用于区分同一个 NLB 的不同 zone 的 EIP
-func (a *AutoNLBsV2Plugin) ensureEIPCR(ctx context.Context, c client.Client, namespace, gssName, eipIspType string, nlbIndex, zoneIndex int) (string, error) {
+func (a *AutoNLBsV2Plugin) ensureEIPCR(ctx context.Context, c client.Client, namespace, gssName, eipIspType string, nlbIndex, zoneIndex int, config *autoNLBsConfig, gss *gamekruiseiov1alpha1.GameServerSet) (string, error) {
 	// EIP CR 命名：{gssName}-eip-{eipIspType}-{nlbIndex}-z{zoneIndex}
 	eipName := fmt.Sprintf("%s-eip-%s-%d-z%d", gssName, strings.ToLower(eipIspType), nlbIndex, zoneIndex)
 	log.Infof("[%s] ensureEIPCR: eipName=%s, namespace=%s, eipIspType=%s, nlbIndex=%d, zoneIndex=%d",
@@ -964,8 +996,6 @@ func (a *AutoNLBsV2Plugin) ensureEIPCR(ctx context.Context, c client.Client, nam
 				EIPPoolEipIspTypeLabel: eipIspType,
 				EIPPoolGssLabel:        gssName,
 			},
-			// 不设置 OwnerReference，允许 EIP 在 GSS 删除时保留
-			// 实现 EIP 资源池复用
 		},
 		Spec: eipv1.EIPSpec{
 			Name:               eipName,
@@ -975,6 +1005,26 @@ func (a *AutoNLBsV2Plugin) ensureEIPCR(ctx context.Context, c client.Client, nam
 			ReleaseStrategy:    "OnDelete",         // CR 删除时释放 EIP
 			Description:        fmt.Sprintf("EIP for GameServerSet %s, NLB index %d, zone %d", gssName, nlbIndex, zoneIndex),
 		},
+	}
+
+	// 根据 RetainNLBOnDelete 配置决定是否设置 OwnerReference
+	if !config.retainNLBOnDelete {
+		// 如果不保留，设置 OwnerReference 指向 GSS，GSS 删除时 EIP 会级联删除
+		eipCR.OwnerReferences = []metav1.OwnerReference{
+			{
+				APIVersion:         gss.APIVersion,
+				Kind:               gss.Kind,
+				Name:               gss.GetName(),
+				UID:                gss.GetUID(),
+				Controller:         ptr.To(false), // EIP 不是由 GSS 控制器管理
+				BlockOwnerDeletion: ptr.To(true),
+			},
+		}
+		log.Infof("[%s] EIP CR %s will be deleted with GSS (RetainNLBOnDelete=false)", AutoNLBsV2Network, eipName)
+	} else {
+		// 保留模式：不设置 OwnerReference，允许 EIP 在 GSS 删除时保留
+		// 实现 EIP 资源池复用
+		log.Infof("[%s] EIP CR %s will be retained after GSS deletion (RetainNLBOnDelete=true)", AutoNLBsV2Network, eipName)
 	}
 
 	// 创建 EIP CR

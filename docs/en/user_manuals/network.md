@@ -953,6 +953,17 @@ LBHealthCheckMethod
 - Configuration change supported: Yes
 - Note: Only effective when `LBHealthCheckType=http`
 
+RetainNLBOnDelete
+
+- Meaning: Whether to retain NLB and EIP resources when GameServerSet is deleted
+- Format: `true` or `false`
+- Default: `true` (retain resources, support reuse)
+- Configuration change supported: No
+- Description:
+  - When set to `true`, NLB and EIP resources will be retained after GSS deletion, allowing reuse by other GSS, reducing costs and creation time
+  - When set to `false`, NLB and EIP resources will be cascade deleted when GSS is deleted
+  - Regardless of this setting, Service resources are always deleted with GSS
+
 #### How it works
 
 **Resource Mapping Relationships:**
@@ -979,9 +990,11 @@ LBHealthCheckMethod
 
 **Resource Lifecycle:**
 
-- **NLB & EIP**: No OwnerReference set, independent of GameServerSet, supports cross-GSS reuse
+- **NLB & EIP**: By default, no OwnerReference is set, independent of GameServerSet, supports cross-GSS reuse (can be changed to cascade deletion via `RetainNLBOnDelete=false` parameter)
 - **Service**: OwnerReference points to GameServerSet, deleted when GSS is deleted
-- **Resource Cleanup**: NLB and EIP require manual deletion or batch management through labels
+- **Resource Cleanup**:
+  - `RetainNLBOnDelete=true` (default): NLB and EIP require manual deletion or batch management through labels
+  - `RetainNLBOnDelete=false`: NLB and EIP will be automatically deleted with GSS
 
 #### Plugin configuration
 
@@ -1099,7 +1112,46 @@ spec:
         name: gameserver
 ```
 
+**Example 4: Enable Cascade Deletion**
+
+```yaml
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: gs-cascade-delete
+  namespace: default
+spec:
+  replicas: 5
+  updateStrategy:
+    rollingUpdate:
+      podUpdatePolicy: InPlaceIfPossible
+  network:
+    networkType: AlibabaCloud-AutoNLBs-V2
+    networkConf:
+    - name: ZoneMaps
+      value: "vpc-xxx@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"
+    - name: PortProtocols
+      value: "8080/TCP"
+    - name: EipIspTypes
+      value: "BGP"
+    - name: MinPort
+      value: "10000"
+    - name: MaxPort
+      value: "10999"
+    - name: RetainNLBOnDelete
+      value: "false"  # Enable cascade deletion, automatically clean up NLB and EIP when GSS is deleted
+  gameServerTemplate:
+    spec:
+      containers:
+      - image: registry.cn-hangzhou.aliyuncs.com/gs-demo/gameserver:network
+        name: gameserver
+```
+
 #### Generated GameServer Network Status
+
+> **Note**: In Auto NLB V2 mode, `externalAddresses` will be populated with:
+> - `endPoint` field: NLB hostname + ISP type (format: `{nlb-hostname}/{ispType}`)
+> - `ip` field: Usually empty (Alibaba Cloud NLB Service only returns hostname, not IP)
 
 **Single-line Scenario NetworkStatus Example:**
 
@@ -1110,7 +1162,7 @@ networkStatus:
   desiredNetworkState: Ready
   externalAddresses:
   - endPoint: nlb-xxx.cn-hangzhou.nlb.aliyuncs.com/BGP
-    ip: 47.96.xxx.xxx
+    ip: ""
     ports:
     - name: "8080"
       port: 10000
@@ -1141,14 +1193,14 @@ networkStatus:
   externalAddresses:
   # BGP line
   - endPoint: nlb-aaa.cn-beijing.nlb.aliyuncs.com/BGP
-    ip: 123.56.xxx.xxx
+    ip: ""
     ports:
     - name: "7777"
       port: 20000
       protocol: TCP
   # BGP_PRO line
   - endPoint: nlb-bbb.cn-beijing.nlb.aliyuncs.com/BGP_PRO
-    ip: 124.57.xxx.xxx
+    ip: ""
     ports:
     - name: "7777"
       port: 20000
@@ -1224,13 +1276,14 @@ kubectl get svc -l game.kruise.io/owner-gss=gs-auto-nlb-v2
 #### Important Notes
 
 1. **Resource Cleanup**
-   - NLB and EIP resources are not automatically cleaned when GameServerSet is deleted
+   - **Default mode (`RetainNLBOnDelete=true`)**: NLB and EIP resources are not automatically cleaned when GameServerSet is deleted
    - Manually delete unused NLB/EIP CRD resources
    - Batch cleanup via labels:
      ```bash
      kubectl delete nlb -l game.kruise.io/nlb-pool-gss=gs-name
      kubectl delete eip -l game.kruise.io/eip-pool-gss=gs-name
      ```
+   - **Cascade deletion mode (`RetainNLBOnDelete=false`)**: NLB and EIP resources will be automatically deleted when GSS is deleted, no manual cleanup required
 
 2. **Network Configuration Immutability**
    - Parameters like `ZoneMaps`, `PortProtocols`, `EipIspTypes` cannot be changed after creation

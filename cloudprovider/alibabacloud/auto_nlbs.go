@@ -71,6 +71,7 @@ type autoNLBsConfig struct {
 	protocols             []corev1.Protocol
 	eipIspTypes           []string
 	externalTrafficPolicy corev1.ServiceExternalTrafficPolicyType
+	retainNLBOnDelete     bool // 是否在 GSS 删除时保留 NLB 和 EIP 资源（默认 true）
 	*nlbHealthConfig
 }
 
@@ -465,6 +466,7 @@ func parseAutoNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*autoNL
 	ports := make([]int, 0)
 	protocols := make([]corev1.Protocol, 0)
 	externalTrafficPolicy := corev1.ServiceExternalTrafficPolicyTypeLocal
+	retainNLBOnDelete := true // 默认保留 NLB 和 EIP
 	zoneMaps := ""
 	blockPorts := make([]int32, 0)
 	minPort := int32(1000)
@@ -498,6 +500,11 @@ func parseAutoNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*autoNL
 			zoneMaps = c.Value
 		case BlockPortsConfigName:
 			blockPorts = util.StringToInt32Slice(c.Value, ",")
+		case RetainNLBOnDeleteConfigName:
+			// 解析 RetainNLBOnDelete 参数
+			if strings.EqualFold(c.Value, "false") {
+				retainNLBOnDelete = false
+			}
 		case MinPortConfigName:
 			val, err := strconv.ParseInt(c.Value, 10, 32)
 			if err != nil {
@@ -544,5 +551,6 @@ func parseAutoNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*autoNL
 		targetPorts:           ports,
 		zoneMaps:              zoneMaps,
 		externalTrafficPolicy: externalTrafficPolicy,
+		retainNLBOnDelete:     retainNLBOnDelete,
 	}, nil
 }
