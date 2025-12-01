@@ -707,8 +707,9 @@ func (a *AutoNLBsV2Plugin) consServiceForPod(namespace, svcName, podName, gssNam
 			},
 		},
 		Spec: corev1.ServiceSpec{
-			ExternalTrafficPolicy: config.externalTrafficPolicy,
-			Type:                  corev1.ServiceTypeLoadBalancer,
+			ExternalTrafficPolicy:         config.externalTrafficPolicy,
+			Type:                          corev1.ServiceTypeLoadBalancer,
+			AllocateLoadBalancerNodePorts: ptr.To(false), // 禁用 NodePort 分配，仅通过 LB 访问
 			Selector: map[string]string{
 				SvcSelectorKey: podName, // Service Selector 指向 Pod 名称
 			},
