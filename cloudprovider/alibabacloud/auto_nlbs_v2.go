@@ -190,8 +190,13 @@ func (a *AutoNLBsV2Plugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 	}
 
 	// 计算 Pod 对应的 NLB 索引（无状态计算）
-	lenRange := int(conf.maxPort) - int(conf.minPort) - len(conf.blockPorts) + 1
-	podsPerNLB := lenRange / len(conf.targetPorts)
+	podsPerNLB := calculatePodsPerNLB(conf)
+	if podsPerNLB <= 0 {
+		log.Errorf("[%s] Invalid config for pod %s/%s: podsPerNLB=%d (minPort=%d, maxPort=%d, targetPorts=%d)",
+			AutoNLBsV2Network, pod.GetNamespace(), pod.GetName(), podsPerNLB, conf.minPort, conf.maxPort, len(conf.targetPorts))
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError,
+			"invalid config: port range is too small for the number of target ports")
+	}
 	nlbIndex := podIndex / podsPerNLB
 
 	allServicesReady := true
@@ -558,14 +563,29 @@ func (a *AutoNLBsV2Plugin) updateMaxPodIndex(pod *corev1.Pod) {
 	}
 }
 
+// calculatePodsPerNLB 计算每个 NLB 可以支持的 Pod 数量
+// 返回值 <= 0 表示配置错误（端口范围不足）
+func calculatePodsPerNLB(config *autoNLBsConfig) int {
+	lenRange := int(config.maxPort) - int(config.minPort) - len(config.blockPorts) + 1
+	if lenRange <= 0 || len(config.targetPorts) == 0 {
+		return 0
+	}
+	podsPerNLB := lenRange / len(config.targetPorts)
+	return podsPerNLB
+}
+
 // calculateExpectNLBNum 计算期望的 NLB 实例数量
 func (a *AutoNLBsV2Plugin) calculateExpectNLBNum(namespace, gssName string, config *autoNLBsConfig) int {
 	a.mutex.RLock()
 	maxIndex := a.maxPodIndex[namespace+"/"+gssName]
 	a.mutex.RUnlock()
 
-	lenRange := int(config.maxPort) - int(config.minPort) - len(config.blockPorts) + 1
-	podsPerNLB := lenRange / len(config.targetPorts)
+	podsPerNLB := calculatePodsPerNLB(config)
+	if podsPerNLB <= 0 {
+		log.Errorf("[%s] Invalid config: podsPerNLB=%d (minPort=%d, maxPort=%d, targetPorts=%d, blockPorts=%d)",
+			AutoNLBsV2Network, podsPerNLB, config.minPort, config.maxPort, len(config.targetPorts), len(config.blockPorts))
+		return 1 // 返回最小值，避免后续除零错误
+	}
 
 	// maxIndex 是最大的 Pod 索引，需要计算能容纳的 NLB 数量
 	// 加上预留的 NLB 数量
@@ -666,8 +686,12 @@ func (a *AutoNLBsV2Plugin) ensureEIPsForNLB(ctx context.Context, c client.Client
 
 // prewarmServices 预热 Service（为每个 NLB 预创建所有可能的 Service）
 func (a *AutoNLBsV2Plugin) prewarmServices(ctx context.Context, c client.Client, namespace, gssName, eipIspType string, nlbs []nlbv1.NLB, config *autoNLBsConfig, gss *gamekruiseiov1alpha1.GameServerSet) error {
-	lenRange := int(config.maxPort) - int(config.minPort) - len(config.blockPorts) + 1
-	podsPerNLB := lenRange / len(config.targetPorts)
+	podsPerNLB := calculatePodsPerNLB(config)
+	if podsPerNLB <= 0 {
+		log.Errorf("[%s] Invalid config for prewarmServices: podsPerNLB=%d, skip prewarming",
+			AutoNLBsV2Network, podsPerNLB)
+		return nil // 配置错误，跳过预热
+	}
 
 	log.Infof("[%s] prewarmServices for %s/%s (eipIspType=%s, nlbs=%d, podsPerNLB=%d)",
 		AutoNLBsV2Network, namespace, gssName, eipIspType, len(nlbs), podsPerNLB)
@@ -808,8 +832,12 @@ func (a *AutoNLBsV2Plugin) ensureServiceForPod(ctx context.Context, c client.Cli
 
 	// 计算端口分配
 	podIndex := util.GetIndexFromGsName(pod.GetName())
-	lenRange := int(config.maxPort) - int(config.minPort) - len(config.blockPorts) + 1
-	podsPerNLB := lenRange / len(config.targetPorts)
+	podsPerNLB := calculatePodsPerNLB(config)
+	if podsPerNLB <= 0 {
+		log.Errorf("[%s] Invalid config for ensureServiceForPod: podsPerNLB=%d",
+			AutoNLBsV2Network, podsPerNLB)
+		return fmt.Errorf("invalid config: port range is too small for the number of target ports")
+	}
 	podIndexInNLB := podIndex % podsPerNLB // Pod 在当前 NLB 中的相对索引
 
 	ports := make([]int32, len(config.targetPorts))
