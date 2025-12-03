@@ -18,6 +18,7 @@ package alibabacloud
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -27,15 +28,32 @@ import (
 	nlbv1 "github.com/chrisliu1995/AlibabaCloud-NLB-Operator/pkg/apis/nlboperator/v1"
 	eipv1 "github.com/chrisliu1995/alibabacloud-eip-operator/api/v1alpha1"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+// scheme 用于测试中注册 CRD 类型
+var scheme = runtime.NewScheme()
+
+func init() {
+	_ = corev1.AddToScheme(scheme)
+	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+	// NLB 和 EIP 类型手动注册
+	nlbGV := schema.GroupVersion{Group: "nlboperator.alibabacloud.com", Version: "v1"}
+	eipGV := schema.GroupVersion{Group: "eip.alibabacloud.com", Version: "v1alpha1"}
+	scheme.AddKnownTypes(nlbGV, &nlbv1.NLB{}, &nlbv1.NLBList{})
+	scheme.AddKnownTypes(eipGV, &eipv1.EIP{}, &eipv1.EIPList{})
+	metav1.AddToGroupVersion(scheme, nlbGV)
+	metav1.AddToGroupVersion(scheme, eipGV)
+}
 
 func TestParseAutoNLBsConfig(t *testing.T) {
 	tests := []struct {
@@ -978,6 +996,32 @@ func TestAutoNLBsV2Plugin_OnPodDeleted(t *testing.T) {
 		mutex:       sync.RWMutex{},
 	}
 
+	// 网络配置（RetainNLBOnDelete=true，默认情况）
+	networkConf := []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10100"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EIPIspTypes", Value: "BGP"},
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-a,cn-hangzhou-i:vsw-b"},
+		// RetainNLBOnDelete 默认 true，不需要清理
+	}
+	networkConfBytes, _ := json.Marshal(networkConf)
+
+	// 创建 GSS
+	gss := &gamekruiseiov1alpha1.GameServerSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss",
+			Namespace: "default",
+			UID:       "test-uid-123",
+		},
+		Spec: gamekruiseiov1alpha1.GameServerSetSpec{
+			Network: &gamekruiseiov1alpha1.Network{
+				NetworkType: AutoNLBsV2Network,
+				NetworkConf: networkConf,
+			},
+		},
+	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-gss-0",
@@ -985,12 +1029,238 @@ func TestAutoNLBsV2Plugin_OnPodDeleted(t *testing.T) {
 			Labels: map[string]string{
 				gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
 			},
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType: AutoNLBsV2Network,
+				gamekruiseiov1alpha1.GameServerNetworkConf: string(networkConfBytes),
+			},
 		},
 	}
 
-	err := plugin.OnPodDeleted(nil, pod, context.Background())
+	// 使用 fake client
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gss, pod).Build()
+
+	err := plugin.OnPodDeleted(c, pod, context.Background())
 	if err != nil {
-		t.Errorf("OnPodDeleted() should return nil, got error: %v", err)
+		t.Errorf("OnPodDeleted() should return nil for RetainNLBOnDelete=true, got error: %v", err)
+	}
+}
+
+// 测试 OnPodDeleted 方法 - RetainNLBOnDelete=false 且 GSS 正在删除场景
+func TestAutoNLBsV2Plugin_OnPodDeleted_WithCleanup(t *testing.T) {
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: make(map[string]int),
+		mutex:       sync.RWMutex{},
+	}
+
+	// 网络配置（RetainNLBOnDelete=false）
+	networkConf := []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10100"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EIPIspTypes", Value: "BGP"},
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-a,cn-hangzhou-i:vsw-b"},
+		{Name: "RetainNLBOnDelete", Value: "false"}, // 需要清理
+	}
+	networkConfBytes, _ := json.Marshal(networkConf)
+
+	// 创建 GSS（设置 DeletionTimestamp 表示正在删除）
+	now := metav1.Now()
+	gss := &gamekruiseiov1alpha1.GameServerSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "test-gss",
+			Namespace:         "default",
+			UID:               "test-uid-123",
+			DeletionTimestamp: &now,                       // GSS 正在删除
+			Finalizers:        []string{"test-finalizer"}, // 需要 Finalizer 才能设置 DeletionTimestamp
+		},
+		Spec: gamekruiseiov1alpha1.GameServerSetSpec{
+			Network: &gamekruiseiov1alpha1.Network{
+				NetworkType: AutoNLBsV2Network,
+				NetworkConf: networkConf,
+			},
+		},
+	}
+
+	// 创建带 Finalizer 的 Pod
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-0",
+			Namespace: "default",
+			Labels: map[string]string{
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+			},
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType: AutoNLBsV2Network,
+				gamekruiseiov1alpha1.GameServerNetworkConf: string(networkConfBytes),
+			},
+			Finalizers: []string{PodFinalizerName},
+		},
+	}
+
+	// 创建一个 Service（模拟还有 Service 未删除）
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-0-bgp",
+			Namespace: "default",
+			Labels: map[string]string{
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+			},
+		},
+	}
+
+	// 使用 fake client
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gss, pod, svc).Build()
+
+	err := plugin.OnPodDeleted(c, pod, context.Background())
+	// 应该返回 RetryError，触发 Controller 重试
+	if err == nil {
+		t.Errorf("OnPodDeleted() should return RetryError when GSS is deleting and Service exists")
+	} else if err.Type() != cperrors.RetryError {
+		t.Errorf("OnPodDeleted() should return RetryError, got %v", err.Type())
+	}
+
+	// 验证 Pod Finalizer 仍然存在（因为 GSS 正在删除且 Service 还在）
+	updatedPod := &corev1.Pod{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-gss-0", Namespace: "default"}, updatedPod); err != nil {
+		t.Fatalf("Failed to get updated Pod: %v", err)
+	}
+	hasFinalizer := false
+	for _, f := range updatedPod.GetFinalizers() {
+		if f == PodFinalizerName {
+			hasFinalizer = true
+			break
+		}
+	}
+	if !hasFinalizer {
+		t.Errorf("Pod should still have Finalizer when GSS is deleting and Service exists")
+	}
+}
+
+// 测试 OnPodDeleted 方法 - RetainNLBOnDelete=false 且 GSS 存在不删除（正常缩容场景）
+func TestAutoNLBsV2Plugin_OnPodDeleted_NormalScaleDown(t *testing.T) {
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: make(map[string]int),
+		mutex:       sync.RWMutex{},
+	}
+
+	// 网络配置（RetainNLBOnDelete=false）
+	networkConf := []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10100"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EIPIspTypes", Value: "BGP"},
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-a,cn-hangzhou-i:vsw-b"},
+		{Name: "RetainNLBOnDelete", Value: "false"},
+	}
+	networkConfBytes, _ := json.Marshal(networkConf)
+
+	// 创建 GSS（正常存在，没有 DeletionTimestamp）
+	gss := &gamekruiseiov1alpha1.GameServerSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss",
+			Namespace: "default",
+			UID:       "test-uid-123",
+			// 没有 DeletionTimestamp，表示 GSS 正常存在
+		},
+		Spec: gamekruiseiov1alpha1.GameServerSetSpec{
+			Network: &gamekruiseiov1alpha1.Network{
+				NetworkType: AutoNLBsV2Network,
+				NetworkConf: networkConf,
+			},
+		},
+	}
+
+	// 创建带 Finalizer 的 Pod
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-0",
+			Namespace: "default",
+			Labels: map[string]string{
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+			},
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType: AutoNLBsV2Network,
+				gamekruiseiov1alpha1.GameServerNetworkConf: string(networkConfBytes),
+			},
+			Finalizers: []string{PodFinalizerName},
+		},
+	}
+
+	// 使用 fake client
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gss, pod).Build()
+
+	err := plugin.OnPodDeleted(c, pod, context.Background())
+	if err != nil {
+		t.Errorf("OnPodDeleted() should return nil for normal scale-down, got error: %v", err)
+	}
+
+	// 验证 Pod Finalizer 已被移除（因为 GSS 存在且没有在删除）
+	updatedPod := &corev1.Pod{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-gss-0", Namespace: "default"}, updatedPod); err != nil {
+		t.Fatalf("Failed to get updated Pod: %v", err)
+	}
+	for _, f := range updatedPod.GetFinalizers() {
+		if f == PodFinalizerName {
+			t.Errorf("Pod Finalizer should be removed for normal scale-down when GSS exists and not deleting")
+			break
+		}
+	}
+}
+
+// 测试 OnPodDeleted 方法 - RetainNLBOnDelete=false 且 GSS 已删除，Service 已全部清除，应删除 NLB/EIP
+func TestAutoNLBsV2Plugin_OnPodDeleted_AllServicesDeleted(t *testing.T) {
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: make(map[string]int),
+		mutex:       sync.RWMutex{},
+	}
+
+	// 网络配置（RetainNLBOnDelete=false）
+	networkConf := []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10100"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EIPIspTypes", Value: "BGP"},
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-a,cn-hangzhou-i:vsw-b"},
+		{Name: "RetainNLBOnDelete", Value: "false"},
+	}
+	networkConfBytes, _ := json.Marshal(networkConf)
+
+	// 创建带 Finalizer 的 Pod（GSS 不存在，模拟已删除）
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-0",
+			Namespace: "default",
+			Labels: map[string]string{
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+			},
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType: AutoNLBsV2Network,
+				gamekruiseiov1alpha1.GameServerNetworkConf: string(networkConfBytes),
+			},
+			Finalizers: []string{PodFinalizerName},
+		},
+	}
+
+	// 使用 fake client（不创建 GSS，不创建 Service - 模拟都已删除）
+	// 不创建 NLB/EIP，因为 fake client 的 LabelSelector 需要额外配置
+	// 这里主要测试 Finalizer 移除逻辑
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+
+	err := plugin.OnPodDeleted(c, pod, context.Background())
+	if err != nil {
+		t.Errorf("OnPodDeleted() should succeed when all Services deleted, got error: %v", err)
+	}
+
+	// 验证 Pod Finalizer 已被移除
+	updatedPod := &corev1.Pod{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-gss-0", Namespace: "default"}, updatedPod); err != nil {
+		t.Fatalf("Failed to get updated Pod: %v", err)
+	}
+	for _, f := range updatedPod.GetFinalizers() {
+		if f == PodFinalizerName {
+			t.Errorf("Pod Finalizer should be removed when all Services are deleted")
+			break
+		}
 	}
 }
 
@@ -1912,6 +2182,144 @@ func TestAutoNLBsV2Plugin_OnPodUpdated_ConfigError(t *testing.T) {
 	}
 }
 
+// TestAutoNLBsV2Plugin_OnPodUpdated_GSSDeleting 测试 GSS 正在删除时的处理
+func TestAutoNLBsV2Plugin_OnPodUpdated_GSSDeleting(t *testing.T) {
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: make(map[string]int),
+		mutex:       sync.RWMutex{},
+	}
+
+	// 网络配置（RetainNLBOnDelete=false）
+	networkConf := []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10100"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EIPIspTypes", Value: "BGP"},
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-a,cn-hangzhou-i:vsw-b"},
+		{Name: "RetainNLBOnDelete", Value: "false"},
+	}
+	networkConfBytes, _ := json.Marshal(networkConf)
+
+	// 创建 GSS（设置 DeletionTimestamp 表示正在删除）
+	now := metav1.Now()
+	gss := &gamekruiseiov1alpha1.GameServerSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "test-gss",
+			Namespace:         "default",
+			UID:               "test-uid-123",
+			DeletionTimestamp: &now,
+			Finalizers:        []string{"test-finalizer"},
+		},
+		Spec: gamekruiseiov1alpha1.GameServerSetSpec{
+			Network: &gamekruiseiov1alpha1.Network{
+				NetworkType: AutoNLBsV2Network,
+				NetworkConf: networkConf,
+			},
+		},
+	}
+
+	// 创建带 Finalizer 的 Pod
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-0",
+			Namespace: "default",
+			Labels: map[string]string{
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+			},
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType:   AutoNLBsV2Network,
+				gamekruiseiov1alpha1.GameServerNetworkConf:   string(networkConfBytes),
+				gamekruiseiov1alpha1.GameServerNetworkStatus: `{"currentNetworkState":"Ready"}`,
+			},
+			Finalizers: []string{PodFinalizerName},
+		},
+	}
+
+	// 使用 fake client
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gss, pod).Build()
+
+	_, err := plugin.OnPodUpdated(c, pod, context.Background())
+	if err != nil {
+		t.Errorf("OnPodUpdated() should return nil when GSS is deleting, got error: %v", err)
+	}
+
+	// 验证 Pod Finalizer 仍然存在（OnPodUpdated 只跳过，不移除 Finalizer）
+	updatedPod := &corev1.Pod{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-gss-0", Namespace: "default"}, updatedPod); err != nil {
+		t.Fatalf("Failed to get updated Pod: %v", err)
+	}
+	hasFinalizer := false
+	for _, f := range updatedPod.GetFinalizers() {
+		if f == PodFinalizerName {
+			hasFinalizer = true
+			break
+		}
+	}
+	if !hasFinalizer {
+		t.Errorf("Pod Finalizer should still exist in OnPodUpdated (removal happens in OnPodDeleted)")
+	}
+}
+
+// TestAutoNLBsV2Plugin_OnPodUpdated_GSSNotFound 测试 GSS 不存在时的处理
+func TestAutoNLBsV2Plugin_OnPodUpdated_GSSNotFound(t *testing.T) {
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: make(map[string]int),
+		mutex:       sync.RWMutex{},
+	}
+
+	// 网络配置（RetainNLBOnDelete=false）
+	networkConf := []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10100"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EIPIspTypes", Value: "BGP"},
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-a,cn-hangzhou-i:vsw-b"},
+		{Name: "RetainNLBOnDelete", Value: "false"},
+	}
+	networkConfBytes, _ := json.Marshal(networkConf)
+
+	// 创建带 Finalizer 的 Pod（GSS 不存在）
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-0",
+			Namespace: "default",
+			Labels: map[string]string{
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+			},
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType:   AutoNLBsV2Network,
+				gamekruiseiov1alpha1.GameServerNetworkConf:   string(networkConfBytes),
+				gamekruiseiov1alpha1.GameServerNetworkStatus: `{"currentNetworkState":"Ready"}`,
+			},
+			Finalizers: []string{PodFinalizerName},
+		},
+	}
+
+	// 使用 fake client（不创建 GSS）
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+
+	_, err := plugin.OnPodUpdated(c, pod, context.Background())
+	if err != nil {
+		t.Errorf("OnPodUpdated() should return nil when GSS not found, got error: %v", err)
+	}
+
+	// 验证 Pod Finalizer 仍然存在（OnPodUpdated 只跳过，不移除 Finalizer）
+	updatedPod := &corev1.Pod{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-gss-0", Namespace: "default"}, updatedPod); err != nil {
+		t.Fatalf("Failed to get updated Pod: %v", err)
+	}
+	hasFinalizer := false
+	for _, f := range updatedPod.GetFinalizers() {
+		if f == PodFinalizerName {
+			hasFinalizer = true
+			break
+		}
+	}
+	if !hasFinalizer {
+		t.Errorf("Pod Finalizer should still exist in OnPodUpdated (removal happens in OnPodDeleted)")
+	}
+}
+
 // TestAutoNLBsV2Plugin_EnsureNLBForPod 测试为 Pod 动态创建 NLB
 func TestAutoNLBsV2Plugin_EnsureNLBForPod(t *testing.T) {
 	gss := createTestGSS("default", "test-gss", 10, []gamekruiseiov1alpha1.NetworkConfParams{
@@ -2129,6 +2537,7 @@ func TestAutoNLBsV2Plugin_EnsureServiceForPod(t *testing.T) {
 		minPort:               10000,
 		maxPort:               10999,
 		externalTrafficPolicy: corev1.ServiceExternalTrafficPolicyTypeLocal,
+		retainNLBOnDelete:     true, // 默认保留 NLB
 		nlbHealthConfig: &nlbHealthConfig{
 			lBHealthCheckFlag: "on",
 			lBHealthCheckType: "tcp",
@@ -2328,6 +2737,7 @@ func TestAutoNLBsV2Plugin_EnsureServiceForPod_Idempotent(t *testing.T) {
 		minPort:               10000,
 		maxPort:               10999,
 		externalTrafficPolicy: corev1.ServiceExternalTrafficPolicyTypeLocal,
+		retainNLBOnDelete:     true, // 默认保留 NLB
 		nlbHealthConfig: &nlbHealthConfig{
 			lBHealthCheckFlag: "off",
 		},
@@ -2346,25 +2756,20 @@ func TestAutoNLBsV2Plugin_EnsureServiceForPod_Idempotent(t *testing.T) {
 	}
 }
 
-// TestAutoNLBsV2Plugin_RetainNLBOnDelete 测试 RetainNLBOnDelete 参数控制 OwnerReference
+// TestAutoNLBsV2Plugin_RetainNLBOnDelete 测试 RetainNLBOnDelete 参数
+// NLB 和 EIP 始终不设置 OwnerReference，由 Finalizer 控制删除
 func TestAutoNLBsV2Plugin_RetainNLBOnDelete(t *testing.T) {
 	tests := []struct {
 		name              string
 		retainNLBOnDelete bool
-		expectNLBOwnerRef bool
-		expectEIPOwnerRef bool
 	}{
 		{
-			name:              "RetainNLBOnDelete=true (default) - no OwnerReference",
+			name:              "RetainNLBOnDelete=true (default) - NLB/EIP 保留",
 			retainNLBOnDelete: true,
-			expectNLBOwnerRef: false,
-			expectEIPOwnerRef: false,
 		},
 		{
-			name:              "RetainNLBOnDelete=false - set OwnerReference",
+			name:              "RetainNLBOnDelete=false - NLB/EIP 由 Finalizer 删除",
 			retainNLBOnDelete: false,
-			expectNLBOwnerRef: true,
-			expectEIPOwnerRef: true,
 		},
 	}
 
@@ -2378,97 +2783,39 @@ func TestAutoNLBsV2Plugin_RetainNLBOnDelete(t *testing.T) {
 				{Name: "MaxPort", Value: "10999"},
 			})
 
-			// 根据测试场景决定是否预先创建EIP
-			var c client.Client
-			if tt.retainNLBOnDelete {
-				// RetainNLBOnDelete=true 的场景：预先创建没有 OwnerReference 的 EIP
-				eip0 := &eipv1.EIP{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "test-gss-eip-bgp-0-z0",
-						Namespace: "default",
-					},
-					Spec: eipv1.EIPSpec{
-						Name:               "test-gss-eip-bgp-0-z0",
-						Bandwidth:          "5",
-						InternetChargeType: "PayByTraffic",
-						ISP:                "BGP",
-					},
-					Status: eipv1.EIPStatus{
-						AllocationID: "eip-bgp-zone0-12345",
-					},
-				}
-
-				eip1 := &eipv1.EIP{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "test-gss-eip-bgp-0-z1",
-						Namespace: "default",
-					},
-					Spec: eipv1.EIPSpec{
-						Name:               "test-gss-eip-bgp-0-z1",
-						Bandwidth:          "5",
-						InternetChargeType: "PayByTraffic",
-						ISP:                "BGP",
-					},
-					Status: eipv1.EIPStatus{
-						AllocationID: "eip-bgp-zone1-12345",
-					},
-				}
-				c = newFakeClient(gss, eip0, eip1)
-			} else {
-				// RetainNLBOnDelete=false 的场景：预先创建带有 OwnerReference 的 EIP
-				eip0 := &eipv1.EIP{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "test-gss-eip-bgp-0-z0",
-						Namespace: "default",
-						OwnerReferences: []metav1.OwnerReference{
-							{
-								APIVersion:         gss.APIVersion,
-								Kind:               gss.Kind,
-								Name:               gss.GetName(),
-								UID:                gss.GetUID(),
-								Controller:         ptr.To(false),
-								BlockOwnerDeletion: ptr.To(true),
-							},
-						},
-					},
-					Spec: eipv1.EIPSpec{
-						Name:               "test-gss-eip-bgp-0-z0",
-						Bandwidth:          "5",
-						InternetChargeType: "PayByTraffic",
-						ISP:                "BGP",
-					},
-					Status: eipv1.EIPStatus{
-						AllocationID: "eip-bgp-zone0-12345",
-					},
-				}
-
-				eip1 := &eipv1.EIP{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "test-gss-eip-bgp-0-z1",
-						Namespace: "default",
-						OwnerReferences: []metav1.OwnerReference{
-							{
-								APIVersion:         gss.APIVersion,
-								Kind:               gss.Kind,
-								Name:               gss.GetName(),
-								UID:                gss.GetUID(),
-								Controller:         ptr.To(false),
-								BlockOwnerDeletion: ptr.To(true),
-							},
-						},
-					},
-					Spec: eipv1.EIPSpec{
-						Name:               "test-gss-eip-bgp-0-z1",
-						Bandwidth:          "5",
-						InternetChargeType: "PayByTraffic",
-						ISP:                "BGP",
-					},
-					Status: eipv1.EIPStatus{
-						AllocationID: "eip-bgp-zone1-12345",
-					},
-				}
-				c = newFakeClient(gss, eip0, eip1)
+			// 预先创建没有 OwnerReference 的 EIP（符合新逻辑）
+			eip0 := &eipv1.EIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-gss-eip-bgp-0-z0",
+					Namespace: "default",
+				},
+				Spec: eipv1.EIPSpec{
+					Name:               "test-gss-eip-bgp-0-z0",
+					Bandwidth:          "5",
+					InternetChargeType: "PayByTraffic",
+					ISP:                "BGP",
+				},
+				Status: eipv1.EIPStatus{
+					AllocationID: "eip-bgp-zone0-12345",
+				},
 			}
+
+			eip1 := &eipv1.EIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-gss-eip-bgp-0-z1",
+					Namespace: "default",
+				},
+				Spec: eipv1.EIPSpec{
+					Name:               "test-gss-eip-bgp-0-z1",
+					Bandwidth:          "5",
+					InternetChargeType: "PayByTraffic",
+					ISP:                "BGP",
+				},
+				Status: eipv1.EIPStatus{
+					AllocationID: "eip-bgp-zone1-12345",
+				},
+			}
+			c := newFakeClient(gss, eip0, eip1)
 			ctx := context.Background()
 
 			plugin := &AutoNLBsV2Plugin{
@@ -2495,7 +2842,7 @@ func TestAutoNLBsV2Plugin_RetainNLBOnDelete(t *testing.T) {
 				return
 			}
 
-			// 验证 NLB CR 的 OwnerReference
+			// 验证 NLB CR 没有 OwnerReference
 			nlb := &nlbv1.NLB{}
 			err = c.Get(ctx, types.NamespacedName{
 				Name:      "test-gss-bgp-0",
@@ -2506,24 +2853,12 @@ func TestAutoNLBsV2Plugin_RetainNLBOnDelete(t *testing.T) {
 				return
 			}
 
-			if tt.expectNLBOwnerRef {
-				if len(nlb.OwnerReferences) == 0 {
-					t.Errorf("NLB should have OwnerReference when RetainNLBOnDelete=false")
-				} else {
-					if nlb.OwnerReferences[0].Kind != "GameServerSet" {
-						t.Errorf("NLB OwnerReference kind: expected GameServerSet, got %s", nlb.OwnerReferences[0].Kind)
-					}
-					if nlb.OwnerReferences[0].Name != "test-gss" {
-						t.Errorf("NLB OwnerReference name: expected test-gss, got %s", nlb.OwnerReferences[0].Name)
-					}
-				}
-			} else {
-				if len(nlb.OwnerReferences) > 0 {
-					t.Errorf("NLB should NOT have OwnerReference when RetainNLBOnDelete=true")
-				}
+			// NLB 始终不设置 OwnerReference
+			if len(nlb.OwnerReferences) > 0 {
+				t.Errorf("NLB should NOT have OwnerReference, but got: %v", nlb.OwnerReferences)
 			}
 
-			// 验证 EIP CR 的 OwnerReference（检查zone 0的EIP）
+			// 验证 EIP CR 没有 OwnerReference
 			eip := &eipv1.EIP{}
 			err = c.Get(ctx, types.NamespacedName{
 				Name:      "test-gss-eip-bgp-0-z0",
@@ -2534,21 +2869,125 @@ func TestAutoNLBsV2Plugin_RetainNLBOnDelete(t *testing.T) {
 				return
 			}
 
-			if tt.expectEIPOwnerRef {
-				if len(eip.OwnerReferences) == 0 {
-					t.Errorf("EIP should have OwnerReference when RetainNLBOnDelete=false")
-				} else {
-					if eip.OwnerReferences[0].Kind != "GameServerSet" {
-						t.Errorf("EIP OwnerReference kind: expected GameServerSet, got %s", eip.OwnerReferences[0].Kind)
-					}
-					if eip.OwnerReferences[0].Name != "test-gss" {
-						t.Errorf("EIP OwnerReference name: expected test-gss, got %s", eip.OwnerReferences[0].Name)
-					}
-				}
-			} else {
-				if len(eip.OwnerReferences) > 0 {
-					t.Errorf("EIP should NOT have OwnerReference when RetainNLBOnDelete=true")
-				}
+			// EIP 始终不设置 OwnerReference
+			if len(eip.OwnerReferences) > 0 {
+				t.Errorf("EIP should NOT have OwnerReference, but got: %v", eip.OwnerReferences)
+			}
+		})
+	}
+}
+
+// TestNLBCreationNoOwnerRef 测试 NLB 创建时不设置 OwnerReference
+// 新方案中 NLB 不再设置 OwnerReference，完全与 GSS 解耦
+func TestNLBCreationNoOwnerRef(t *testing.T) {
+	tests := []struct {
+		name              string
+		retainNLBOnDelete bool
+	}{
+		{
+			name:              "RetainNLBOnDelete=false 时，NLB 不应有 OwnerRef",
+			retainNLBOnDelete: false,
+		},
+		{
+			name:              "RetainNLBOnDelete=true 时，NLB 不应有 OwnerRef",
+			retainNLBOnDelete: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// 构建测试环境
+			gss := &gamekruiseiov1alpha1.GameServerSet{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "game.kruise.io/v1alpha1",
+					Kind:       "GameServerSet",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "finalizer-test-gss",
+					Namespace: "default",
+					UID:       "gss-uid-finalizer",
+				},
+			}
+
+			// EIP（必须先存在且有 AllocationID）
+			eip0 := &eipv1.EIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "finalizer-test-gss-eip-bgp-0-z0",
+					Namespace: "default",
+				},
+				Status: eipv1.EIPStatus{
+					AllocationID: "eip-alloc-0",
+					Status:       "InUse",
+				},
+			}
+			eip1 := &eipv1.EIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "finalizer-test-gss-eip-bgp-0-z1",
+					Namespace: "default",
+				},
+				Status: eipv1.EIPStatus{
+					AllocationID: "eip-alloc-1",
+					Status:       "InUse",
+				},
+			}
+
+			scheme := runtime.NewScheme()
+			_ = corev1.AddToScheme(scheme)
+			_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+			scheme.AddKnownTypes(nlbv1.SchemeGroupVersion,
+				&nlbv1.NLB{},
+				&nlbv1.NLBList{},
+			)
+			scheme.AddKnownTypes(eipv1.GroupVersion,
+				&eipv1.EIP{},
+				&eipv1.EIPList{},
+			)
+			metav1.AddToGroupVersion(scheme, nlbv1.SchemeGroupVersion)
+			metav1.AddToGroupVersion(scheme, eipv1.GroupVersion)
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRuntimeObjects(gss, eip0, eip1).
+				Build()
+
+			plugin := &AutoNLBsV2Plugin{
+				maxPodIndex: make(map[string]int),
+				mutex:       sync.RWMutex{},
+			}
+
+			config := &autoNLBsConfig{
+				zoneMaps:          "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb",
+				eipIspTypes:       []string{"BGP"},
+				retainNLBOnDelete: tt.retainNLBOnDelete,
+			}
+
+			ctx := context.Background()
+
+			// 创建 NLB
+			err := plugin.createNLBInstanceCR(ctx, c, "default", "finalizer-test-gss", "BGP", 0, config, gss)
+			if err != nil {
+				t.Errorf("createNLBInstanceCR failed: %v", err)
+				return
+			}
+
+			// 获取创建的 NLB
+			nlb := &nlbv1.NLB{}
+			err = c.Get(ctx, types.NamespacedName{
+				Name:      "finalizer-test-gss-bgp-0",
+				Namespace: "default",
+			}, nlb)
+			if err != nil {
+				t.Errorf("Failed to get NLB: %v", err)
+				return
+			}
+
+			// 检查 NLB 不应该有 Finalizer 和 OwnerReference
+			if len(nlb.GetFinalizers()) > 0 {
+				t.Errorf("NLB should NOT have Finalizer, but got: %v", nlb.GetFinalizers())
+			}
+
+			if len(nlb.OwnerReferences) > 0 {
+				t.Errorf("NLB should NOT have OwnerReference, but got: %v", nlb.OwnerReferences)
 			}
 		})
 	}

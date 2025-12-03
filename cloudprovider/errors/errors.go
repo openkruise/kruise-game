@@ -28,6 +28,8 @@ const (
 	ParameterError PluginErrorType = "parameterError"
 	// NotImplementedError an error related to be not implemented by developers
 	NotImplementedError PluginErrorType = "notImplementedError"
+	// RetryError is an error indicating the operation should be retried
+	RetryError PluginErrorType = "retryError"
 )
 
 type PluginError interface {

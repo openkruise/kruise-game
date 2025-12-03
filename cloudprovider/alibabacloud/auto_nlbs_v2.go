@@ -39,7 +39,6 @@ import (
 	log "k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 const (
@@ -49,8 +48,7 @@ const (
 	RetainNLBOnDeleteConfigName = "RetainNLBOnDelete" // 是否在 GSS 删除时保留 NLB 和 EIP（默认 true）
 
 	// Finalizer 常量（用于 RetainNLBOnDelete=false 场景）
-	NLBFinalizerName = "game.kruise.io/nlb-cascade-delete" // NLB Finalizer，确保 Service 删除后再删除 NLB
-	PodFinalizerName = "game.kruise.io/pod-cascade-delete" // Pod Finalizer，确保 Service 删除后再删除 Pod
+	PodFinalizerName = "game.kruise.io/delete-nlb-on-gss-deleted" // Pod Finalizer，确保 Service 删除后再删除 NLB/EIP
 
 	// NLB CRD 相关标签
 	NLBPoolLabel           = "game.kruise.io/nlb-pool"
@@ -134,24 +132,31 @@ func (a *AutoNLBsV2Plugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 	// 更新 maxPodIndex（只增不减）
 	a.updateMaxPodIndex(pod)
 
-	// 解析配置
+	// 解析配置，判断是否需要 Finalizer
 	networkManager := utils.NewNetworkManager(pod, c)
 	networkConfig := networkManager.GetNetworkConfig()
-	if networkConfig == nil {
-		return pod, nil // 没有网络配置，不需要添加 Finalizer
-	}
-
 	conf, err := parseAutoNLBsConfig(networkConfig)
 	if err != nil {
 		log.Errorf("[%s] Failed to parse config for pod %s/%s: %v", AutoNLBsV2Network, pod.GetNamespace(), pod.GetName(), err)
-		return pod, nil // 不阻止 Pod 创建
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
 	}
 
-	// 如果 RetainNLBOnDelete=false，返回添加了 Finalizer 的 Pod，由 webhook 负责注入
+	// RetainNLBOnDelete=false 时，Pod 需要 Finalizer
+	// Finalizer 用于在 GSS 删除时，等待 Service 全部删除后再删除 NLB/EIP
 	if !conf.retainNLBOnDelete {
-		if !controllerutil.ContainsFinalizer(pod, PodFinalizerName) {
-			controllerutil.AddFinalizer(pod, PodFinalizerName)
-			log.Infof("[%s] Added finalizer %s to pod %s/%s (will be injected by webhook)", AutoNLBsV2Network, PodFinalizerName, pod.GetNamespace(), pod.GetName())
+		// 检查是否已有 Finalizer
+		hasFinalizer := false
+		for _, f := range pod.GetFinalizers() {
+			if f == PodFinalizerName {
+				hasFinalizer = true
+				break
+			}
+		}
+		if !hasFinalizer {
+			// 返回带 Finalizer 的 Pod，由 admission webhook 注入
+			pod.SetFinalizers(append(pod.GetFinalizers(), PodFinalizerName))
+			log.Infof("[%s] Pod %s/%s needs Finalizer for cascade delete (RetainNLBOnDelete=false)",
+				AutoNLBsV2Network, pod.GetNamespace(), pod.GetName())
 		}
 	}
 
@@ -171,14 +176,32 @@ func (a *AutoNLBsV2Plugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 	}
 
 	gssName := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]
+	ns := pod.GetNamespace()
 	podIndex := util.GetIndexFromGsName(pod.GetName())
+
+	// 检查 GSS 是否存在且是否在删除状态
+	gss := &gamekruiseiov1alpha1.GameServerSet{}
+	gssErr := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: gssName}, gss)
+
+	// GSS 不存在或正在删除 → 跳过预热和网络处理，避免操作失败
+	// Finalizer 的移除统一在 OnPodDeleted 中处理
+	if gssErr != nil || gss.DeletionTimestamp != nil {
+		if gssErr != nil {
+			log.Infof("[%s] GSS %s/%s not found during OnPodUpdated, skipping",
+				AutoNLBsV2Network, ns, gssName)
+		} else {
+			log.Infof("[%s] GSS %s/%s is being deleted during OnPodUpdated, skipping",
+				AutoNLBsV2Network, ns, gssName)
+		}
+		return pod, nil
+	}
 
 	// 更新 maxPodIndex（只增不减）
 	a.updateMaxPodIndex(pod)
 
-	// 兜底：确保资源预热充足（幂等操作，多次调用无害）
-	if err := a.ensurePrewarming(ctx, c, pod.GetNamespace(), gssName, conf); err != nil {
-		log.Errorf("[%s] Failed to ensure prewarming for pod %s/%s: %v", AutoNLBsV2Network, pod.GetNamespace(), pod.GetName(), err)
+	// 兆底：确保资源预热充足（幂等操作，多次调用无害）
+	if err := a.ensurePrewarming(ctx, c, ns, gssName, conf); err != nil {
+		log.Errorf("[%s] Failed to ensure prewarming for pod %s/%s: %v", AutoNLBsV2Network, ns, pod.GetName(), err)
 		// 不返回错误，继续处理，避免阻塞 Pod 更新
 	}
 
@@ -373,171 +396,146 @@ func (a *AutoNLBsV2Plugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 func (a *AutoNLBsV2Plugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.Context) cperrors.PluginError {
 	log.Infof("[%s] OnPodDeleted called for pod %s/%s", AutoNLBsV2Network, pod.GetNamespace(), pod.GetName())
 
+	gssName := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]
+	ns := pod.Namespace
+
 	// 解析配置
 	networkManager := utils.NewNetworkManager(pod, c)
-	if networkManager == nil {
-		log.Infof("[%s] No network manager for pod %s/%s, skip cleanup", AutoNLBsV2Network, pod.GetNamespace(), pod.GetName())
-		return nil
-	}
 	networkConfig := networkManager.GetNetworkConfig()
-	if networkConfig == nil {
-		log.Infof("[%s] No network config for pod %s/%s, skip cleanup", AutoNLBsV2Network, pod.GetNamespace(), pod.GetName())
-		return nil
-	}
-
 	conf, err := parseAutoNLBsConfig(networkConfig)
 	if err != nil {
-		log.Errorf("[%s] Failed to parse config for pod %s/%s: %v", AutoNLBsV2Network, pod.GetNamespace(), pod.GetName(), err)
-		return nil
+		log.Errorf("[%s] Failed to parse config for pod %s/%s: %v", AutoNLBsV2Network, ns, pod.GetName(), err)
+		// 配置解析失败，移除 Finalizer 避免卡住
+		return a.removePodFinalizer(c, pod, ctx)
 	}
 
-	// RetainNLBOnDelete=true 时，不需要做任何处理
+	// RetainNLBOnDelete=true 时，不需要清理，直接返回（Pod 也不应该有 Finalizer）
 	if conf.retainNLBOnDelete {
-		log.Infof("[%s] RetainNLBOnDelete=true, no cleanup needed for pod %s/%s", AutoNLBsV2Network, pod.GetNamespace(), pod.GetName())
+		log.Infof("[%s] RetainNLBOnDelete=true, no cleanup needed for pod %s/%s", AutoNLBsV2Network, ns, pod.GetName())
 		return nil
 	}
 
-	// 检查 Pod 是否有 Finalizer
-	if !controllerutil.ContainsFinalizer(pod, PodFinalizerName) {
-		log.Infof("[%s] Pod %s/%s has no finalizer, skip cleanup", AutoNLBsV2Network, pod.GetNamespace(), pod.GetName())
-		return nil
-	}
-
-	gssName := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]
-
-	// 检查 GSS 是否在删除
+	// RetainNLBOnDelete=false 时，检查 GSS 是否存在且是否在删除状态
 	gss := &gamekruiseiov1alpha1.GameServerSet{}
-	err = c.Get(ctx, types.NamespacedName{
-		Namespace: pod.GetNamespace(),
-		Name:      gssName,
-	}, gss)
+	gssErr := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: gssName}, gss)
 
-	gssDeleting := false
-	if err != nil {
-		if errors.IsNotFound(err) {
-			// GSS 已经不存在，说明已经删除
-			gssDeleting = true
-		} else {
-			log.Errorf("[%s] Failed to get GSS %s/%s: %v", AutoNLBsV2Network, pod.GetNamespace(), gssName, err)
-			return cperrors.ToPluginError(err, cperrors.ApiCallError)
-		}
+	// GSS 存在且没有在删除状态 → 正常缩容场景，直接移除 Finalizer
+	if gssErr == nil && gss.DeletionTimestamp == nil {
+		log.Infof("[%s] GSS %s/%s exists and not deleting, removing Finalizer for normal scale-down",
+			AutoNLBsV2Network, ns, gssName)
+		return a.removePodFinalizer(c, pod, ctx)
+	}
+
+	// GSS 不存在或正在删除 → 需要等待 Service 全部删除后再清理 NLB/EIP
+	if gssErr != nil {
+		log.Infof("[%s] GSS %s/%s not found, checking Services for cleanup", AutoNLBsV2Network, ns, gssName)
 	} else {
-		gssDeleting = gss.DeletionTimestamp != nil
+		log.Infof("[%s] GSS %s/%s is being deleted, checking Services for cleanup", AutoNLBsV2Network, ns, gssName)
 	}
 
-	// 如果 GSS 没在删除，说明只是 Pod 重建，直接移除 Finalizer
-	if !gssDeleting {
-		log.Infof("[%s] GSS %s/%s is not deleting, pod %s is just being recreated, removing finalizer",
-			AutoNLBsV2Network, pod.GetNamespace(), gssName, pod.GetName())
-		controllerutil.RemoveFinalizer(pod, PodFinalizerName)
-		if err := c.Update(ctx, pod); err != nil {
-			log.Errorf("[%s] Failed to remove finalizer from pod %s/%s: %v", AutoNLBsV2Network, pod.GetNamespace(), pod.GetName(), err)
-			return cperrors.ToPluginError(err, cperrors.ApiCallError)
-		}
-		return nil
-	}
-
-	// GSS 正在删除，需要处理级联删除逻辑
-	log.Infof("[%s] GSS %s/%s is deleting, handling cascade delete for pod %s",
-		AutoNLBsV2Network, pod.GetNamespace(), gssName, pod.GetName())
-
-	// 检查当前 Pod 的 Service 是否已删除
-	allServicesDeleted := true
-	for _, eipIspType := range conf.eipIspTypes {
-		svcName := pod.GetName() + "-" + strings.ToLower(eipIspType)
-		svc := &corev1.Service{}
-		err := c.Get(ctx, types.NamespacedName{
-			Name:      svcName,
-			Namespace: pod.GetNamespace(),
-		}, svc)
-		if err == nil {
-			// Service 还存在
-			allServicesDeleted = false
-			log.Infof("[%s] Service %s/%s still exists, waiting for deletion", AutoNLBsV2Network, pod.GetNamespace(), svcName)
-			break
-		} else if !errors.IsNotFound(err) {
-			log.Errorf("[%s] Failed to get Service %s/%s: %v", AutoNLBsV2Network, pod.GetNamespace(), svcName, err)
-		}
-	}
-
-	// 如果 Service 还没删完，等待下次调谐
-	if !allServicesDeleted {
-		log.Infof("[%s] Services for pod %s/%s not fully deleted, will retry later", AutoNLBsV2Network, pod.GetNamespace(), pod.GetName())
-		return cperrors.NewPluginErrorWithMessage(cperrors.InternalError, "waiting for services to be deleted")
-	}
-
-	// 当前 Pod 的 Service 已删除，移除 Pod Finalizer
-	log.Infof("[%s] All services for pod %s/%s deleted, removing pod finalizer", AutoNLBsV2Network, pod.GetNamespace(), pod.GetName())
-	controllerutil.RemoveFinalizer(pod, PodFinalizerName)
-	if err := c.Update(ctx, pod); err != nil {
-		log.Errorf("[%s] Failed to remove finalizer from pod %s/%s: %v", AutoNLBsV2Network, pod.GetNamespace(), pod.GetName(), err)
-		return cperrors.ToPluginError(err, cperrors.ApiCallError)
-	}
-
-	// 检查是否所有 Service 都删除了（用于移除 NLB Finalizer）
-	// 通过查询属于该 GSS 的 Service 数量
+	// 检查该 GSS 相关的 Service 数量
 	svcList := &corev1.ServiceList{}
-	err = c.List(ctx, svcList, &client.ListOptions{
-		Namespace: pod.GetNamespace(),
-		LabelSelector: labels.SelectorFromSet(map[string]string{
-			gamekruiseiov1alpha1.GameServerOwnerGssKey: gssName,
-		}),
-	})
+	err = c.List(ctx, svcList, client.InNamespace(ns),
+		client.MatchingLabels{gamekruiseiov1alpha1.GameServerOwnerGssKey: gssName})
 	if err != nil {
-		log.Errorf("[%s] Failed to list services for GSS %s/%s: %v", AutoNLBsV2Network, pod.GetNamespace(), gssName, err)
-		return nil // 不阻止 Pod 删除
+		log.Errorf("[%s] Failed to list Services for GSS %s/%s: %v", AutoNLBsV2Network, ns, gssName, err)
+		return cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 	}
 
+	// Service 还未全部删除，返回错误触发 Controller 重试
 	if len(svcList.Items) > 0 {
-		log.Infof("[%s] GSS %s/%s still has %d services, NLB finalizers will be removed later",
-			AutoNLBsV2Network, pod.GetNamespace(), gssName, len(svcList.Items))
-		return nil
+		log.Infof("[%s] %d Services still exist for GSS %s/%s, waiting for cleanup",
+			AutoNLBsV2Network, len(svcList.Items), ns, gssName)
+		return cperrors.NewPluginErrorWithMessage(cperrors.RetryError,
+			fmt.Sprintf("waiting for %d Services to be deleted before cleanup NLB/EIP", len(svcList.Items)))
 	}
 
-	// 所有 Service 都删除了，移除所有 NLB 的 Finalizer
-	log.Infof("[%s] All services for GSS %s/%s deleted, removing NLB finalizers", AutoNLBsV2Network, pod.GetNamespace(), gssName)
-	if err := a.removeNLBFinalizers(ctx, c, pod.GetNamespace(), gssName, conf); err != nil {
-		log.Errorf("[%s] Failed to remove NLB finalizers: %v", AutoNLBsV2Network, err)
-		// 不阻止 Pod 删除
-	}
+	// Service 全部删除完成，删除 NLB 和 EIP
+	log.Infof("[%s] All Services deleted for GSS %s/%s, deleting NLBs and EIPs", AutoNLBsV2Network, ns, gssName)
 
-	return nil
-}
-
-// removeNLBFinalizers 移除属于指定 GSS 的所有 NLB 的 Finalizer
-func (a *AutoNLBsV2Plugin) removeNLBFinalizers(ctx context.Context, c client.Client, namespace, gssName string, config *autoNLBsConfig) error {
-	for _, eipIspType := range config.eipIspTypes {
-		// 查询属于该 GSS 的 NLB
+	for _, eipIspType := range conf.eipIspTypes {
+		// 删除 NLB CRs
 		nlbList := &nlbv1.NLBList{}
-		err := c.List(ctx, nlbList, &client.ListOptions{
-			Namespace: namespace,
+		err = c.List(ctx, nlbList, &client.ListOptions{
+			Namespace: ns,
 			LabelSelector: labels.SelectorFromSet(map[string]string{
 				NLBPoolGssLabel:        gssName,
 				NLBPoolEipIspTypeLabel: eipIspType,
 			}),
 		})
 		if err != nil {
-			log.Errorf("[%s] Failed to list NLBs for GSS %s/%s: %v", AutoNLBsV2Network, namespace, gssName, err)
+			log.Errorf("[%s] Failed to list NLB CRs: %v", AutoNLBsV2Network, err)
 			continue
 		}
 
 		for _, nlb := range nlbList.Items {
-			// 只处理正在删除的 NLB
-			if nlb.DeletionTimestamp == nil {
-				continue
+			if err := c.Delete(ctx, &nlb); err != nil && !errors.IsNotFound(err) {
+				log.Errorf("[%s] Failed to delete NLB %s/%s: %v", AutoNLBsV2Network, ns, nlb.GetName(), err)
+			} else {
+				log.Infof("[%s] Deleted NLB %s/%s", AutoNLBsV2Network, ns, nlb.GetName())
 			}
+		}
 
-			if controllerutil.ContainsFinalizer(&nlb, NLBFinalizerName) {
-				log.Infof("[%s] Removing finalizer from NLB %s/%s", AutoNLBsV2Network, namespace, nlb.Name)
-				controllerutil.RemoveFinalizer(&nlb, NLBFinalizerName)
-				if err := c.Update(ctx, &nlb); err != nil {
-					log.Errorf("[%s] Failed to remove finalizer from NLB %s/%s: %v", AutoNLBsV2Network, namespace, nlb.Name, err)
-					continue
-				}
-				log.Infof("[%s] Successfully removed finalizer from NLB %s/%s", AutoNLBsV2Network, namespace, nlb.Name)
+		// 删除 EIP CRs
+		eipList := &eipv1.EIPList{}
+		err = c.List(ctx, eipList, &client.ListOptions{
+			Namespace: ns,
+			LabelSelector: labels.SelectorFromSet(map[string]string{
+				EIPPoolGssLabel:        gssName,
+				EIPPoolEipIspTypeLabel: eipIspType,
+			}),
+		})
+		if err != nil {
+			log.Errorf("[%s] Failed to list EIP CRs: %v", AutoNLBsV2Network, err)
+			continue
+		}
+
+		for _, eip := range eipList.Items {
+			if err := c.Delete(ctx, &eip); err != nil && !errors.IsNotFound(err) {
+				log.Errorf("[%s] Failed to delete EIP %s/%s: %v", AutoNLBsV2Network, ns, eip.GetName(), err)
+			} else {
+				log.Infof("[%s] Deleted EIP %s/%s", AutoNLBsV2Network, ns, eip.GetName())
 			}
 		}
 	}
+
+	// 移除 Pod Finalizer
+	return a.removePodFinalizer(c, pod, ctx)
+}
+
+// removePodFinalizer 移除 Pod 的 Finalizer
+func (a *AutoNLBsV2Plugin) removePodFinalizer(c client.Client, pod *corev1.Pod, ctx context.Context) cperrors.PluginError {
+	// 检查是否有 Finalizer
+	hasFinalizer := false
+	for _, f := range pod.GetFinalizers() {
+		if f == PodFinalizerName {
+			hasFinalizer = true
+			break
+		}
+	}
+
+	if !hasFinalizer {
+		return nil
+	}
+
+	// 移除 Finalizer
+	newFinalizers := make([]string, 0)
+	for _, f := range pod.GetFinalizers() {
+		if f != PodFinalizerName {
+			newFinalizers = append(newFinalizers, f)
+		}
+	}
+
+	podCopy := pod.DeepCopy()
+	podCopy.SetFinalizers(newFinalizers)
+
+	if err := c.Update(ctx, podCopy); err != nil {
+		log.Errorf("[%s] Failed to remove Finalizer from Pod %s/%s: %v",
+			AutoNLBsV2Network, pod.GetNamespace(), pod.GetName(), err)
+		return cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
+	}
+
+	log.Infof("[%s] Removed Finalizer from Pod %s/%s", AutoNLBsV2Network, pod.GetNamespace(), pod.GetName())
 	return nil
 }
 
@@ -871,7 +869,8 @@ func (a *AutoNLBsV2Plugin) ensureServiceForPod(ctx context.Context, c client.Cli
 	return nil
 }
 
-// consServiceForPod 构造单个 Pod 的 Service（OwnerReference 指向 GameServerSet）
+// consServiceForPod 构造单个 Pod 的 Service
+// Service OwnerReference 始终指向 GSS，由 K8s GC 自动随 GSS 删除
 func (a *AutoNLBsV2Plugin) consServiceForPod(namespace, svcName, podName, gssName, nlbId string, ports []int32, config *autoNLBsConfig, gss *gamekruiseiov1alpha1.GameServerSet) *corev1.Service {
 	// 构造 Service Ports
 	svcPorts := make([]corev1.ServicePort, 0)
@@ -906,6 +905,16 @@ func (a *AutoNLBsV2Plugin) consServiceForPod(namespace, svcName, podName, gssNam
 		}
 	}
 
+	// Service OwnerReference 始终指向 GSS
+	ownerRef := metav1.OwnerReference{
+		APIVersion:         gss.APIVersion,
+		Kind:               gss.Kind,
+		Name:               gss.GetName(),
+		UID:                gss.GetUID(),
+		Controller:         ptr.To(true),
+		BlockOwnerDeletion: ptr.To(true),
+	}
+
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        svcName,
@@ -915,16 +924,7 @@ func (a *AutoNLBsV2Plugin) consServiceForPod(namespace, svcName, podName, gssNam
 				ServiceProxyName: "dummy",
 				gamekruiseiov1alpha1.GameServerOwnerGssKey: gssName,
 			},
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion:         gss.APIVersion,
-					Kind:               gss.Kind,
-					Name:               gss.GetName(),
-					UID:                gss.GetUID(),
-					Controller:         ptr.To(true),
-					BlockOwnerDeletion: ptr.To(true),
-				},
-			},
+			OwnerReferences: []metav1.OwnerReference{ownerRef},
 		},
 		Spec: corev1.ServiceSpec{
 			ExternalTrafficPolicy:         config.externalTrafficPolicy,
@@ -939,7 +939,6 @@ func (a *AutoNLBsV2Plugin) consServiceForPod(namespace, svcName, podName, gssNam
 	}
 }
 
-// ensureMaxPodIndex 更新 Pod 最大索引
 // createNLBInstanceCR 创建一个 NLB 实例(使用 NLB CRD)
 func (a *AutoNLBsV2Plugin) createNLBInstanceCR(ctx context.Context, c client.Client, namespace, gssName, eipIspType string, index int, config *autoNLBsConfig, gss *gamekruiseiov1alpha1.GameServerSet) error {
 	// 将 eipIspType 转换为小写以符合 Kubernetes 资源命名规范
@@ -1066,27 +1065,10 @@ func (a *AutoNLBsV2Plugin) createNLBInstanceCR(ctx context.Context, c client.Cli
 		},
 	}
 
-	// 根据 RetainNLBOnDelete 配置决定是否设置 OwnerReference
-	if !config.retainNLBOnDelete {
-		// 如果不保留，设置 OwnerReference 指向 GSS，GSS 删除时 NLB 会级联删除
-		nlbCR.OwnerReferences = []metav1.OwnerReference{
-			{
-				APIVersion:         gss.APIVersion,
-				Kind:               gss.Kind,
-				Name:               gss.GetName(),
-				UID:                gss.GetUID(),
-				Controller:         ptr.To(false), // NLB 不是由 GSS 控制器管理
-				BlockOwnerDeletion: ptr.To(true),
-			},
-		}
-		// 添加 Finalizer，确保 Service 删除后再删除 NLB
-		nlbCR.Finalizers = []string{NLBFinalizerName}
-		log.Infof("[%s] NLB CR %s will be deleted with GSS (RetainNLBOnDelete=false), added finalizer %s", AutoNLBsV2Network, nlbName, NLBFinalizerName)
-	} else {
-		// 保留模式：不设置 OwnerReference，允许 NLB 实例在 GSS 删除时保留
-		// 实现 NLB 资源池复用，降低成本和创建时间
-		log.Infof("[%s] NLB CR %s will be retained after GSS deletion (RetainNLBOnDelete=true)", AutoNLBsV2Network, nlbName)
-	}
+	// NLB CR 不设置任何 OwnerReference，完全与 GSS 解耦
+	// - RetainNLBOnDelete=true: NLB 保留，实现资源池复用
+	// - RetainNLBOnDelete=false: 由 Pod Finalizer 在 Service 全部删除后手动删除 NLB
+	log.Infof("[%s] NLB CR %s has no OwnerReference, will be managed by Finalizer or retained", AutoNLBsV2Network, nlbName)
 
 	// 创建 NLB CR
 	log.Infof("creating NLB CR %s/%s with vpcId=%s, addressType=%s, zones=%d, eips=%d",
@@ -1230,25 +1212,10 @@ func (a *AutoNLBsV2Plugin) ensureEIPCR(ctx context.Context, c client.Client, nam
 		},
 	}
 
-	// 根据 RetainNLBOnDelete 配置决定是否设置 OwnerReference
-	if !config.retainNLBOnDelete {
-		// 如果不保留，设置 OwnerReference 指向 GSS，GSS 删除时 EIP 会级联删除
-		eipCR.OwnerReferences = []metav1.OwnerReference{
-			{
-				APIVersion:         gss.APIVersion,
-				Kind:               gss.Kind,
-				Name:               gss.GetName(),
-				UID:                gss.GetUID(),
-				Controller:         ptr.To(false), // EIP 不是由 GSS 控制器管理
-				BlockOwnerDeletion: ptr.To(true),
-			},
-		}
-		log.Infof("[%s] EIP CR %s will be deleted with GSS (RetainNLBOnDelete=false)", AutoNLBsV2Network, eipName)
-	} else {
-		// 保留模式：不设置 OwnerReference，允许 EIP 在 GSS 删除时保留
-		// 实现 EIP 资源池复用
-		log.Infof("[%s] EIP CR %s will be retained after GSS deletion (RetainNLBOnDelete=true)", AutoNLBsV2Network, eipName)
-	}
+	// EIP CR 不设置任何 OwnerReference，完全与 GSS 解耦
+	// - RetainNLBOnDelete=true: EIP 保留，实现资源池复用
+	// - RetainNLBOnDelete=false: 由 Pod Finalizer 在 Service 全部删除后手动删除 EIP
+	log.Infof("[%s] EIP CR %s has no OwnerReference, will be managed by Finalizer or retained", AutoNLBsV2Network, eipName)
 
 	// 创建 EIP CR
 	err = c.Create(ctx, eipCR)
