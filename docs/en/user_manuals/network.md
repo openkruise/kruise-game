@@ -748,7 +748,7 @@ Clients can access the game server by using nlb-muyo7fv6z646ygcxxx.cn-xxx.nlb.al
 
 #### Plugin name
 
-`AlibabaCloud-AutoNLBs-V2` / `AutoNLBs-V2`
+`AlibabaCloud-AutoNLBs-V2`
 
 #### Cloud Provider
 

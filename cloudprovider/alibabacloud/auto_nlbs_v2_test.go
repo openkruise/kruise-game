@@ -109,7 +109,7 @@ func TestParseAutoNLBsConfig(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "default ISP type when not specified",
+			name: "default BGP ISP type when not specified",
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
 				{Name: "ZoneMaps", Value: "vpc-zzz@cn-shanghai-a:vsw-aaa,cn-shanghai-b:vsw-bbb"},
 				{Name: "PortProtocols", Value: "8000/TCP"},
@@ -118,7 +118,7 @@ func TestParseAutoNLBsConfig(t *testing.T) {
 			},
 			expectConfig: &autoNLBsConfig{
 				zoneMaps:              "vpc-zzz@cn-shanghai-a:vsw-aaa,cn-shanghai-b:vsw-bbb",
-				eipIspTypes:           []string{"default"},
+				eipIspTypes:           []string{"BGP"},
 				targetPorts:           []int{8000},
 				protocols:             []corev1.Protocol{corev1.ProtocolTCP},
 				minPort:               30000,

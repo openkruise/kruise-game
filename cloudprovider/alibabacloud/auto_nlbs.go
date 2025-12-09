@@ -462,7 +462,7 @@ func setSvcOwner(c client.Client, ctx context.Context, svc *corev1.Service, name
 
 func parseAutoNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*autoNLBsConfig, error) {
 	reserveNlbNum := 1
-	eipIspTypes := []string{"default"}
+	eipIspTypes := []string{"BGP"}
 	ports := make([]int, 0)
 	protocols := make([]corev1.Protocol, 0)
 	externalTrafficPolicy := corev1.ServiceExternalTrafficPolicyTypeLocal
