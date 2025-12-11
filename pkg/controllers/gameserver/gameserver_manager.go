@@ -175,7 +175,9 @@ func (manager GameServerManager) SyncGsToPod() error {
 	case corev1.PodFailed:
 		gsState = gameKruiseV1alpha1.Crash
 	case corev1.PodPending:
-		gsState = gameKruiseV1alpha1.Creating
+		if pod.Spec.NodeName != "" && pod.Status.PodIP != "" {
+			gsState = gameKruiseV1alpha1.Creating
+		}
 	default:
 		gsState = gameKruiseV1alpha1.Unknown
 	}
