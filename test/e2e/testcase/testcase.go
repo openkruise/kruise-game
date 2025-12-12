@@ -6,6 +6,7 @@ import (
 
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/gomega"
+	"github.com/openkruise/kruise-game/apis/v1alpha1"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
 	"github.com/openkruise/kruise-game/test/e2e/client"
@@ -115,14 +116,14 @@ func RunTestCases(f *framework.Framework) {
 			gomega.Expect(err).To(gomega.BeNil())
 		})
 
-		ginkgo.It("service qualities opsState and metadata", func() {
+		ginkgo.It("service qualities opsState", func() {
 			// Deploy
 			gss, err := f.DeployGssWithServiceQualities()
 			gomega.Expect(err).To(gomega.BeNil())
 			err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
 			gomega.Expect(err).To(gomega.BeNil())
 
-			// Patch serviceQualities with structure
+			// Patch serviceQualities
 			patchFields := map[string]interface{}{
 				"serviceQualities": []map[string]interface{}{
 					{
@@ -134,8 +135,7 @@ func RunTestCases(f *framework.Framework) {
 						},
 						"serviceQualityAction": []map[string]interface{}{
 							{
-								"state":    true, // REQUIRED
-								"opsState": "Maintaining",
+								"state": true,
 							},
 						},
 					},
@@ -145,18 +145,21 @@ func RunTestCases(f *framework.Framework) {
 			gss, err = f.PatchGssSpec(patchFields)
 			gomega.Expect(err).To(gomega.BeNil())
 
-			// Wait for OpsState propagation
-			err = f.WaitForGsSpecOpsState(gss.GetName()+"-0", "Maintaining")
-			gomega.Expect(err).To(gomega.BeNil())
-			err = f.WaitForGsSpecOpsState(gss.GetName()+"-1", "Maintaining")
-			gomega.Expect(err).To(gomega.BeNil())
-			err = f.WaitForGsSpecOpsState(gss.GetName()+"-2", "Maintaining")
-			gomega.Expect(err).To(gomega.BeNil())
+			// Wait for OpsState propagation to all replicas
+			for i := 0; i < 3; i++ {
+				gsName := fmt.Sprintf("%s-%d", gss.GetName(), i)
+				err = f.WaitForGsSpecOpsState(gsName, "Maintaining")
+				gomega.Expect(err).To(gomega.BeNil(), fmt.Sprintf("GameServer %s should reach Maintaining state", gsName))
+			}
 
-			// Verify OpsState (labels/annotations are NOT supported by CRD)
-			gs, err := f.GetGameServer(gss.GetName() + "-0")
-			gomega.Expect(err).To(gomega.BeNil())
-			gomega.Expect(gs.Spec.OpsState).To(gomega.Equal("Maintaining"))
+			// Verify OpsState on all replicas
+			for i := 0; i < 3; i++ {
+				gsName := fmt.Sprintf("%s-%d", gss.GetName(), i)
+				gs, err := f.GetGameServer(gsName)
+				gomega.Expect(err).To(gomega.BeNil())
+				gomega.Expect(gs.Spec.OpsState).To(gomega.Equal(v1alpha1.OpsState("Maintaining")),
+					fmt.Sprintf("GameServer %s should have opsState=Maintaining", gsName))
+			}
 		})
 
 		ginkgo.Describe("network control", func() {
