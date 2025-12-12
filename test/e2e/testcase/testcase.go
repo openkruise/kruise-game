@@ -162,7 +162,7 @@ func RunTestCases(f *framework.Framework) {
 			gomega.Expect(err).To(gomega.BeNil())
 
 			// Verify metadata (label + annotation)
-			gs, err := f.client.GetGameServer(gss.GetName() + "-0")
+			gs, err := f.GetGameServer(gss.GetName() + "-0")
 			gomega.Expect(err).To(gomega.BeNil())
 
 			gomega.Expect(gs.GetLabels()["sq"]).To(gomega.Equal("healthy"))
