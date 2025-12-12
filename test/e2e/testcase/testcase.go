@@ -116,19 +116,18 @@ func RunTestCases(f *framework.Framework) {
 		})
 
 		ginkgo.It("service qualities opsState and metadata", func() {
-
 			// deploy
 			gss, err := f.DeployGssWithServiceQualities()
 			gomega.Expect(err).To(gomega.BeNil())
-
 			err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
 			gomega.Expect(err).To(gomega.BeNil())
 
-			// Patch serviceQualities using MAP (required by PatchGssSpec)
+			// Patch serviceQualities with REQUIRED 'permanent' field
 			patchFields := map[string]interface{}{
 				"serviceQualities": []map[string]interface{}{
 					{
-						"name": "health-check",
+						"name":      "health-check",
+						"permanent": true, // REQUIRED FIELD
 						"probe": map[string]interface{}{
 							"exec": map[string]interface{}{
 								"command": []string{"sh", "-c", "echo ok; exit 0"},
