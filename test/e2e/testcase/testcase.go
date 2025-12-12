@@ -116,33 +116,26 @@ func RunTestCases(f *framework.Framework) {
 		})
 
 		ginkgo.It("service qualities opsState and metadata", func() {
-			// deploy
+			// Deploy
 			gss, err := f.DeployGssWithServiceQualities()
 			gomega.Expect(err).To(gomega.BeNil())
 			err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
 			gomega.Expect(err).To(gomega.BeNil())
 
-			// Patch serviceQualities with REQUIRED 'permanent' field
+			// Patch serviceQualities with structure
 			patchFields := map[string]interface{}{
 				"serviceQualities": []map[string]interface{}{
 					{
-						"name":      "health-check",
-						"permanent": true, // REQUIRED FIELD
-						"probe": map[string]interface{}{
-							"exec": map[string]interface{}{
-								"command": []string{"sh", "-c", "echo ok; exit 0"},
-							},
+						"name":          "health-check",
+						"containerName": "default-game",
+						"permanent":     false,
+						"exec": map[string]interface{}{
+							"command": []string{"sh", "-c", "exit 0"},
 						},
-						"actions": []map[string]interface{}{
+						"serviceQualityAction": []map[string]interface{}{
 							{
-								"result":   "ok",
+								"state":    true, // REQUIRED
 								"opsState": "Maintaining",
-								"labels": map[string]string{
-									"sq": "healthy",
-								},
-								"annotations": map[string]string{
-									"note": "updated",
-								},
 							},
 						},
 					},
@@ -160,12 +153,10 @@ func RunTestCases(f *framework.Framework) {
 			err = f.WaitForGsSpecOpsState(gss.GetName()+"-2", "Maintaining")
 			gomega.Expect(err).To(gomega.BeNil())
 
-			// Verify metadata (label + annotation)
+			// Verify OpsState (labels/annotations are NOT supported by CRD)
 			gs, err := f.GetGameServer(gss.GetName() + "-0")
 			gomega.Expect(err).To(gomega.BeNil())
-
-			gomega.Expect(gs.GetLabels()["sq"]).To(gomega.Equal("healthy"))
-			gomega.Expect(gs.GetAnnotations()["note"]).To(gomega.Equal("updated"))
+			gomega.Expect(gs.Spec.OpsState).To(gomega.Equal("Maintaining"))
 		})
 
 		ginkgo.Describe("network control", func() {
