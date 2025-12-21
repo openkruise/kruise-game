@@ -135,7 +135,8 @@ func RunTestCases(f *framework.Framework) {
 						},
 						"serviceQualityAction": []map[string]interface{}{
 							{
-								"state": true,
+								"state":    true,
+								"opsState": "Maintaining",
 							},
 						},
 					},
