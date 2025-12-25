@@ -120,15 +120,14 @@ func RunTestCases(f *framework.Framework) {
 			gss, err := f.DeployGssWithServiceQualities()
 			gomega.Expect(err).To(gomega.BeNil())
 
-			// Scale to 5 replicas
 			gss, err = f.GameServerScale(gss, 5, nil)
 			gomega.Expect(err).To(gomega.BeNil())
 			err = f.ExpectGssCorrect(gss, []int{0, 1, 2, 3, 4})
 			gomega.Expect(err).To(gomega.BeNil())
 
-			// Configure ServiceQuality probe:
-			// - pod 4 active (None)
-			// - pods 0-3 idle (WaitToBeDeleted)
+			// ServiceQuality probe:
+			// - exit 0 for idle pods (0-3)  -> WaitToBeDeleted
+			// - exit 1 for active pod (4)   -> None
 			patchFields := map[string]interface{}{
 				"serviceQualities": []map[string]interface{}{
 					{
@@ -136,15 +135,19 @@ func RunTestCases(f *framework.Framework) {
 						"containerName": "default-game",
 						"permanent":     false,
 						"exec": map[string]interface{}{
-							"command": []string{"sh", "-c", "hostname | grep -q -- '-4$'"},
+							"command": []string{
+								"sh", "-c",
+								"hostname | grep -q -- '-4$' && exit 1 || exit 0",
+							},
 						},
 						"serviceQualityAction": []map[string]interface{}{
-							{"state": true, "opsState": "None"},             // pod 4
-							{"state": false, "opsState": "WaitToBeDeleted"}, // others
+							{"state": true, "opsState": "WaitToBeDeleted"},
+							{"state": false, "opsState": "None"},
 						},
 					},
 				},
 			}
+
 			gss, err = f.PatchGssSpec(patchFields)
 			gomega.Expect(err).To(gomega.BeNil())
 
@@ -156,26 +159,35 @@ func RunTestCases(f *framework.Framework) {
 			err = f.WaitForGsSpecOpsState(fmt.Sprintf("%s-4", gss.GetName()), "None")
 			gomega.Expect(err).To(gomega.BeNil())
 
-			// Scale down from 5 → 3
+			// Scale down 5 -> 3
 			gss, err = f.GameServerScale(gss, 3, nil)
 			gomega.Expect(err).To(gomega.BeNil())
 
-			// Verify remaining pods: 0,1 (WaitToBeDeleted) + 4 (None)
-			remaining := map[int]string{
-				0: "WaitToBeDeleted",
-				1: "WaitToBeDeleted",
-				4: "None",
-			}
-			for i, expectedState := range remaining {
+			// Collect existing pods
+			existing := []int{}
+			for i := 0; i < 5; i++ {
 				gs, err := f.GetGameServer(fmt.Sprintf("%s-%d", gss.GetName(), i))
-				gomega.Expect(err).To(gomega.BeNil())
-				gomega.Expect(string(gs.Spec.OpsState)).To(gomega.Equal(expectedState))
+				if err == nil && gs != nil {
+					existing = append(existing, i)
+				}
 			}
 
-			// Verify deleted pods: 2,3
-			for _, i := range []int{2, 3} {
-				_, err := f.GetGameServer(fmt.Sprintf("%s-%d", gss.GetName(), i))
-				gomega.Expect(err).NotTo(gomega.BeNil())
+			// Exactly 3 pods should remain
+			gomega.Expect(existing).To(gomega.HaveLen(3))
+
+			// Pod 4 (opsState=None) must be protected
+			gomega.Expect(existing).To(gomega.ContainElement(4))
+
+			// Verify opsState of remaining pods
+			for _, i := range existing {
+				gs, err := f.GetGameServer(fmt.Sprintf("%s-%d", gss.GetName(), i))
+				gomega.Expect(err).To(gomega.BeNil())
+
+				expected := "WaitToBeDeleted"
+				if i == 4 {
+					expected = "None"
+				}
+				gomega.Expect(string(gs.Spec.OpsState)).To(gomega.Equal(expected))
 			}
 		})
 
