@@ -2,7 +2,6 @@ package alibabacloud
 
 import (
 	"context"
-	"fmt"
 	stdErrors "errors"
 	"strconv"
 	"strings"

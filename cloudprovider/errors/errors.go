@@ -61,6 +61,11 @@ func NewPluginErrorWithMessage(errorType PluginErrorType, msg string) PluginErro
 	}
 }
 
+// NewPluginError is an alias for NewPluginErrorWithMessage
+func NewPluginError(errorType PluginErrorType, msg string) PluginError {
+	return NewPluginErrorWithMessage(errorType, msg)
+}
+
 func ToPluginError(err error, errorType PluginErrorType) PluginError {
 	if err == nil {
 		return nil
