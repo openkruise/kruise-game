@@ -1832,9 +1832,10 @@ func TestAutoNLBsV2Plugin_Init_WithMultiISP(t *testing.T) {
 	bgpCount := 0
 	telecomCount := 0
 	for _, eip := range eipList.Items {
-		if eip.Spec.ISP == "BGP" {
+		switch eip.Spec.ISP {
+		case "BGP":
 			bgpCount++
-		} else if eip.Spec.ISP == "ChinaTelecom" {
+		case "ChinaTelecom":
 			telecomCount++
 		}
 	}
