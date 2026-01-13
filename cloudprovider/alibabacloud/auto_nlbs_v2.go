@@ -50,6 +50,9 @@ const (
 	// Finalizer 常量（用于 RetainNLBOnDelete=false 场景）
 	PodFinalizerName = "game.kruise.io/delete-nlb-on-gss-deleted" // Pod Finalizer，确保 Service 删除后再删除 NLB/EIP
 
+	// Pod 标签常量（用于标记 GSS 删除状态）
+	GssDeletingLabelKey = "game.kruise.io/gss-deleting" // Pod 标签，标记 GSS 是否正在删除
+
 	// NLB CRD 相关标签
 	NLBPoolLabel           = "game.kruise.io/nlb-pool"
 	NLBPoolIndexLabel      = "game.kruise.io/nlb-pool-index"
@@ -187,13 +190,40 @@ func (a *AutoNLBsV2Plugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 	// Finalizer 的移除统一在 OnPodDeleted 中处理
 	if gssErr != nil || gss.DeletionTimestamp != nil {
 		if gssErr != nil {
-			log.Infof("[%s] GSS %s/%s not found during OnPodUpdated, skipping",
-				AutoNLBsV2Network, ns, gssName)
+			// 区分 NotFound 错误和其他错误
+			if errors.IsNotFound(gssErr) {
+				// GSS 已被删除，在 Pod 上打标签，供 OnPodDeleted 使用
+				log.Infof("[%s] GSS %s/%s not found (deleted), marking Pod %s",
+					AutoNLBsV2Network, ns, gssName, pod.GetName())
+				if pod.Labels == nil {
+					pod.Labels = make(map[string]string)
+				}
+				if _, exists := pod.Labels[GssDeletingLabelKey]; !exists {
+					pod.Labels[GssDeletingLabelKey] = "true"
+					// 返回 Pod，让控制器更新标签
+					return pod, nil
+				}
+			} else {
+				// 其他错误（网络、权限等），跳过本次处理，等待重试
+				log.Warningf("[%s] Failed to get GSS %s/%s: %v, skipping",
+					AutoNLBsV2Network, ns, gssName, gssErr)
+			}
+			return pod, nil
 		} else {
-			log.Infof("[%s] GSS %s/%s is being deleted during OnPodUpdated, skipping",
-				AutoNLBsV2Network, ns, gssName)
+			// GSS 正在删除，在 Pod 上打标签，供 OnPodDeleted 使用
+			// 这样可以避免 OnPodDeleted 时查询 GSS 的竞态条件
+			log.Infof("[%s] GSS %s/%s is being deleted, marking Pod %s",
+				AutoNLBsV2Network, ns, gssName, pod.GetName())
+			if pod.Labels == nil {
+				pod.Labels = make(map[string]string)
+			}
+			if _, exists := pod.Labels[GssDeletingLabelKey]; !exists {
+				pod.Labels[GssDeletingLabelKey] = "true"
+				// 返回 Pod，让控制器更新标签
+				return pod, nil
+			}
+			return pod, nil
 		}
-		return pod, nil
 	}
 
 	// 更新 maxPodIndex（只增不减）
@@ -415,23 +445,20 @@ func (a *AutoNLBsV2Plugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx co
 		return nil
 	}
 
-	// RetainNLBOnDelete=false 时，检查 GSS 是否存在且是否在删除状态
-	gss := &gamekruiseiov1alpha1.GameServerSet{}
-	gssErr := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: gssName}, gss)
+	// RetainNLBOnDelete=false 时，通过 Pod 标签判断是 GSS 删除还是正常缩容
+	// 避免实时查询 GSS 导致的竞态条件（GSS 可能在 OnPodDeleted 触发前已被删除）
+	gssDeleting := pod.Labels[GssDeletingLabelKey] == "true"
 
-	// GSS 存在且没有在删除状态 → 正常缩容场景，直接移除 Finalizer
-	if gssErr == nil && gss.DeletionTimestamp == nil {
-		log.Infof("[%s] GSS %s/%s exists and not deleting, removing Finalizer for normal scale-down",
-			AutoNLBsV2Network, ns, gssName)
+	// 未标记 GSS 删除 → 正常缩容场景，直接移除 Finalizer
+	if !gssDeleting {
+		log.Infof("[%s] Normal scale-down for pod %s/%s (GSS not deleting), removing Finalizer",
+			AutoNLBsV2Network, ns, pod.GetName())
 		return a.removePodFinalizer(c, pod, ctx)
 	}
 
-	// GSS 不存在或正在删除 → 需要等待 Service 全部删除后再清理 NLB/EIP
-	if gssErr != nil {
-		log.Infof("[%s] GSS %s/%s not found, checking Services for cleanup", AutoNLBsV2Network, ns, gssName)
-	} else {
-		log.Infof("[%s] GSS %s/%s is being deleted, checking Services for cleanup", AutoNLBsV2Network, ns, gssName)
-	}
+	// GSS 删除场景 → 需要等待 Service 全部删除后再清理 NLB/EIP
+	log.Infof("[%s] GSS %s/%s is being deleted (marked on Pod), checking Services for cleanup",
+		AutoNLBsV2Network, ns, gssName)
 
 	// 检查该 GSS 相关的 Service 数量
 	svcList := &corev1.ServiceList{}
