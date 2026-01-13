@@ -11,8 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/openkruise/kruise-game/apis/v1alpha1"
-	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	v1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider/alibabacloud/apis/v1beta1"
 )
 
@@ -134,7 +133,7 @@ func TestEipPlugin_OnPodUpdated_WithNetworkStatus(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 	_ = v1beta1.AddToScheme(scheme)
-	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+	_ = v1alpha1.AddToScheme(scheme)
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(pod).
@@ -144,7 +143,7 @@ func TestEipPlugin_OnPodUpdated_WithNetworkStatus(t *testing.T) {
 	networkStatus := &v1alpha1.NetworkStatus{}
 	networkStatus.ExternalAddresses = []v1alpha1.NetworkAddress{{IP: "203.0.113.1"}}
 	networkStatus.InternalAddresses = []v1alpha1.NetworkAddress{{IP: "10.0.0.1"}}
-	networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkReady
+	networkStatus.CurrentNetworkState = v1alpha1.NetworkReady
 	networkStatusBytes, jErr := json.Marshal(networkStatus)
 	assert.NoError(t, jErr)
 	pod.Annotations[v1alpha1.GameServerNetworkStatus] = string(networkStatusBytes)

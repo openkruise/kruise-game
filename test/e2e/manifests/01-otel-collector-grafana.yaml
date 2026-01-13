@@ -1,0 +1,355 @@
+# OTel Collector ConfigMap (Grafana Cloud dual-write edition)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: observability
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+      prometheus/native:
+        config:
+          global:
+            scrape_interval: 15s
+          scrape_configs:
+            - job_name: okg-controller
+              scheme: http
+              scrape_interval: 30s
+              kubernetes_sd_configs:
+                - role: endpoints
+                  namespaces:
+                    names: ["kruise-game-system"]
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+                  regex: .*controller-manager-metrics-service;http-metrics
+                  action: keep
+
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 512
+      filter/network_only:
+        error_mode: ignore
+        spans:
+          include:
+            match_type: strict
+            attributes:
+              - key: game.kruise.io.network.plugin.name
+      
+      # Memory limiter to prevent OOM
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 400
+        spike_limit_mib: 100
+      
+      # K8s attributes processor for E2E tests
+      # Only enrich Pod UID/IP 等 Downward API 不提供的信息
+      k8sattributes:
+        auth_type: serviceAccount
+        passthrough: false
+        filter:
+          node_from_env_var: KUBE_NODE_NAME
+        extract:
+          metadata:
+            - k8s.pod.uid
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: game.kruise.io.k8s.pod_ip
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.uid
+          - sources:
+              - from: connection
+
+      transform/log_trace_labels:
+        log_statements:
+          - context: log
+            statements:
+            - set(log.attributes["trace_id"], trace_id.string)
+            - set(log.attributes["span_id"], span_id.string)
+      
+      # Tail sampling for intelligent trace sampling
+      tail_sampling:
+        decision_wait: 10s
+        num_traces: 100000
+        expected_new_traces_per_sec: 100
+        policies:
+          - name: errors
+            type: status_code
+            status_code:
+              status_codes: [ERROR]
+          - name: slow
+            type: latency
+            latency:
+              threshold_ms: 1000
+          - name: sample_all
+            type: probabilistic
+            probabilistic:
+              sampling_percentage: 100
+
+    connectors:
+      spanmetrics/network:
+        namespace: okg_network
+        histogram:
+          unit: s
+          explicit:
+            buckets: ["0.01s", "0.1s", "0.25s", "0.5s", "1s", "2s", "5s", "10s"]
+        dimensions:
+          - name: game.kruise.io.network.plugin.name
+          - name: cloud.provider
+          - name: game.kruise.io.network.status
+        exemplars:
+          enabled: true
+        aggregation_temporality: cumulative
+        add_resource_attributes: true
+
+    exporters:
+      otlp/tempo:
+        endpoint: tempo.observability.svc.cluster.local:4317
+        tls:
+          insecure: true
+      
+      otlphttp/loki:
+        endpoint: http://loki.observability.svc.cluster.local:3100/otlp
+        tls:
+          insecure: true
+      
+      otlphttp/grafana_cloud:
+        endpoint: ${GC_OTLP_ENDPOINT}
+        auth:
+          authenticator: basicauth/grafana_cloud_otlp
+        compression: gzip
+        retry_on_failure:
+          enabled: true
+        sending_queue:
+          enabled: true
+
+      prometheus/local:
+        endpoint: 0.0.0.0:8889
+        enable_open_metrics: true
+
+      prometheusremotewrite/grafana_cloud:
+        endpoint: ${GC_PROM_REMOTE_WRITE_ENDPOINT}
+        auth:
+          authenticator: basicauth/grafana_cloud_prom
+        compression: snappy
+      
+      debug:
+        verbosity: detailed
+        sampling_initial: 5
+        sampling_thereafter: 200
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      basicauth/grafana_cloud_otlp:
+        client_auth:
+          username: ${GC_STACK_ID}
+          password: ${GC_API_KEY}
+      basicauth/grafana_cloud_prom:
+        client_auth:
+          username: ${GC_PROM_USERNAME}
+          password: ${GC_PROM_API_KEY}
+
+    service:
+      extensions: [health_check, basicauth/grafana_cloud_otlp, basicauth/grafana_cloud_prom]
+      pipelines:
+        traces/network:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, filter/network_only, batch]
+          exporters: [spanmetrics/network]
+        metrics/network:
+          receivers: [spanmetrics/network]
+          processors: [memory_limiter, batch]
+          exporters: [prometheus/local, prometheusremotewrite/grafana_cloud]
+        metrics/native:
+          receivers: [prometheus/native]
+          processors: [memory_limiter, batch]
+          exporters: [prometheus/local, prometheusremotewrite/grafana_cloud]
+        traces/storage:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, batch, tail_sampling]
+          exporters: [otlp/tempo, otlphttp/grafana_cloud, debug]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, transform/log_trace_labels, batch]
+          exporters: [otlphttp/loki, otlphttp/grafana_cloud]
+      
+      telemetry:
+        logs:
+          level: debug
+        metrics:
+          level: detailed
+          readers:
+            - pull:
+                exporter:
+                  prometheus:
+                    host: 0.0.0.0
+                    port: 8888
+                    without_units: true
+                    without_type_suffix: true
+                    without_scope_info: true
+---
+# OTel Collector ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  namespace: observability
+---
+# OTel Collector ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-collector
+rules:
+- apiGroups: [""]
+  resources: ["pods", "namespaces", "nodes"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: [""]
+  resources: ["services", "endpoints"]
+  verbs: ["get", "list", "watch"]
+---
+# OTel Collector ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: otel-collector
+subjects:
+- kind: ServiceAccount
+  name: otel-collector
+  namespace: observability
+---
+# OTel Collector Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      serviceAccountName: otel-collector
+      containers:
+      - name: otel-collector
+        image: otel/opentelemetry-collector-contrib:0.139.0
+        args:
+          - --config=/etc/otel-collector/config.yaml
+        env:
+          - name: KUBE_NODE_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: GC_STACK_ID
+            valueFrom:
+              secretKeyRef:
+                name: grafana-cloud-credentials
+                key: stack_id
+          - name: GC_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: grafana-cloud-credentials
+                key: api_key
+          - name: GC_OTLP_ENDPOINT
+            valueFrom:
+              secretKeyRef:
+                name: grafana-cloud-credentials
+                key: otlp_endpoint
+          - name: GC_PROM_REMOTE_WRITE_ENDPOINT
+            valueFrom:
+              secretKeyRef:
+                name: grafana-cloud-credentials
+                key: prom_remote_write_endpoint
+          - name: GC_PROM_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: grafana-cloud-credentials
+                key: prom_username
+          - name: GC_PROM_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: grafana-cloud-credentials
+                key: prom_api_key
+        ports:
+          - containerPort: 4317
+            name: otlp-grpc
+          - containerPort: 4318
+            name: otlp-http
+          - containerPort: 8888
+            name: metrics
+          - containerPort: 8889
+            name: prom-exporter
+          - containerPort: 13133
+            name: health
+        volumeMounts:
+          - name: config
+            mountPath: /etc/otel-collector
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 512Mi
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+---
+# OTel Collector Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: observability
+spec:
+  selector:
+    app: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+    - name: metrics
+      port: 8888
+      targetPort: 8888
+    - name: prom-exporter
+      port: 8889
+      targetPort: 8889
+    - name: health
+      port: 13133
+      targetPort: 13133

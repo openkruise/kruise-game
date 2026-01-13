@@ -11,6 +11,7 @@ import (
 
 	zapr "github.com/go-logr/zapr"
 	"github.com/openkruise/kruise-game/pkg/logging"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	gozap "go.uber.org/zap"
 	gozapcore "go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -213,8 +214,8 @@ func TestLogServiceReadySummary(t *testing.T) {
 	}
 
 	ctx := entry.ContextMap()
-	if ctx["event"] != "service.ready" {
-		t.Fatalf("expected event field, got %v", ctx["event"])
+	if ctx[telemetryfields.FieldEvent] != "service.ready" {
+		t.Fatalf("expected event field, got %v", ctx[telemetryfields.FieldEvent])
 	}
 	if ctx["leader_election"] != true {
 		t.Fatalf("expected leader_election=true, got %v", ctx["leader_election"])

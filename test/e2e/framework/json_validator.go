@@ -17,7 +17,7 @@ func ValidateJSONLogs(logPath string) error {
 	if err != nil {
 		return fmt.Errorf("open log file %s: %w", logPath, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	lineNum := 0

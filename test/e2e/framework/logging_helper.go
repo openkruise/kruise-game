@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -84,6 +85,50 @@ func PatchDeploymentArgs(ctx context.Context, kube clientset.Interface, ns, name
 		return fmt.Errorf("patch deployment %s/%s: %w", ns, name, err)
 	}
 	return nil
+}
+
+// GetDeploymentContainerArgs returns a copy of the current args slice for the given container.
+func GetDeploymentContainerArgs(ctx context.Context, kube clientset.Interface, ns, name, containerName string) ([]string, error) {
+	dep, err := kube.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get deployment %s/%s: %w", ns, name, err)
+	}
+
+	containers := dep.Spec.Template.Spec.Containers
+	if len(containers) == 0 {
+		return nil, fmt.Errorf("deployment %s/%s has no containers", ns, name)
+	}
+
+	targetIdx := 0
+	if containerName != "" {
+		found := false
+		for i, c := range containers {
+			if c.Name == containerName {
+				targetIdx = i
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("container %s not found in deployment %s/%s", containerName, ns, name)
+		}
+	}
+
+	argsCopy := append([]string(nil), containers[targetIdx].Args...)
+	return argsCopy, nil
+}
+
+// ReplaceLogFormatArg ensures the args slice contains "--log-format=<format>" and returns a new copy.
+func ReplaceLogFormatArg(args []string, format string) []string {
+	target := fmt.Sprintf("--log-format=%s", format)
+	newArgs := append([]string(nil), args...)
+	for i, arg := range newArgs {
+		if strings.HasPrefix(arg, "--log-format=") {
+			newArgs[i] = target
+			return newArgs
+		}
+	}
+	return append(newArgs, target)
 }
 
 // EnsureDeploymentRollingStrategy enforces RollingUpdate strategy with maxUnavailable=100% to avoid deadlocks
@@ -209,7 +254,7 @@ func CollectManagerLogs(ctx context.Context, kube clientset.Interface, ns string
 	if err != nil {
 		return fmt.Errorf("create output file %s: %w", outPath, err)
 	}
-	defer outFile.Close()
+	defer func() { _ = outFile.Close() }()
 
 	sinceSeconds := int64(since.Seconds())
 	for _, pod := range pods.Items {
@@ -219,13 +264,13 @@ func CollectManagerLogs(ctx context.Context, kube clientset.Interface, ns string
 		stream, err := req.Stream(ctx)
 		if err != nil {
 			// Log error but continue with other pods
-			fmt.Fprintf(outFile, "# Error getting logs for pod %s: %v\n", pod.Name, err)
+			_, _ = fmt.Fprintf(outFile, "# Error getting logs for pod %s: %v\n", pod.Name, err)
 			continue
 		}
-		fmt.Fprintf(outFile, "# Logs from pod: %s\n", pod.Name)
+		_, _ = fmt.Fprintf(outFile, "# Logs from pod: %s\n", pod.Name)
 		_, _ = io.Copy(outFile, stream)
-		stream.Close()
-		fmt.Fprintln(outFile) // blank line between pods
+		_ = stream.Close()
+		_, _ = fmt.Fprintln(outFile) // blank line between pods
 	}
 	return nil
 }

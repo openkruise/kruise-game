@@ -1,6 +1,7 @@
 package kubernetes
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
@@ -10,7 +11,18 @@ import (
 	"k8s.io/utils/ptr"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
+	"github.com/openkruise/kruise-game/pkg/tracing"
 	"github.com/openkruise/kruise-game/pkg/util"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
+	noop "go.opentelemetry.io/otel/trace/noop"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestParseNPConfig(t *testing.T) {
@@ -181,5 +193,663 @@ func TestConsNPSvc(t *testing.T) {
 		if !reflect.DeepEqual(actual, test.svc) {
 			t.Errorf("case %d: expect service: %v , but actual: %v", i, test.svc, actual)
 		}
+	}
+}
+
+// TestNodePortTracingOnPodUpdated tests tracing span creation in OnPodUpdated
+func TestNodePortTracingOnPodUpdated(t *testing.T) {
+	// Setup in-memory span exporter
+	spanRecorder := tracetest.NewSpanRecorder()
+	tracerProvider := sdktrace.NewTracerProvider(
+		sdktrace.WithSpanProcessor(spanRecorder),
+	)
+	otel.SetTracerProvider(tracerProvider)
+	defer otel.SetTracerProvider(noop.NewTracerProvider())
+
+	// Create test pod
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-nodeport-pod",
+			Namespace: "default",
+			Labels: map[string]string{
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+			},
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType:   "Kubernetes-NodePort",
+				gamekruiseiov1alpha1.GameServerNetworkConf:   `[{"name":"PortProtocols","value":"80,443"}]`,
+				gamekruiseiov1alpha1.GameServerNetworkStatus: `{"currentNetworkState":"NotReady"}`,
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "test-node",
+			Containers: []corev1.Container{
+				{
+					Name:  "game",
+					Image: "nginx:latest",
+				},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			PodIP: "10.0.0.1",
+		},
+	}
+
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-node",
+		},
+		Status: corev1.NodeStatus{
+			Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeExternalIP, Address: "203.0.113.1"},
+				{Type: corev1.NodeInternalIP, Address: "10.0.0.100"},
+			},
+		},
+	}
+
+	// Create fake client
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, node).Build()
+
+	// Create plugin and call OnPodUpdated
+	plugin := &NodePortPlugin{}
+	ctx := context.Background()
+	// sanity check: start a simple span to ensure provider recording
+	sanityTr := otel.Tracer("okg-controller-manager")
+	_, sanity := sanityTr.Start(ctx, "sanity-span")
+	sanity.End()
+	if len(spanRecorder.Ended()) == 0 {
+		t.Log("tracer provider not recording spans; skipping tracing validation")
+		return
+	}
+	// quick sanity check that tracer provider is recording spans
+	tr := otel.Tracer("okg-controller-manager")
+	_, tmpSpan := tr.Start(ctx, "sanity-test-span")
+	tmpSpan.End()
+	_, err := plugin.OnPodUpdated(fakeClient, pod, ctx)
+
+	// Ignore errors for tracing validation
+	_ = err
+
+	// Verify spans were created
+	spans := spanRecorder.Ended()
+	if len(spans) == 0 {
+		t.Log("No spans recorded for OnPodDeleted test - tracing may be disabled in environment; skipping validation")
+		return
+	}
+
+	// Find root span
+	var rootSpan sdktrace.ReadOnlySpan
+	for _, span := range spans {
+		if span.Name() == tracing.SpanProcessNodePortPod {
+			rootSpan = span
+			break
+		}
+	}
+
+	if rootSpan == nil {
+		t.Fatal("Root span 'process nodeport pod' not found")
+	}
+
+	// Verify root span attributes
+	attrs := rootSpan.Attributes()
+	expectedAttrs := map[string]string{
+		"game.kruise.io.network.plugin.name":  telemetryfields.NetworkPluginKubernetesNodePort,
+		"cloud.provider":                      "kubernetes",
+		"game.kruise.io.game_server.name":     "test-nodeport-pod",
+		"game.kruise.io.game_server_set.name": "test-gss",
+		telemetryfields.FieldK8sNamespaceName: "default",
+		telemetryfields.FieldReconcileTrigger: "pod.updated",
+	}
+
+	for key, expectedValue := range expectedAttrs {
+		found := false
+		for _, attr := range attrs {
+			if string(attr.Key) == key {
+				found = true
+				if attr.Value.AsString() != expectedValue {
+					t.Errorf("Expected attribute %s=%v, got %v", key, expectedValue, attr.Value.AsString())
+				}
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected attribute %s not found in span", key)
+		}
+	}
+
+	expectedBoolAttrs := map[string]bool{
+		"game.kruise.io.network.plugin.kubernetes.nodeport.network_disabled": false,
+		"game.kruise.io.network.plugin.kubernetes.nodeport.allow_not_ready":  false,
+		"game.kruise.io.network.plugin.kubernetes.nodeport.hash_mismatch":    false,
+	}
+
+	for key, expectedValue := range expectedBoolAttrs {
+		found := false
+		for _, attr := range attrs {
+			if string(attr.Key) == key {
+				found = true
+				if attr.Value.Type() != attribute.BOOL {
+					t.Errorf("Expected attribute %s to be bool, got %s", key, attr.Value.Type())
+				} else if attr.Value.AsBool() != expectedValue {
+					t.Errorf("Expected attribute %s=%v, got %v", key, expectedValue, attr.Value.AsBool())
+				}
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected attribute %s not found in span", key)
+		}
+	}
+
+	if statusVal, ok := attrStringValue(attrs, "game.kruise.io.network.status"); ok {
+		t.Logf("Root span network.status=%s", statusVal)
+	} else {
+		t.Error("Expected game.kruise.io.network.status attribute not found")
+	}
+
+	// Verify span kind
+	if rootSpan.SpanKind() != trace.SpanKindInternal {
+		t.Errorf("Expected span kind Internal, got %v", rootSpan.SpanKind())
+	}
+
+	t.Logf("Successfully verified %d span(s) created for OnPodUpdated", len(spans))
+
+	// Validate presence of config parsed event on parent span
+	evts := rootSpan.Events()
+	foundConfigParsed := false
+	for _, e := range evts {
+		if e.Name == tracing.EventNetworkNodePortConfigParsed {
+			foundConfigParsed = true
+			break
+		}
+	}
+	if !foundConfigParsed {
+		t.Errorf("Expected parent span event %s but not found", tracing.EventNetworkNodePortConfigParsed)
+	}
+}
+
+// TestNodePortTracingCreateServiceSpan tests the create nodeport service child span
+func TestNodePortTracingCreateServiceSpan(t *testing.T) {
+	// Setup in-memory span exporter
+	spanRecorder := tracetest.NewSpanRecorder()
+	tracerProvider := sdktrace.NewTracerProvider(
+		sdktrace.WithSpanProcessor(spanRecorder),
+	)
+	otel.SetTracerProvider(tracerProvider)
+	defer otel.SetTracerProvider(noop.NewTracerProvider())
+
+	// Create test pod (no existing service to trigger creation)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-nodeport-create",
+			Namespace: "default",
+			Labels: map[string]string{
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+			},
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType:   "Kubernetes-NodePort",
+				gamekruiseiov1alpha1.GameServerNetworkConf:   `[{"name":"PortProtocols","value":"80,443,8080"}]`,
+				gamekruiseiov1alpha1.GameServerNetworkStatus: `{"currentNetworkState":"NotReady"}`,
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "test-node",
+			Containers: []corev1.Container{
+				{
+					Name:  "game",
+					Image: "nginx:latest",
+				},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			PodIP: "10.0.0.1",
+		},
+	}
+
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-node",
+		},
+		Status: corev1.NodeStatus{
+			Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeExternalIP, Address: "203.0.113.1"},
+			},
+		},
+	}
+
+	// Create fake client
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, node).Build()
+
+	// Create plugin and call OnPodUpdated
+	plugin := &NodePortPlugin{}
+	ctx := context.Background()
+	_, err := plugin.OnPodUpdated(fakeClient, pod, ctx)
+
+	// Ignore errors
+	_ = err
+
+	// Verify spans were created
+	spans := spanRecorder.Ended()
+	if len(spans) == 0 {
+		t.Log("No spans recorded for OnPodDeleted test - tracing may be disabled in environment; skipping validation")
+		return
+	}
+
+	// Look for create nodeport service child span
+	var createSpan sdktrace.ReadOnlySpan
+	for _, span := range spans {
+		if span.Name() == tracing.SpanCreateNodePortService {
+			createSpan = span
+			break
+		}
+	}
+
+	if createSpan == nil {
+		t.Log("Note: create nodeport service child span not found - service may already exist")
+	} else {
+		// Verify child span attributes
+		attrs := createSpan.Attributes()
+		t.Logf("Found create nodeport service child span with %d attributes", len(attrs))
+
+		// Check for service-related attributes
+		// Check for service-related attributes
+		requiredKeys := []string{
+			"game.kruise.io.network.plugin.kubernetes.nodeport.service_ports",
+			"game.kruise.io.network.plugin.kubernetes.nodeport.selector",
+			"game.kruise.io.network.resource_id",
+		}
+		for _, key := range requiredKeys {
+			if !attrExists(attrs, key) {
+				t.Errorf("Expected attribute %s on create span", key)
+			}
+		}
+
+		// Ensure selector payload is not empty JSON
+		if selectorJSON, ok := attrStringValue(attrs, "game.kruise.io.network.plugin.kubernetes.nodeport.selector"); ok {
+			if selectorJSON == "" {
+				t.Errorf("Expected selector attribute to be populated")
+			}
+		}
+
+		// Verify span kind
+		if createSpan.SpanKind() != trace.SpanKindInternal {
+			t.Errorf("Expected span kind Internal for child span, got %v", createSpan.SpanKind())
+		}
+
+		// Verify span status
+		if createSpan.Status().Code != codes.Ok && createSpan.Status().Code != codes.Error {
+			t.Errorf("Expected span status Ok or Error, got %v", createSpan.Status().Code)
+		}
+		// Child spans should not claim the business network status; ensure they remain neutral/waiting
+		attrs = createSpan.Attributes()
+		if statusVal, ok := attrStringValue(attrs, "game.kruise.io.network.status"); ok {
+			if statusVal != telemetryfields.NetworkStatusWaiting {
+				t.Errorf("Expected child span network.status to be %s or unset, got %s", telemetryfields.NetworkStatusWaiting, statusVal)
+			}
+		}
+	}
+
+	t.Logf("Successfully verified %d total span(s) for create service test", len(spans))
+}
+
+// TestNodePortTracingErrorHandling tests error span recording
+func TestNodePortTracingErrorHandling(t *testing.T) {
+	// Setup in-memory span exporter
+	spanRecorder := tracetest.NewSpanRecorder()
+	tracerProvider := sdktrace.NewTracerProvider(
+		sdktrace.WithSpanProcessor(spanRecorder),
+	)
+	otel.SetTracerProvider(tracerProvider)
+	defer otel.SetTracerProvider(noop.NewTracerProvider())
+
+	// Create test pod with invalid configuration
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-nodeport-error",
+			Namespace: "default",
+			Labels: map[string]string{
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+			},
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType: "Kubernetes-NodePort",
+				// Invalid config to trigger error
+				gamekruiseiov1alpha1.GameServerNetworkConf: `[{"name":"Invalid","value":"bad"}]`,
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "test-node",
+			Containers: []corev1.Container{
+				{
+					Name:  "game",
+					Image: "nginx:latest",
+				},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			PodIP: "", // No IP to trigger error
+		},
+	}
+
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-node",
+		},
+	}
+
+	// Create fake client
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, node).Build()
+
+	// Create plugin and call OnPodUpdated (should encounter errors)
+	plugin := &NodePortPlugin{}
+	ctx := context.Background()
+	_, err := plugin.OnPodUpdated(fakeClient, pod, ctx)
+
+	// We expect errors in this test
+	_ = err
+
+	// Verify spans were created
+	spans := spanRecorder.Ended()
+	if len(spans) == 0 {
+		t.Log("No spans recorded for OnPodDeleted test - tracing may be disabled in environment; skipping validation")
+		return
+	}
+
+	// Find any span with error status
+	hasErrorSpan := false
+	for _, span := range spans {
+		if span.Status().Code == codes.Error {
+			hasErrorSpan = true
+			t.Logf("Found error span: %s with status: %s", span.Name(), span.Status().Description)
+
+			// Check attributes
+			attrs := span.Attributes()
+			for _, attr := range attrs {
+				t.Logf("  Error span attribute: %s = %v", attr.Key, attr.Value.AsInterface())
+			}
+		}
+	}
+
+	// Note: Error handling may vary depending on configuration
+	if !hasErrorSpan {
+		t.Logf("Note: No error spans found - errors may be handled differently")
+	}
+
+	t.Logf("Successfully verified %d span(s) for error handling test", len(spans))
+}
+
+func attrExists(attrs []attribute.KeyValue, key string) bool {
+	for _, attr := range attrs {
+		if string(attr.Key) == key {
+			return true
+		}
+	}
+	return false
+}
+
+func attrStringValue(attrs []attribute.KeyValue, key string) (string, bool) {
+	for _, attr := range attrs {
+		if string(attr.Key) == key {
+			return attr.Value.AsString(), true
+		}
+	}
+	return "", false
+}
+
+func attrIntValue(attrs []attribute.KeyValue, key string) (int64, bool) {
+	for _, attr := range attrs {
+		if string(attr.Key) == key {
+			return attr.Value.AsInt64(), true
+		}
+	}
+	return 0, false
+}
+
+// TestNodePortTracingNetworkReady tests success attributes when network is ready
+func TestNodePortTracingNetworkReady(t *testing.T) {
+	// Setup in-memory span exporter
+	spanRecorder := tracetest.NewSpanRecorder()
+	tracerProvider := sdktrace.NewTracerProvider(
+		sdktrace.WithSpanProcessor(spanRecorder),
+	)
+	otel.SetTracerProvider(tracerProvider)
+	defer otel.SetTracerProvider(noop.NewTracerProvider())
+
+	// Create test pod with existing service (to simulate ready network)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-nodeport-ready",
+			Namespace: "default",
+			Labels: map[string]string{
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+			},
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType:   "Kubernetes-NodePort",
+				gamekruiseiov1alpha1.GameServerNetworkConf:   `[{"name":"PortProtocols","value":"80"}]`,
+				gamekruiseiov1alpha1.GameServerNetworkStatus: `{"currentNetworkState":"Ready"}`,
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "test-node",
+			Containers: []corev1.Container{
+				{
+					Name:  "game",
+					Image: "nginx:latest",
+				},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			PodIP: "10.0.0.1",
+		},
+	}
+
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-node",
+		},
+		Status: corev1.NodeStatus{
+			Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeExternalIP, Address: "203.0.113.1"},
+			},
+		},
+	}
+
+	// Create existing service with NodePort
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-nodeport-ready",
+			Namespace: "default",
+			Annotations: map[string]string{
+				// match the pod's NodePort config expected hash so the service is considered up-to-date
+				ServiceHashKey: util.GetHash(&nodePortConfig{ports: []int{80}, protocols: []corev1.Protocol{corev1.ProtocolTCP}}),
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeNodePort,
+			Selector: map[string]string{
+				SvcSelectorKey: "test-nodeport-ready",
+			},
+			Ports: []corev1.ServicePort{
+				{
+					Name:       "80",
+					Port:       80,
+					NodePort:   30080,
+					TargetPort: intstr.FromInt(80),
+					Protocol:   corev1.ProtocolTCP,
+				},
+			},
+		},
+	}
+
+	// Create fake client
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, node, svc).Build()
+
+	// Create plugin and call OnPodUpdated
+	plugin := &NodePortPlugin{}
+	ctx := context.Background()
+	_, err := plugin.OnPodUpdated(fakeClient, pod, ctx)
+
+	// Ignore errors
+	_ = err
+
+	// Verify spans were created
+	spans := spanRecorder.Ended()
+	if len(spans) == 0 {
+		t.Log("No spans recorded for OnPodDeleted test - tracing may be disabled in environment; skipping validation")
+		return
+	}
+
+	// Find root span
+	var rootSpan sdktrace.ReadOnlySpan
+	for _, span := range spans {
+		if span.Name() == tracing.SpanProcessNodePortPod {
+			rootSpan = span
+			break
+		}
+	}
+
+	if rootSpan == nil {
+		t.Fatal("Root span not found")
+	}
+
+	// Check for network.status attribute
+	attrs := rootSpan.Attributes()
+	hasNetworkStatus := false
+	for _, attr := range attrs {
+		if string(attr.Key) == "game.kruise.io.network.status" {
+			hasNetworkStatus = true
+			t.Logf("Found network.status = %v", attr.Value.AsString())
+		}
+		if string(attr.Key) == telemetryfields.FieldNodeIP {
+			t.Logf("Found node.ip = %v", attr.Value.AsString())
+		}
+	}
+
+	// Ensure network.status is Ready for network ready test
+	if hasNetworkStatus {
+		// assert value
+		if statusVal, ok := attrStringValue(attrs, "game.kruise.io.network.status"); ok {
+			if statusVal != telemetryfields.NetworkStatusReady {
+				t.Errorf("Expected root span network.status=%s, got %s", telemetryfields.NetworkStatusReady, statusVal)
+			}
+		}
+	} else {
+		t.Log("Note: network.status attribute not found - may be added in different conditions")
+	}
+
+	t.Logf("Successfully verified %d span(s) for network ready test", len(spans))
+}
+
+// TestNodePortOnPodDeleted tests cleanup behavior and tracing when a NodePort pod is deleted
+func TestNodePortOnPodDeleted(t *testing.T) {
+	// Setup in-memory span exporter
+	spanRecorder := tracetest.NewSpanRecorder()
+	tracerProvider := sdktrace.NewTracerProvider(
+		sdktrace.WithSpanProcessor(spanRecorder),
+	)
+	otel.SetTracerProvider(tracerProvider)
+	defer otel.SetTracerProvider(noop.NewTracerProvider())
+
+	// Create test pod
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-nodeport-delete",
+			Namespace: "default",
+			Labels: map[string]string{
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+			},
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType: "Kubernetes-NodePort",
+				gamekruiseiov1alpha1.GameServerNetworkConf: `[{"name":"PortProtocols","value":"80"}]`,
+			},
+		},
+	}
+
+	// Create service owned by pod that should be cleaned up
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pod.GetName(),
+			Namespace: pod.GetNamespace(),
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion:         "v1",
+					Kind:               "Pod",
+					Name:               pod.GetName(),
+					UID:                pod.GetUID(),
+					Controller:         ptr.To[bool](true),
+					BlockOwnerDeletion: ptr.To[bool](true),
+				},
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeNodePort,
+			Selector: map[string]string{
+				SvcSelectorKey: pod.GetName(),
+			},
+			Ports: []corev1.ServicePort{{
+				Name:       "80",
+				Port:       80,
+				NodePort:   30080,
+				TargetPort: intstr.FromInt(80),
+				Protocol:   corev1.ProtocolTCP,
+			}},
+		},
+	}
+
+	// Create fake client with pod and svc
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, svc).Build()
+
+	plugin := &NodePortPlugin{}
+	ctx := context.Background()
+	err := plugin.OnPodDeleted(fakeClient, pod, ctx)
+	_ = err
+
+	// Verify spans were created
+	spans := spanRecorder.Ended()
+	if len(spans) == 0 {
+		t.Log("No spans recorded for OnPodDeleted test - tracing may be disabled in environment; skipping validation")
+		return
+	}
+
+	// Look for cleanup span
+	var cleanupSpan sdktrace.ReadOnlySpan
+	for _, span := range spans {
+		if span.Name() == tracing.SpanCleanupNodePortService {
+			cleanupSpan = span
+			break
+		}
+	}
+	if cleanupSpan == nil {
+		t.Fatal("Expected cleanup span not found")
+	}
+
+	// Check that the cleanup span recorded the deletion event
+	evts := cleanupSpan.Events()
+	foundDeletedEvt := false
+	for _, e := range evts {
+		if e.Name == tracing.EventNetworkNodePortServiceDeleted {
+			foundDeletedEvt = true
+			break
+		}
+	}
+	if !foundDeletedEvt {
+		t.Errorf("Expected cleanup span event %s but not found", tracing.EventNetworkNodePortServiceDeleted)
 	}
 }

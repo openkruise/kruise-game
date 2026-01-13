@@ -25,6 +25,7 @@ import (
 
 	"k8s.io/klog/v2"
 
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"github.com/openkruise/kruise-game/pkg/webhook/util/generator"
 	"github.com/openkruise/kruise-game/pkg/webhook/util/writer/atomic"
 )
@@ -122,7 +123,7 @@ func prepareToWrite(dir string) error {
 	_, err := os.Stat(dir)
 	switch {
 	case os.IsNotExist(err):
-		klog.Info("cert directory doesn't exist, creating", "directory", dir)
+		klog.Info("cert directory doesn't exist, creating", telemetryfields.FieldDirectory, dir)
 		// TODO: figure out if we can reduce the permission. (Now it's 0777)
 		err = os.MkdirAll(dir, 0777)
 		if err != nil {
@@ -139,14 +140,14 @@ func prepareToWrite(dir string) error {
 		if os.IsNotExist(err) {
 			continue
 		} else if err != nil {
-			klog.Error(err, "unable to stat file", "file", abspath)
+			klog.Error(err, "unable to stat file", telemetryfields.FieldFile, abspath)
 		}
 		_, err = os.Readlink(abspath)
 		// if it's not a symbolic link
 		if err != nil {
 			err = os.Remove(abspath)
 			if err != nil {
-				klog.Error(err, "unable to remove old file", "file", abspath)
+				klog.Error(err, "unable to remove old file", telemetryfields.FieldFile, abspath)
 			}
 		}
 	}

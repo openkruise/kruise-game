@@ -18,19 +18,30 @@ package kubernetes
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/go-logr/logr"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
+	"github.com/openkruise/kruise-game/pkg/logging"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
+	"github.com/openkruise/kruise-game/pkg/tracing"
 	"github.com/openkruise/kruise-game/pkg/util"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strconv"
-	"strings"
 )
 
 const (
@@ -39,6 +50,24 @@ const (
 	PortProtocolsConfigName = "PortProtocols"
 
 	SvcSelectorDisabledKey = "game.kruise.io/svc-selector-disabled"
+
+	nodePortComponentName    = "okg-controller-manager"
+	nodePortPluginSlug       = telemetryfields.NetworkPluginKubernetesNodePort
+	nodePortReconcileTrigger = "pod.updated"
+	nodePortSelectorBefore   = "game.kruise.io.nodeport.selector.before"
+	nodePortSelectorAfter    = "game.kruise.io.nodeport.selector.after"
+)
+
+var (
+	nodePortAttrNetworkDisabledKey = attribute.Key("game.kruise.io.network.plugin.kubernetes.nodeport.network_disabled")
+	nodePortAttrHashMismatchKey    = attribute.Key("game.kruise.io.network.plugin.kubernetes.nodeport.hash_mismatch")
+	nodePortAttrServicePortsKey    = attribute.Key("game.kruise.io.network.plugin.kubernetes.nodeport.service_ports")
+	nodePortAttrServicePortCount   = attribute.Key("game.kruise.io.network.plugin.kubernetes.nodeport.service_port_count")
+	nodePortAttrSelectorKey        = attribute.Key("game.kruise.io.network.plugin.kubernetes.nodeport.selector")
+	nodePortAttrAllowNotReadyKey   = attribute.Key("game.kruise.io.network.plugin.kubernetes.nodeport.allow_not_ready")
+	nodePortAttrAddressListKey     = attribute.Key("game.kruise.io.network.plugin.kubernetes.nodeport.address_list")
+	nodePortAttrSelectorBeforeKey  = attribute.Key("game.kruise.io.network.plugin.kubernetes.nodeport.selector_before")
+	nodePortAttrSelectorAfterKey   = attribute.Key("game.kruise.io.network.plugin.kubernetes.nodeport.selector_after")
 )
 
 type NodePortPlugin struct {
@@ -61,16 +90,70 @@ func (n *NodePortPlugin) OnPodAdded(client client.Client, pod *corev1.Pod, ctx c
 }
 
 func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
+	// Create root span for NodePort OnPodUpdated
+	tracer := otel.Tracer("okg-controller-manager")
+	ctx, span := startNodePortSpan(ctx, tracer, tracing.SpanProcessNodePortPod, pod)
+	// track final network status and error to ensure a single final attribute is set on the parent span
+	finalNetworkStatus := telemetryfields.NetworkStatusWaiting
+	var finalErr error
+	var finalErrorType string
+	finalStatus := codes.Ok
+	finalMessage := "nodeport pod processed"
+	defer func() {
+		if r := recover(); r != nil {
+			finalErr = fmt.Errorf("panic: %v", r)
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeInternal
+			finalStatus = codes.Error
+			finalMessage = fmt.Sprintf("panic: %v", r)
+		}
+		if finalErr != nil {
+			span.RecordError(finalErr)
+			finalStatus = codes.Error
+			if finalMessage == "nodeport pod processed" {
+				finalMessage = finalErr.Error()
+			}
+			if finalErrorType != "" {
+				span.SetAttributes(tracing.AttrErrorType(finalErrorType))
+			}
+		}
+		span.SetAttributes(tracing.AttrNetworkStatus(finalNetworkStatus))
+		span.SetStatus(finalStatus, finalMessage)
+		span.End()
+	}()
+	logger := nodePortLogger(ctx, pod).WithValues(telemetryfields.FieldOperation, "update")
+	serviceKey := fmt.Sprintf("%s/%s", pod.GetNamespace(), pod.GetName())
+
 	networkManager := utils.NewNetworkManager(pod, client)
 
 	networkStatus, _ := networkManager.GetNetworkStatus()
 	networkConfig := networkManager.GetNetworkConfig()
+	currentState := normalizeNetworkState(networkStatus)
+	span.SetAttributes(
+		tracing.AttrReconcileTrigger(nodePortReconcileTrigger),
+		nodePortAttrNetworkDisabledKey.Bool(networkManager.GetNetworkDisabled()),
+		nodePortAttrAllowNotReadyKey.Bool(util.IsAllowNotReadyContainers(networkConfig)),
+		nodePortAttrHashMismatchKey.Bool(false),
+	)
+	// set an initial parent network status; defer will write the final network status
+	finalNetworkStatus = currentState
+	logger.Info("Processing NodePort pod update",
+		telemetryfields.FieldNetworkDisabled, networkManager.GetNetworkDisabled(),
+		telemetryfields.FieldAllowNotReadyContainers, util.IsAllowNotReadyContainers(networkConfig),
+		telemetryfields.FieldNetworkState, currentState,
+	)
 	npc, err := parseNodePortConfig(networkConfig)
+	span.AddEvent(tracing.EventNetworkNodePortConfigParsed)
 	if err != nil {
-		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
+		logger.Error(err, "Failed to parse NodePort network config", telemetryfields.FieldConfigEntries, len(networkConfig))
+		finalErr = err
+		finalErrorType = telemetryfields.ErrorTypeParameter
+		finalNetworkStatus = telemetryfields.NetworkStatusError
+		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
 	}
 
 	if networkStatus == nil {
+		logger.Info("Network status missing, marking pod as not_ready")
 		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
 			CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
 		}, pod)
@@ -85,49 +168,147 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 	}, svc)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return pod, cperrors.ToPluginError(client.Create(ctx, consNodePortSvc(npc, pod, client, ctx)), cperrors.ApiCallError)
+			logger.Info("NodePort service missing, creating new service", telemetryfields.FieldService, serviceKey, telemetryfields.FieldPortCount, len(npc.ports))
+			_, createSpan := startNodePortSpan(ctx, tracer, tracing.SpanCreateNodePortService, pod,
+				tracing.AttrServiceName(pod.GetName()),
+				tracing.AttrServiceNamespace(pod.GetNamespace()),
+				nodePortAttrServicePortCount.Int(len(npc.ports)),
+			)
+			defer createSpan.End()
+			svcToCreate := consNodePortSvc(npc, pod, client, ctx)
+			createSpan.SetAttributes(
+				attribute.String(telemetryfields.FieldK8sServiceType, string(corev1.ServiceTypeNodePort)),
+				nodePortAttrServicePortsKey.String(formatNodePortServicePorts(svcToCreate.Spec.Ports)),
+				nodePortAttrSelectorKey.String(formatNodePortSelector(svcToCreate.Spec.Selector)),
+			)
+			err := client.Create(ctx, svcToCreate)
+			if err != nil {
+				logger.Error(err, "Failed to create NodePort service", telemetryfields.FieldService, serviceKey)
+				createSpan.RecordError(err)
+				createSpan.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall))
+				createSpan.SetStatus(codes.Error, "failed to create service")
+				return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
+			}
+			createSpan.SetAttributes(
+				tracing.AttrNetworkResourceID(string(svcToCreate.GetUID())),
+			)
+			createSpan.SetStatus(codes.Ok, "service created successfully")
+			logger.Info("NodePort service created", telemetryfields.FieldService, serviceKey, telemetryfields.FieldServiceUID, svcToCreate.GetUID(), telemetryfields.FieldPortCount, len(svcToCreate.Spec.Ports))
+			span.AddEvent(tracing.EventNetworkNodePortServiceCreated, trace.WithAttributes(nodePortAttrServicePortCount.Int(len(npc.ports))))
+			return pod, nil
 		}
-		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
+		logger.Error(err, "Failed to get NodePort service", telemetryfields.FieldService, serviceKey)
+		finalErr = err
+		finalErrorType = telemetryfields.ErrorTypeAPICall
+		finalNetworkStatus = telemetryfields.NetworkStatusError
+		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
 
 	// update svc
 	if util.GetHash(npc) != svc.GetAnnotations()[ServiceHashKey] {
+		logger.Info("NodePort service hash mismatch detected, updating service", telemetryfields.FieldService, serviceKey,
+			telemetryfields.FieldCurrentHash, svc.GetAnnotations()[ServiceHashKey],
+			telemetryfields.FieldExpectedHash, util.GetHash(npc))
+		span.SetAttributes(nodePortAttrHashMismatchKey.Bool(true))
+		finalNetworkStatus = telemetryfields.NetworkStatusNotReady
+		finalErrorType = telemetryfields.ErrorTypeResourceNotReady
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		if err != nil {
 			return pod, cperrors.NewPluginErrorWithMessage(cperrors.InternalError, err.Error())
 		}
+		// record an event that the service needs update
+		span.AddEvent(tracing.EventNetworkNodePortServiceUpdated, trace.WithAttributes(nodePortAttrServicePortCount.Int(len(svc.Spec.Ports))))
 		return pod, cperrors.ToPluginError(client.Update(ctx, consNodePortSvc(npc, pod, client, ctx)), cperrors.ApiCallError)
 	}
 
 	// disable network
 	if networkManager.GetNetworkDisabled() && svc.Spec.Selector[SvcSelectorKey] == pod.GetName() {
-		newSelector := svc.Spec.Selector
-		newSelector[SvcSelectorDisabledKey] = pod.GetName()
-		delete(svc.Spec.Selector, SvcSelectorKey)
-		svc.Spec.Selector = newSelector
-		return pod, cperrors.ToPluginError(client.Update(ctx, svc), cperrors.ApiCallError)
+		selectorBefore := copyStringMap(svc.Spec.Selector)
+		selectorAfter := copyStringMap(svc.Spec.Selector)
+		selectorAfter[SvcSelectorDisabledKey] = pod.GetName()
+		delete(selectorAfter, SvcSelectorKey)
+		logger.Info("Disabling NodePort selector for pod", telemetryfields.FieldService, serviceKey,
+			nodePortSelectorBefore, formatNodePortSelector(selectorBefore),
+			nodePortSelectorAfter, formatNodePortSelector(selectorAfter))
+		_, toggleSpan := startNodePortSpan(ctx, tracer, tracing.SpanToggleNodePortSelector, pod,
+			attribute.String(telemetryfields.FieldSelectorAction, "disable"),
+			tracing.AttrServiceName(svc.GetName()),
+			nodePortAttrSelectorBeforeKey.String(formatNodePortSelector(selectorBefore)),
+			nodePortAttrSelectorAfterKey.String(formatNodePortSelector(selectorAfter)),
+			nodePortAttrAllowNotReadyKey.Bool(util.IsAllowNotReadyContainers(networkConfig)),
+		)
+		defer toggleSpan.End()
+		svc.Spec.Selector = selectorAfter
+		err = client.Update(ctx, svc)
+		if err != nil {
+			logger.Error(err, "Failed to disable NodePort selector", telemetryfields.FieldService, serviceKey)
+			toggleSpan.RecordError(err)
+			toggleSpan.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall))
+			toggleSpan.SetStatus(codes.Error, "failed to disable nodeport selector")
+		} else {
+			logger.Info("Disabled NodePort selector", telemetryfields.FieldService, serviceKey)
+			toggleSpan.SetStatus(codes.Ok, "nodeport selector disabled")
+			span.AddEvent(tracing.EventNetworkNodePortSelectorToggled, trace.WithAttributes(
+				attribute.String(telemetryfields.FieldSelectorAction, "disable"),
+				nodePortAttrSelectorBeforeKey.String(formatNodePortSelector(selectorBefore)),
+				nodePortAttrSelectorAfterKey.String(formatNodePortSelector(selectorAfter)),
+			))
+		}
+		return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
 	}
 
 	// enable network
 	if !networkManager.GetNetworkDisabled() && svc.Spec.Selector[SvcSelectorDisabledKey] == pod.GetName() {
-		newSelector := svc.Spec.Selector
-		newSelector[SvcSelectorKey] = pod.GetName()
-		delete(svc.Spec.Selector, SvcSelectorDisabledKey)
-		svc.Spec.Selector = newSelector
-		return pod, cperrors.ToPluginError(client.Update(ctx, svc), cperrors.ApiCallError)
+		selectorBefore := copyStringMap(svc.Spec.Selector)
+		selectorAfter := copyStringMap(svc.Spec.Selector)
+		selectorAfter[SvcSelectorKey] = pod.GetName()
+		delete(selectorAfter, SvcSelectorDisabledKey)
+		logger.Info("Enabling NodePort selector for pod", telemetryfields.FieldService, serviceKey,
+			nodePortSelectorBefore, formatNodePortSelector(selectorBefore),
+			nodePortSelectorAfter, formatNodePortSelector(selectorAfter))
+		_, toggleSpan := startNodePortSpan(ctx, tracer, tracing.SpanToggleNodePortSelector, pod,
+			attribute.String(telemetryfields.FieldSelectorAction, "enable"),
+			tracing.AttrServiceName(svc.GetName()),
+			nodePortAttrSelectorBeforeKey.String(formatNodePortSelector(selectorBefore)),
+			nodePortAttrSelectorAfterKey.String(formatNodePortSelector(selectorAfter)),
+			nodePortAttrAllowNotReadyKey.Bool(util.IsAllowNotReadyContainers(networkConfig)),
+		)
+		defer toggleSpan.End()
+		svc.Spec.Selector = selectorAfter
+		err = client.Update(ctx, svc)
+		if err != nil {
+			logger.Error(err, "Failed to enable NodePort selector", telemetryfields.FieldService, serviceKey)
+			toggleSpan.RecordError(err)
+			toggleSpan.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall))
+			toggleSpan.SetStatus(codes.Error, "failed to enable nodeport selector")
+		} else {
+			logger.Info("Enabled NodePort selector", telemetryfields.FieldService, serviceKey)
+			toggleSpan.SetStatus(codes.Ok, "nodeport selector enabled")
+			span.AddEvent(tracing.EventNetworkNodePortSelectorToggled, trace.WithAttributes(
+				attribute.String(telemetryfields.FieldSelectorAction, "enable"),
+				nodePortAttrSelectorBeforeKey.String(formatNodePortSelector(selectorBefore)),
+				nodePortAttrSelectorAfterKey.String(formatNodePortSelector(selectorAfter)),
+			))
+		}
+		return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
 	}
 
 	// allow not ready containers
 	if util.IsAllowNotReadyContainers(networkManager.GetNetworkConfig()) {
 		toUpDateSvc, err := utils.AllowNotReadyContainers(client, ctx, pod, svc, false)
 		if err != nil {
+			logger.Error(err, "Failed to evaluate allow-not-ready containers", telemetryfields.FieldService, serviceKey)
 			return pod, err
 		}
 
 		if toUpDateSvc {
+			logger.Info("Updating NodePort service to allow not-ready containers", telemetryfields.FieldService, serviceKey)
+			// record update event on parent span
+			span.AddEvent(tracing.EventNetworkNodePortServiceUpdated)
 			err := client.Update(ctx, svc)
 			if err != nil {
+				logger.Error(err, "Failed to update service for allow-not-ready containers", telemetryfields.FieldService, serviceKey)
 				return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
 			}
 		}
@@ -139,11 +320,32 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 		Name: pod.Spec.NodeName,
 	}, node)
 	if err != nil {
-		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
+		if errors.IsNotFound(err) {
+			logger.Error(err, "Node not found for NodePort pod", telemetryfields.FieldK8sNodeName, pod.Spec.NodeName)
+			finalErr = err
+			finalErrorType = telemetryfields.ErrorTypeResourceNotReady
+			finalNetworkStatus = telemetryfields.NetworkStatusNotReady
+			finalStatus = codes.Error
+			finalMessage = "node not scheduled yet"
+			return pod, nil
+		}
+		logger.Error(err, "Failed to get node for NodePort pod", telemetryfields.FieldK8sNodeName, pod.Spec.NodeName)
+		finalErr = err
+		finalErrorType = telemetryfields.ErrorTypeAPICall
+		finalNetworkStatus = telemetryfields.NetworkStatusError
+		finalStatus = codes.Error
+		finalMessage = "failed to get node"
+		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
 
 	if pod.Status.PodIP == "" {
-		// Pod IP not exist, Network NotReady
+		// Pod IP not exist -> Network NotReady
+		errPodIPNotReady := fmt.Errorf("pod IP not assigned")
+		logger.V(1).Info("Pod IP not ready for NodePort, waiting", telemetryfields.FieldService, serviceKey)
+		finalErr = errPodIPNotReady
+		finalErrorType = telemetryfields.ErrorTypeResourceNotReady
+		finalNetworkStatus = telemetryfields.NetworkStatusNotReady
+		finalStatus = codes.Error
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
@@ -151,9 +353,18 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 
 	internalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
 	externalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
+	nodeIP := getAddress(node)
 	for _, port := range svc.Spec.Ports {
 		instrIPort := port.TargetPort
 		if port.NodePort == 0 {
+			errNodePortNotReady := fmt.Errorf("nodeport %s not assigned yet", port.Name)
+			logger.V(1).Info("NodePort not yet allocated, waiting", telemetryfields.FieldService, serviceKey, telemetryfields.FieldPort, port.Name)
+			finalErr = errNodePortNotReady
+			finalErrorType = telemetryfields.ErrorTypeResourceNotReady
+			finalNetworkStatus = telemetryfields.NetworkStatusNotReady
+			finalStatus = codes.Error
+			// record an event on parent to indicate waiting for node port
+			span.AddEvent(tracing.EventGameServerReconcileWaitNetworkState, trace.WithAttributes(attribute.String(telemetryfields.FieldPortName, port.Name)))
 			networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 			pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 			return pod, cperrors.ToPluginError(err, cperrors.InternalError)
@@ -170,7 +381,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 			},
 		}
 		externalAddress := gamekruiseiov1alpha1.NetworkAddress{
-			IP: getAddress(node),
+			IP: nodeIP,
 			Ports: []gamekruiseiov1alpha1.NetworkPort{
 				{
 					Name:     instrIPort.String(),
@@ -185,11 +396,97 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 	networkStatus.InternalAddresses = internalAddresses
 	networkStatus.ExternalAddresses = externalAddresses
 	networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkReady
+
+	_, publishSpan := startNodePortSpan(ctx, tracer, tracing.SpanPublishNodePortStatus, pod,
+		attribute.String(telemetryfields.FieldNodeIP, nodeIP),
+		attribute.Int(telemetryfields.FieldInternalAddresses, len(internalAddresses)),
+		attribute.Int(telemetryfields.FieldExternalAddresses, len(externalAddresses)),
+		nodePortAttrAddressListKey.String(formatNodePortAddresses(internalAddresses, externalAddresses)),
+	)
+	publishSpan.SetStatus(codes.Ok, "nodeport addresses published")
+	publishSpan.End()
+	logger.Info("Published NodePort status",
+		telemetryfields.FieldService, serviceKey,
+		telemetryfields.FieldNodeIP, nodeIP,
+		telemetryfields.FieldInternalAddresses, len(internalAddresses),
+		telemetryfields.FieldExternalAddresses, len(externalAddresses),
+	)
+
+	// Record success
+	finalNetworkStatus = telemetryfields.NetworkStatusReady
+	finalStatus = codes.Ok
+	finalMessage = "nodeport pod processed"
+
 	pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 	return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 }
 
 func (n *NodePortPlugin) OnPodDeleted(client client.Client, pod *corev1.Pod, ctx context.Context) cperrors.PluginError {
+	tracer := otel.Tracer("okg-controller-manager")
+	ctx, span := startNodePortSpan(ctx, tracer, tracing.SpanCleanupNodePortService, pod)
+	finalNetworkStatus := telemetryfields.NetworkStatusNotReady
+	var finalErr error
+	var finalErrorType string
+	finalStatus := codes.Ok
+	finalMessage := "nodeport cleanup processed"
+	defer func() {
+		if r := recover(); r != nil {
+			finalErr = fmt.Errorf("panic: %v", r)
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeInternal
+			finalStatus = codes.Error
+			finalMessage = fmt.Sprintf("panic: %v", r)
+		}
+		if finalErr != nil {
+			span.RecordError(finalErr)
+			finalStatus = codes.Error
+			if finalMessage == "nodeport cleanup processed" {
+				finalMessage = finalErr.Error()
+			}
+			if finalErrorType != "" {
+				span.SetAttributes(tracing.AttrErrorType(finalErrorType))
+			}
+		}
+		span.SetAttributes(tracing.AttrNetworkStatus(finalNetworkStatus))
+		span.SetStatus(finalStatus, finalMessage)
+		span.End()
+	}()
+
+	logger := nodePortLogger(ctx, pod).WithValues(telemetryfields.FieldOperation, "delete")
+	logger.Info("Processing NodePort pod DELETE operation")
+
+	// Delete the Service owned by this pod if it exists
+	svc := &corev1.Service{}
+	err := client.Get(ctx, types.NamespacedName{
+		Name:      pod.GetName(),
+		Namespace: pod.GetNamespace(),
+	}, svc)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			logger.V(1).Info("No NodePort service found for pod; nothing to cleanup")
+			finalMessage = "no nodeport service found"
+			return nil
+		}
+		logger.Error(err, "Failed to get NodePort service during cleanup")
+		finalErr = err
+		finalNetworkStatus = telemetryfields.NetworkStatusError
+		finalErrorType = telemetryfields.ErrorTypeAPICall
+		return cperrors.ToPluginError(err, cperrors.ApiCallError)
+	}
+
+	if err := client.Delete(ctx, svc); err != nil {
+		logger.Error(err, "Failed to delete NodePort service during cleanup")
+		finalErr = err
+		finalNetworkStatus = telemetryfields.NetworkStatusError
+		finalErrorType = telemetryfields.ErrorTypeAPICall
+		return cperrors.ToPluginError(err, cperrors.ApiCallError)
+	}
+
+	// emit cleanup event
+	span.AddEvent(tracing.EventNetworkNodePortServiceDeleted)
+	finalMessage = "nodeport service cleaned up"
+	finalNetworkStatus = telemetryfields.NetworkStatusNotReady
+	finalStatus = codes.Ok
 	return nil
 }
 
@@ -276,4 +573,119 @@ func consNodePortSvc(npc *nodePortConfig, pod *corev1.Pod, c client.Client, ctx 
 		},
 	}
 	return svc
+}
+
+func nodePortSpanAttrs(pod *corev1.Pod, extras ...attribute.KeyValue) []attribute.KeyValue {
+	attrExtras := []attribute.KeyValue{
+		tracing.AttrCloudProvider(tracing.CloudProviderKubernetes),
+	}
+	if pod != nil && pod.Spec.NodeName != "" {
+		attrExtras = append(attrExtras, tracing.AttrK8sNodeName(pod.Spec.NodeName))
+	}
+	attrExtras = append(attrExtras, extras...)
+	// For child spans we want to keep network status neutral; parent spans will set business status in defer.
+	attrExtras = tracing.EnsureNetworkStatusAttr(attrExtras, telemetryfields.NetworkStatusWaiting)
+	return tracing.BaseNetworkAttrs(nodePortComponentName, nodePortPluginSlug, pod, attrExtras...)
+}
+
+func startNodePortSpan(ctx context.Context, tracer trace.Tracer, name string, pod *corev1.Pod, extras ...attribute.KeyValue) (context.Context, trace.Span) {
+	return tracer.Start(ctx, name,
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(nodePortSpanAttrs(pod, extras...)...),
+	)
+}
+
+func formatNodePortServicePorts(ports []corev1.ServicePort) string {
+	type portSnapshot struct {
+		Name       string `json:"name,omitempty"`
+		Port       int32  `json:"port,omitempty"`
+		NodePort   int32  `json:"nodePort,omitempty"`
+		Protocol   string `json:"protocol,omitempty"`
+		TargetPort string `json:"targetPort,omitempty"`
+	}
+	snapshot := make([]portSnapshot, 0, len(ports))
+	for _, p := range ports {
+		snapshot = append(snapshot, portSnapshot{
+			Name:       p.Name,
+			Port:       p.Port,
+			NodePort:   p.NodePort,
+			Protocol:   string(p.Protocol),
+			TargetPort: p.TargetPort.String(),
+		})
+	}
+	return marshalToJSONString(snapshot)
+}
+
+func formatNodePortSelector(selector map[string]string) string {
+	if selector == nil {
+		return "{}"
+	}
+	return marshalToJSONString(selector)
+}
+
+func formatNodePortAddresses(internal, external []gamekruiseiov1alpha1.NetworkAddress) string {
+	type addressSnapshot struct {
+		Internal []gamekruiseiov1alpha1.NetworkAddress `json:"internal"`
+		External []gamekruiseiov1alpha1.NetworkAddress `json:"external"`
+	}
+	return marshalToJSONString(addressSnapshot{Internal: internal, External: external})
+}
+
+func marshalToJSONString(v interface{}) string {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func copyStringMap(source map[string]string) map[string]string {
+	if source == nil {
+		return map[string]string{}
+	}
+	clone := make(map[string]string, len(source))
+	for k, v := range source {
+		clone[k] = v
+	}
+	return clone
+}
+
+func normalizeNetworkState(status *gamekruiseiov1alpha1.NetworkStatus) string {
+	if status == nil || status.CurrentNetworkState == "" {
+		return telemetryfields.NetworkStatusNotReady
+	}
+	switch status.CurrentNetworkState {
+	case gamekruiseiov1alpha1.NetworkReady:
+		return telemetryfields.NetworkStatusReady
+	case gamekruiseiov1alpha1.NetworkNotReady:
+		return telemetryfields.NetworkStatusNotReady
+	case gamekruiseiov1alpha1.NetworkWaiting:
+		return telemetryfields.NetworkStatusWaiting
+	default:
+		return strings.ToLower(string(status.CurrentNetworkState))
+	}
+}
+
+func nodePortLogger(ctx context.Context, pod *corev1.Pod) logr.Logger {
+	logger := logging.FromContextWithTrace(ctx).WithValues(
+		telemetryfields.FieldComponent, "cloudprovider",
+		telemetryfields.FieldNetworkPluginName, nodePortPluginSlug,
+		telemetryfields.FieldPluginSlug, nodePortPluginSlug,
+	)
+	if pod != nil {
+		logger = logger.WithValues(
+			telemetryfields.FieldGameServerNamespace, pod.GetNamespace(),
+			telemetryfields.FieldGameServerName, pod.GetName(),
+		)
+		if nodeName := pod.Spec.NodeName; nodeName != "" {
+			logger = logger.WithValues(telemetryfields.FieldK8sNodeName, nodeName)
+		}
+		if gss := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; gss != "" {
+			logger = logger.WithValues(
+				telemetryfields.FieldGameServerSetNamespace, pod.GetNamespace(),
+				telemetryfields.FieldGameServerSetName, gss,
+			)
+		}
+	}
+	return logger
 }

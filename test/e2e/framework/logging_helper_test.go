@@ -85,3 +85,27 @@ func TestPatchDeploymentArgsMerge(t *testing.T) {
 		t.Errorf("expected first arg '--log-format=json', got %v", args[0])
 	}
 }
+
+func TestReplaceLogFormatArg(t *testing.T) {
+	t.Run("replaces existing entry", func(t *testing.T) {
+		input := []string{"--log-format=console", "--enable-tracing=true"}
+		result := ReplaceLogFormatArg(input, "json")
+		if result[0] != "--log-format=json" {
+			t.Fatalf("expected log format to be replaced with json, got %s", result[0])
+		}
+		if len(result) != len(input) {
+			t.Fatalf("expected slice length %d, got %d", len(input), len(result))
+		}
+	})
+
+	t.Run("appends when missing", func(t *testing.T) {
+		input := []string{"--enable-tracing=true"}
+		result := ReplaceLogFormatArg(input, "console")
+		if len(result) != 2 {
+			t.Fatalf("expected 2 args, got %d", len(result))
+		}
+		if result[len(result)-1] != "--log-format=console" {
+			t.Fatalf("expected appended log format arg, got %s", result[len(result)-1])
+		}
+	})
+}

@@ -3,6 +3,7 @@ package alibabacloud
 import (
 	"context"
 	"fmt"
+	stdErrors "errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -314,7 +315,7 @@ func (s *SlbSpPlugin) getOrAllocate(podNetConfig *lbSpConfig, pod *corev1.Pod) (
 	}
 
 	if selectId == "" {
-		return "", fmt.Errorf("%s", ErrorUpperLimit)
+		return "", stdErrors.New(ErrorUpperLimit)
 	}
 
 	s.numBackends[selectId]++

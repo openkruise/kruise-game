@@ -26,4 +26,21 @@ testbin/*
 *~
 .vscode
 
+# Temporary kustomize overlay for tracing
+config/.tracing-overlay-temp/
+
+# Coverage and test artifacts
+coverage.out
+cover.out
+*.prof
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Debug and temporary logs
 log_debug
+
+# Go cache
+.cache

@@ -1,0 +1,7 @@
+# Observability Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+  labels:
+    name: observability

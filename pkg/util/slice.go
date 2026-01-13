@@ -73,11 +73,11 @@ func GetSliceInAandInB(a, b []int) []int {
 }
 
 func IntSliceToString(number []int, delimiter string) string {
-	return strings.Trim(strings.Replace(fmt.Sprint(number), " ", delimiter, -1), "[]")
+	return strings.Trim(strings.ReplaceAll(fmt.Sprint(number), " ", delimiter), "[]")
 }
 
 func Int32SliceToString(number []int32, delimiter string) string {
-	return strings.Trim(strings.Replace(fmt.Sprint(number), " ", delimiter, -1), "[]")
+	return strings.Trim(strings.ReplaceAll(fmt.Sprint(number), " ", delimiter), "[]")
 }
 
 func StringToIntSlice(str string, delimiter string) []int {

@@ -2,6 +2,7 @@ package alibabacloud
 
 import (
 	"fmt"
+	"errors"
 	"reflect"
 	"sync"
 	"testing"
@@ -68,7 +69,7 @@ func TestSlpSpAllocate(t *testing.T) {
 			},
 			numBackends: map[string]int{"lb-xxa": 200},
 			podSlbId:    map[string]string{"a-ns/a-name": "lb-xxa"},
-			expErr:      fmt.Errorf("%s", ErrorUpperLimit),
+			expErr:      errors.New(ErrorUpperLimit),
 		},
 	}
 

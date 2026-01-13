@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/go-logr/logr/testr"
 	appspub "github.com/openkruise/kruise-api/apps/pub"
 	kruisev1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
@@ -196,7 +197,7 @@ func TestInitAsts(t *testing.T) {
 			Client: c,
 			Scheme: scheme,
 		}
-		if err := reconcile.initAsts(test.gss); err != nil {
+		if err := reconcile.initAsts(context.Background(), test.gss); err != nil {
 			t.Errorf("case %d: %s", i, err.Error())
 		}
 		initAsts := &kruiseV1beta1.StatefulSet{}
@@ -440,7 +441,7 @@ func TestGameServerSetController_Manager_Integration(t *testing.T) {
 			}
 
 			// Test Manager
-			manager := NewGameServerSetManager(gss, k8sClient, nil)
+			manager := NewGameServerSetManager(gss, k8sClient, nil, testr.New(t))
 			if manager == nil {
 				t.Fatal("Manager should not be nil")
 			}
@@ -528,7 +529,7 @@ func TestGameServerSetController_Status_Management(t *testing.T) {
 			}
 
 			// Test Manager status handling
-			manager := NewGameServerSetManager(gss, k8sClient, nil)
+			manager := NewGameServerSetManager(gss, k8sClient, nil, testr.New(t))
 			manager.SyncStsAndPodList(asts, pods)
 
 			// Verify manager has expected state
@@ -726,10 +727,10 @@ func TestGameServerSetController_SyncStatus(t *testing.T) {
 			}
 
 			// Test SyncStatus
-			manager := NewGameServerSetManager(gss, k8sClient, nil)
+			manager := NewGameServerSetManager(gss, k8sClient, nil, testr.New(t))
 			manager.SyncStsAndPodList(asts, tt.pods)
 
-			err := manager.SyncStatus()
+			err := manager.SyncStatus(ctx)
 			if tt.expectUpdate && err != nil {
 				t.Errorf("SyncStatus() should succeed but got error: %v", err)
 			}
@@ -1211,8 +1212,8 @@ func TestGameServerSetController_SyncPodProbeMarker(t *testing.T) {
 
 			// Test SyncPodProbeMarker
 			recorder := record.NewFakeRecorder(100)
-			manager := NewGameServerSetManager(gss, k8sClient, recorder)
-			err, done := manager.SyncPodProbeMarker()
+			manager := NewGameServerSetManager(gss, k8sClient, recorder, testr.New(t))
+			err, done := manager.SyncPodProbeMarker(ctx)
 
 			// Verify results
 			if tt.expectError && err == nil {

@@ -18,18 +18,28 @@ package alibabacloud
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 
+
+	"github.com/go-logr/logr"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
 	provideroptions "github.com/openkruise/kruise-game/cloudprovider/options"
 	"github.com/openkruise/kruise-game/cloudprovider/utils"
+	"github.com/openkruise/kruise-game/pkg/logging"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
+	"github.com/openkruise/kruise-game/pkg/tracing"
 	"github.com/openkruise/kruise-game/pkg/util"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -66,6 +76,37 @@ const (
 	LBHealthCheckMethodConfigName         = "LBHealthCheckMethod"
 	LBHealthyThresholdConfigName          = "LBHealthyThreshold"
 	LBUnhealthyThresholdConfigName        = "LBUnhealthyThreshold"
+
+	nlbComponentName = "okg-controller-manager"
+	nlbPluginSlug    = telemetryfields.NetworkPluginAlibabaCloudNLB
+)
+
+var (
+	nlbAttrLBIDsKey               = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.lb_ids")
+	nlbAttrLBIDKey                = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.lb_id")
+	nlbAttrPortCountKey           = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.port_count")
+	nlbAttrAllocatedPortsKey      = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.allocated_ports")
+	nlbAttrAllocatedCountKey      = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.allocated_count")
+	nlbAttrRequestedPortCountKey  = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.requested_port_count")
+	nlbAttrPodKey                 = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.pod_key")
+	nlbAttrServiceActionKey       = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.service_action")
+	nlbAttrServiceNameKey         = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.service_name")
+	nlbAttrServiceNamespaceKey    = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.service_namespace")
+	nlbAttrServiceTypeKey         = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.service_type")
+	nlbAttrIngressIPKey           = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.ingress_ip")
+	nlbAttrIngressHostnameKey     = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.ingress_hostname")
+	nlbAttrDeallocatedKeysKey     = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.deallocated_keys")
+	nlbAttrDeallocatedCntKey      = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.deallocated_keys_count")
+	nlbAttrHealthCheckFlagKey     = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.health_check.flag")
+	nlbAttrHealthCheckTypeKey     = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.health_check.type")
+	nlbAttrHealthCheckPortKey     = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.health_check.connect_port")
+	nlbAttrHealthCheckTimeoutKey  = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.health_check.connect_timeout")
+	nlbAttrHealthCheckIntervalKey = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.health_check.interval")
+	nlbAttrHealthCheckURIKey      = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.health_check.uri")
+	nlbAttrHealthCheckDomainKey   = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.health_check.domain")
+	nlbAttrHealthCheckMethodKey   = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.health_check.method")
+	nlbAttrHealthyThresholdKey    = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.health_check.healthy_threshold")
+	nlbAttrUnhealthyThresholdKey  = attribute.Key("game.kruise.io.network.plugin.alibabacloud.nlb.health_check.unhealthy_threshold")
 )
 
 type NlbPlugin struct {
@@ -121,7 +162,15 @@ func (n *NlbPlugin) Init(c client.Client, options cloudprovider.CloudProviderOpt
 	}
 
 	n.cache, n.podAllocate = initLbCache(svcList.Items, n.minPort, n.maxPort, n.blockPorts)
-	log.Infof("[%s] podAllocate cache complete initialization: %v", NlbNetwork, n.podAllocate)
+	logger := nlbLogger(ctx, nil).WithValues(
+		telemetryfields.FieldOperation, "init",
+	)
+	logger.Info("podAllocate cache initialized",
+		telemetryfields.FieldPodAllocate, n.podAllocate,
+		telemetryfields.FieldMinPort, n.minPort,
+		telemetryfields.FieldMaxPort, n.maxPort,
+		telemetryfields.FieldBlockPorts, n.blockPorts,
+	)
 	return nil
 }
 
@@ -130,22 +179,81 @@ func (n *NlbPlugin) OnPodAdded(client client.Client, pod *corev1.Pod, ctx contex
 }
 
 func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
+	tracer := otel.Tracer("okg-controller-manager")
+	ctx, span := startNLBSpan(ctx, tracer, tracing.SpanProcessNLBPod, pod)
+	// track final network status and error to ensure a single final attribute is set on the parent span
+	finalNetworkStatus := telemetryfields.NetworkStatusWaiting
+	var finalErr error
+	var finalErrorType string
+	finalStatus := codes.Ok
+	finalMessage := "nlb pod processed"
+	defer func() {
+		// Handle panic first so the span records it before finalization.
+		if r := recover(); r != nil {
+			finalErr = fmt.Errorf("panic: %v", r)
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeInternal
+			finalStatus = codes.Error
+			finalMessage = fmt.Sprintf("panic: %v", r)
+		}
+		if finalErr != nil {
+			span.RecordError(finalErr)
+			finalStatus = codes.Error
+			if finalMessage == "nlb pod processed" {
+				finalMessage = finalErr.Error()
+			}
+			if finalErrorType != "" {
+				span.SetAttributes(tracing.AttrErrorType(finalErrorType))
+			}
+		}
+		span.SetAttributes(tracing.AttrNetworkStatus(finalNetworkStatus))
+		span.SetStatus(finalStatus, finalMessage)
+		span.End()
+	}()
+	logger := nlbLogger(ctx, pod).WithValues(telemetryfields.FieldOperation, "update")
+	logger.Info("processing NLB pod update")
+
 	networkManager := utils.NewNetworkManager(pod, c)
 
-	networkStatus, _ := networkManager.GetNetworkStatus()
+	networkStatus, err := networkManager.GetNetworkStatus()
+	if err != nil {
+		logger.Error(err, "failed to get network status")
+		finalErr = err
+		finalNetworkStatus = telemetryfields.NetworkStatusError
+		finalErrorType = telemetryfields.ErrorTypeInternal
+		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+	}
 	networkConfig := networkManager.GetNetworkConfig()
 	sc, err := parseNlbConfig(networkConfig)
 	if err != nil {
-		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
+		logger.Error(err, "failed to parse NLB config")
+		span.RecordError(err)
+		finalErr = err
+		finalNetworkStatus = telemetryfields.NetworkStatusError
+		finalErrorType = telemetryfields.ErrorTypeParameter
+		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
 	}
+	span.SetAttributes(
+		nlbAttrLBIDsKey.StringSlice(sc.lbIds),
+		nlbAttrPortCountKey.Int64(int64(len(sc.targetPorts))),
+		nlbAttrServiceNameKey.String(pod.GetName()),
+		nlbAttrServiceNamespaceKey.String(pod.GetNamespace()),
+	)
 	if networkStatus == nil {
-		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
+		logger.V(1).Info("network status missing; marking pod not ready")
+		finalNetworkStatus = telemetryfields.NetworkStatusNotReady
+		pod, err = networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
 			CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
 		}, pod)
-		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+		if err != nil {
+			finalErr = err
+			finalErrorType = telemetryfields.ErrorTypeInternal
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+		}
+		return pod, nil
 	}
 
-	// get svc
 	svc := &corev1.Service{}
 	err = c.Get(ctx, types.NamespacedName{
 		Name:      pod.GetName(),
@@ -153,70 +261,233 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	}, svc)
 	if err != nil {
 		if errors.IsNotFound(err) {
+			logger.Info("creating NLB service for pod")
+			_, createSpan := startNLBSpan(ctx, tracer, tracing.SpanCreateNLBService, pod,
+				nlbAttrPortCountKey.Int64(int64(len(sc.targetPorts))),
+				nlbAttrLBIDsKey.StringSlice(sc.lbIds),
+				nlbAttrServiceNameKey.String(pod.GetName()),
+				nlbAttrServiceNamespaceKey.String(pod.GetNamespace()),
+			)
+			defer createSpan.End()
 			service, err := n.consSvc(sc, pod, c, ctx)
 			if err != nil {
+				createSpan.RecordError(err)
+				createSpan.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeParameter))
+				createSpan.SetStatus(codes.Error, "failed to build nlb service")
+				finalErr = err
+				finalErrorType = telemetryfields.ErrorTypeParameter
+				finalNetworkStatus = telemetryfields.NetworkStatusError
 				return pod, cperrors.ToPluginError(err, cperrors.ParameterError)
 			}
-			return pod, cperrors.ToPluginError(c.Create(ctx, service), cperrors.ApiCallError)
+			if err := c.Create(ctx, service); err != nil {
+				logger.Error(err, "failed to create NLB service")
+				createSpan.RecordError(err)
+				createSpan.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall))
+				createSpan.SetStatus(codes.Error, "failed to create nlb service")
+				finalErr = err
+				finalErrorType = telemetryfields.ErrorTypeAPICall
+				finalNetworkStatus = telemetryfields.NetworkStatusError
+				return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
+			}
+			lbID := service.Annotations[SlbIdAnnotationKey]
+			createSpan.SetAttributes(
+				tracing.AttrNetworkResourceID(lbID),
+				nlbAttrLBIDKey.String(lbID),
+				nlbAttrPortCountKey.Int64(int64(len(service.Spec.Ports))),
+				nlbAttrAllocatedPortsKey.String(formatNLBServicePorts(service.Spec.Ports)),
+				nlbAttrServiceTypeKey.String(string(service.Spec.Type)),
+			)
+			createSpan.SetStatus(codes.Ok, "nlb service created")
+			finalNetworkStatus = telemetryfields.NetworkStatusNotReady
+			return pod, nil
 		}
-		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
+		logger.Error(err, "failed to get NLB service")
+		span.RecordError(err)
+		finalErr = err
+		finalErrorType = telemetryfields.ErrorTypeAPICall
+		finalNetworkStatus = telemetryfields.NetworkStatusError
+		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
 
-	// old svc remain
-	if svc.OwnerReferences[0].Kind == "Pod" && svc.OwnerReferences[0].UID != pod.UID {
-		log.Infof("[%s] waitting old svc %s/%s deleted. old owner pod uid is %s, but now is %s", NlbNetwork, svc.Namespace, svc.Name, svc.OwnerReferences[0].UID, pod.UID)
+	if len(svc.OwnerReferences) > 0 && svc.OwnerReferences[0].Kind == "Pod" && svc.OwnerReferences[0].UID != pod.UID {
+		logger.V(1).Info("waiting for previous Service owner cleanup",
+			telemetryfields.FieldServiceNamespace, svc.Namespace,
+			telemetryfields.FieldServiceName, svc.Name,
+			telemetryfields.FieldOldUID, svc.OwnerReferences[0].UID,
+			telemetryfields.FieldNewUID, pod.UID,
+		)
 		return pod, nil
 	}
 
-	// update svc
 	if util.GetHash(sc) != svc.GetAnnotations()[SlbConfigHashKey] {
+		logger.Info("detected Service config drift; reconciling",
+			telemetryfields.FieldCurrentHash, svc.GetAnnotations()[SlbConfigHashKey],
+			telemetryfields.FieldDesiredPorts, len(sc.targetPorts),
+		)
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		if err != nil {
 			return pod, cperrors.NewPluginErrorWithMessage(cperrors.InternalError, err.Error())
 		}
+		_, updateSpan := startNLBSpan(ctx, tracer, tracing.SpanReconcileNLBService, pod,
+			nlbAttrPortCountKey.Int64(int64(len(sc.targetPorts))),
+			nlbAttrServiceNameKey.String(pod.GetName()),
+			nlbAttrServiceNamespaceKey.String(pod.GetNamespace()),
+		)
+		defer updateSpan.End()
 		service, err := n.consSvc(sc, pod, c, ctx)
 		if err != nil {
+			logger.Error(err, "failed to build Service for reconciliation")
+			updateSpan.RecordError(err)
+			updateSpan.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeParameter))
+			updateSpan.SetStatus(codes.Error, "failed to build nlb service")
+			finalErr = err
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeParameter
 			return pod, cperrors.ToPluginError(err, cperrors.ParameterError)
 		}
-		return pod, cperrors.ToPluginError(c.Update(ctx, service), cperrors.ApiCallError)
+		if err := c.Update(ctx, service); err != nil {
+			logger.Error(err, "failed to update NLB service during reconciliation")
+			updateSpan.RecordError(err)
+			updateSpan.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall))
+			updateSpan.SetStatus(codes.Error, "failed to update nlb service")
+			finalErr = err
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeAPICall
+			return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
+		}
+		lbID := service.Annotations[SlbIdAnnotationKey]
+		updateSpan.SetAttributes(
+			tracing.AttrNetworkResourceID(lbID),
+			nlbAttrLBIDKey.String(lbID),
+			nlbAttrPortCountKey.Int64(int64(len(service.Spec.Ports))),
+			nlbAttrAllocatedPortsKey.String(formatNLBServicePorts(service.Spec.Ports)),
+			nlbAttrServiceTypeKey.String(string(service.Spec.Type)),
+		)
+		updateSpan.SetStatus(codes.Ok, "nlb service updated")
+		logger.Info("reconciled NLB service",
+			telemetryfields.FieldLBID, lbID,
+			telemetryfields.FieldPortCount, len(service.Spec.Ports),
+		)
+		finalNetworkStatus = telemetryfields.NetworkStatusNotReady
+		return pod, nil
 	}
 
-	// disable network
 	if networkManager.GetNetworkDisabled() && svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
+		logger.Info("disabling NLB service due to network disable flag")
+		_, toggleSpan := startNLBSpan(ctx, tracer, tracing.SpanToggleNLBServiceType, pod,
+			nlbAttrServiceActionKey.String("disable"),
+			nlbAttrServiceNameKey.String(svc.GetName()),
+			nlbAttrServiceNamespaceKey.String(svc.GetNamespace()),
+			nlbAttrServiceTypeKey.String(string(svc.Spec.Type)),
+		)
+		defer toggleSpan.End()
 		svc.Spec.Type = corev1.ServiceTypeClusterIP
-		return pod, cperrors.ToPluginError(c.Update(ctx, svc), cperrors.ApiCallError)
+		err = c.Update(ctx, svc)
+		if err != nil {
+			logger.Error(err, "failed to disable NLB service")
+			toggleSpan.RecordError(err)
+			toggleSpan.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall))
+			toggleSpan.SetStatus(codes.Error, "failed to disable nlb service")
+			finalErr = err
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeAPICall
+		} else {
+			toggleSpan.SetStatus(codes.Ok, "nlb service disabled")
+			// Disabling NLB makes the pod network NotReady for the load balancer
+			finalNetworkStatus = telemetryfields.NetworkStatusNotReady
+			finalStatus = codes.Ok
+			finalMessage = "nlb service disabled"
+		}
+		return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
 	}
 
-	// enable network
 	if !networkManager.GetNetworkDisabled() && svc.Spec.Type == corev1.ServiceTypeClusterIP {
+		logger.Info("re-enabling NLB service after network resume")
+		_, toggleSpan := startNLBSpan(ctx, tracer, tracing.SpanToggleNLBServiceType, pod,
+			nlbAttrServiceActionKey.String("enable"),
+			nlbAttrServiceNameKey.String(svc.GetName()),
+			nlbAttrServiceNamespaceKey.String(svc.GetNamespace()),
+			nlbAttrServiceTypeKey.String(string(corev1.ServiceTypeLoadBalancer)),
+		)
+		defer toggleSpan.End()
 		svc.Spec.Type = corev1.ServiceTypeLoadBalancer
-		return pod, cperrors.ToPluginError(c.Update(ctx, svc), cperrors.ApiCallError)
+		err = c.Update(ctx, svc)
+		if err != nil {
+			logger.Error(err, "failed to enable NLB service")
+			toggleSpan.RecordError(err)
+			toggleSpan.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeAPICall))
+			toggleSpan.SetStatus(codes.Error, "failed to enable nlb service")
+			finalErr = err
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeAPICall
+		} else {
+			toggleSpan.SetStatus(codes.Ok, "nlb service enabled")
+			// Enabling NLB likely requires time for the LB to be assigned; mark Waiting
+			finalNetworkStatus = telemetryfields.NetworkStatusWaiting
+			finalStatus = codes.Ok
+			finalMessage = "nlb service enabled"
+		}
+		return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
 	}
 
-	// network not ready
+	lbSpanAttrs := []attribute.KeyValue{
+		nlbAttrServiceNameKey.String(svc.GetName()),
+		nlbAttrServiceNamespaceKey.String(svc.GetNamespace()),
+		nlbAttrServiceTypeKey.String(string(svc.Spec.Type)),
+		nlbAttrLBIDKey.String(svc.Annotations[SlbIdAnnotationKey]),
+		tracing.AttrNetworkResourceID(svc.Annotations[SlbIdAnnotationKey]),
+	}
+	lbSpanAttrs = append(lbSpanAttrs, nlbHealthCheckAttrs(sc.nlbHealthConfig)...)
+	_, lbSpan := startNLBSpan(ctx, tracer, tracing.SpanCheckNLBStatus, pod, lbSpanAttrs...)
 	if len(svc.Status.LoadBalancer.Ingress) == 0 {
+		logger.V(1).Info("load balancer ingress not yet assigned")
+		lbSpan.SetAttributes(
+			tracing.AttrErrorType(telemetryfields.ErrorTypeResourceNotReady),
+		)
+		lbSpan.SetStatus(codes.Error, "LoadBalancer ingress not yet assigned")
+		lbSpan.AddEvent(tracing.EventGameServerReconcileWaitNetworkState, trace.WithAttributes(tracing.AttrNetworkStatus(telemetryfields.NetworkStatusWaiting)))
+		lbSpan.End()
+		finalNetworkStatus = telemetryfields.NetworkStatusNotReady
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
-		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+		if err != nil {
+			finalErr = err
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeInternal
+			return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+		}
+		return pod, nil
 	}
 
-	// allow not ready containers
+	lbSpan.SetAttributes(
+		nlbAttrIngressIPKey.String(svc.Status.LoadBalancer.Ingress[0].IP),
+		nlbAttrIngressHostnameKey.String(svc.Status.LoadBalancer.Ingress[0].Hostname),
+	)
+	lbSpan.SetStatus(codes.Ok, "LoadBalancer ready")
+	lbSpan.AddEvent(tracing.EventGameServerReconcileSyncPodToGsSuccess, trace.WithAttributes(tracing.AttrNetworkStatus(telemetryfields.NetworkStatusReady)))
+	lbSpan.End()
+
 	if util.IsAllowNotReadyContainers(networkManager.GetNetworkConfig()) {
 		toUpDateSvc, err := utils.AllowNotReadyContainers(c, ctx, pod, svc, false)
 		if err != nil {
+			logger.Error(err, "failed to adjust allow-not-ready containers on Service")
 			return pod, err
 		}
 
 		if toUpDateSvc {
+			logger.Info("updating Service to include not-ready endpoints")
 			err := c.Update(ctx, svc)
 			if err != nil {
+				logger.Error(err, "failed to update Service for allow-not-ready containers")
+				finalErr = err
+				finalNetworkStatus = telemetryfields.NetworkStatusError
+				finalErrorType = telemetryfields.ErrorTypeAPICall
 				return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
 			}
 		}
 	}
 
-	// network ready
 	internalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
 	externalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
 	for _, port := range svc.Spec.Ports {
@@ -249,29 +520,97 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	networkStatus.InternalAddresses = internalAddresses
 	networkStatus.ExternalAddresses = externalAddresses
 	networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkReady
+
+	_, publishSpan := startNLBSpan(ctx, tracer, tracing.SpanPublishNLBStatus, pod,
+		attribute.Int(telemetryfields.FieldInternalAddresses, len(internalAddresses)),
+		attribute.Int(telemetryfields.FieldExternalAddresses, len(externalAddresses)),
+		nlbAttrPortCountKey.Int64(int64(len(svc.Spec.Ports))),
+		nlbAttrAllocatedPortsKey.String(formatNLBServicePorts(svc.Spec.Ports)),
+	)
+	publishSpan.SetStatus(codes.Ok, "nlb addresses published")
+	publishSpan.End()
+
 	pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
-	return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+	if err != nil {
+		logger.Error(err, "failed to publish NLB network status to pod")
+		span.RecordError(err)
+		finalErr = err
+		finalNetworkStatus = telemetryfields.NetworkStatusError
+		finalErrorType = telemetryfields.ErrorTypeInternal
+		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+	}
+
+	finalNetworkStatus = telemetryfields.NetworkStatusReady
+	finalStatus = codes.Ok
+	finalMessage = "nlb pod processed"
+	logger.Info("NLB pod update complete", telemetryfields.FieldState, networkStatus.CurrentNetworkState)
+	return pod, nil
 }
 
 func (n *NlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.Context) cperrors.PluginError {
+	tracer := otel.Tracer("okg-controller-manager")
+	ctx, span := startNLBSpan(ctx, tracer, tracing.SpanCleanupNLBAllocation, pod)
+	finalNetworkStatus := telemetryfields.NetworkStatusNotReady
+	var finalErr error
+	var finalErrorType string
+	finalStatus := codes.Ok
+	finalMessage := "nlb allocation cleaned up"
+	defer func() {
+		if finalErr != nil {
+			span.RecordError(finalErr)
+			finalStatus = codes.Error
+			if finalMessage == "nlb allocation cleaned up" {
+				finalMessage = finalErr.Error()
+			}
+			if finalErrorType != "" {
+				span.SetAttributes(tracing.AttrErrorType(finalErrorType))
+			}
+		}
+		span.SetAttributes(tracing.AttrNetworkStatus(finalNetworkStatus))
+		span.SetStatus(finalStatus, finalMessage)
+		span.End()
+	}()
+	// guard against panic to ensure controller keeps running; defer must run before finalization.
+	defer func() {
+		if r := recover(); r != nil {
+			finalErr = fmt.Errorf("panic: %v", r)
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeInternal
+			finalStatus = codes.Error
+			finalMessage = fmt.Sprintf("panic: %v", r)
+		}
+	}()
+	logger := nlbLogger(ctx, pod).WithValues(telemetryfields.FieldOperation, "delete")
+
 	networkManager := utils.NewNetworkManager(pod, c)
 	networkConfig := networkManager.GetNetworkConfig()
 	sc, err := parseNlbConfig(networkConfig)
 	if err != nil {
-		return cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
+		logger.Error(err, "failed to parse NLB config during cleanup")
+		span.RecordError(err)
+		finalErr = err
+		finalErrorType = telemetryfields.ErrorTypeParameter
+		finalNetworkStatus = telemetryfields.NetworkStatusError
+		return cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
 	}
 
 	var podKeys []string
 	if sc.isFixed {
 		gss, err := util.GetGameServerSetOfPod(pod, c, ctx)
 		if err != nil && !errors.IsNotFound(err) {
+			logger.Error(err, "failed to fetch GameServerSet during cleanup")
+			span.RecordError(err)
+			finalErr = err
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			finalErrorType = telemetryfields.ErrorTypeAPICall
 			return cperrors.ToPluginError(err, cperrors.ApiCallError)
 		}
-		// gss exists in cluster, do not deAllocate.
 		if err == nil && gss.GetDeletionTimestamp() == nil {
+			logger.V(1).Info("GameServerSet still active; skipping NLB cleanup")
+			finalStatus = codes.Ok
+			finalNetworkStatus = telemetryfields.NetworkStatusReady
 			return nil
 		}
-		// gss not exists in cluster, deAllocate all the ports related to it.
 		for key := range n.podAllocate {
 			gssName := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]
 			if strings.Contains(key, pod.GetNamespace()+"/"+gssName) {
@@ -283,9 +622,18 @@ func (n *NlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.C
 	}
 
 	for _, podKey := range podKeys {
+		logger.Info("deallocating NLB ports for pod key", telemetryfields.FieldPodKeyQualified, podKey)
 		n.deAllocate(podKey)
 	}
 
+	span.SetAttributes(
+		nlbAttrDeallocatedCntKey.Int64(int64(len(podKeys))),
+		nlbAttrDeallocatedKeysKey.StringSlice(podKeys),
+	)
+	logger.Info("cleaned up NLB allocations", telemetryfields.FieldCount, len(podKeys), telemetryfields.FieldKeys, podKeys)
+	finalNetworkStatus = telemetryfields.NetworkStatusReady
+	finalStatus = codes.Ok
+	finalMessage = "nlb allocation cleaned up"
 	return nil
 }
 
@@ -306,7 +654,7 @@ func (n *NlbPlugin) consSvc(nc *nlbConfig, pod *corev1.Pod, c client.Client, ctx
 		lbId = slbPorts[0]
 		ports = util.StringToInt32Slice(slbPorts[1], ",")
 	} else {
-		lbId, ports = n.allocate(nc.lbIds, len(nc.targetPorts), podKey)
+		lbId, ports = n.allocate(ctx, pod, nc.lbIds, len(nc.targetPorts))
 		if lbId == "" && ports == nil {
 			return nil, fmt.Errorf("there are no avaialable ports for %v", nc.lbIds)
 		}
@@ -364,10 +712,51 @@ func (n *NlbPlugin) consSvc(nc *nlbConfig, pod *corev1.Pod, c client.Client, ctx
 			LoadBalancerClass: &loadBalancerClass,
 		},
 	}
+
+	// Record success
 	return svc, nil
 }
 
-func (n *NlbPlugin) allocate(lbIds []string, num int, nsName string) (string, []int32) {
+func formatNLBServicePorts(ports []corev1.ServicePort) string {
+	type portSnapshot struct {
+		Name       string `json:"name,omitempty"`
+		Port       int32  `json:"port"`
+		TargetPort string `json:"targetPort"`
+		Protocol   string `json:"protocol"`
+	}
+	snapshot := make([]portSnapshot, 0, len(ports))
+	for _, p := range ports {
+		snapshot = append(snapshot, portSnapshot{
+			Name:       p.Name,
+			Port:       p.Port,
+			TargetPort: p.TargetPort.String(),
+			Protocol:   string(p.Protocol),
+		})
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func (n *NlbPlugin) allocate(ctx context.Context, pod *corev1.Pod, lbIds []string, num int) (string, []int32) {
+	tracer := otel.Tracer("okg-controller-manager")
+	podKey := "unknown"
+	if pod != nil {
+		podKey = pod.GetNamespace() + "/" + pod.GetName()
+	}
+	logger := nlbLogger(ctx, pod).WithValues(
+		telemetryfields.FieldOperation, "allocate",
+		telemetryfields.FieldPodKeyQualified, podKey,
+	)
+	_, span := startNLBSpan(ctx, tracer, tracing.SpanAllocateNLBPorts, pod,
+		nlbAttrLBIDsKey.StringSlice(lbIds),
+		nlbAttrRequestedPortCountKey.Int64(int64(num)),
+		nlbAttrPodKey.String(podKey),
+	)
+	defer span.End()
+
 	n.mutex.Lock()
 	defer n.mutex.Unlock()
 
@@ -388,6 +777,13 @@ func (n *NlbPlugin) allocate(lbIds []string, num int, nsName string) (string, []
 		}
 	}
 	if lbId == "" {
+		err := fmt.Errorf("no available ports found")
+		span.RecordError(err)
+		span.SetAttributes(
+			tracing.AttrNetworkStatus(telemetryfields.NetworkStatusError),
+			tracing.AttrErrorType(telemetryfields.ErrorTypePortExhausted),
+		)
+		span.SetStatus(codes.Error, err.Error())
 		return "", nil
 	}
 
@@ -416,8 +812,22 @@ func (n *NlbPlugin) allocate(lbIds []string, num int, nsName string) (string, []
 		ports = append(ports, port)
 	}
 
-	n.podAllocate[nsName] = lbId + ":" + util.Int32SliceToString(ports, ",")
-	log.Infof("pod %s allocate nlb %s ports %v", nsName, lbId, ports)
+	n.podAllocate[podKey] = lbId + ":" + util.Int32SliceToString(ports, ",")
+	logger.Info("allocated NLB ports",
+		telemetryfields.FieldLBID, lbId,
+		telemetryfields.FieldPorts, ports,
+	)
+
+	// Record successful allocation in span; avoid setting business network attribute on child span
+	span.SetAttributes(
+		tracing.AttrNetworkResourceID(lbId),
+		nlbAttrLBIDKey.String(lbId),
+		nlbAttrAllocatedPortsKey.String(util.Int32SliceToString(ports, ",")),
+		nlbAttrAllocatedCountKey.Int64(int64(len(ports))),
+	)
+	span.AddEvent(tracing.EventNetworkNLBPortsAllocated, trace.WithAttributes(tracing.AttrNetworkStatus(telemetryfields.NetworkStatusReady)))
+	span.SetStatus(codes.Ok, "ports allocated successfully")
+
 	return lbId, ports
 }
 
@@ -442,7 +852,71 @@ func (n *NlbPlugin) deAllocate(nsName string) {
 	}
 
 	delete(n.podAllocate, nsName)
-	log.Infof("pod %s deallocate nlb %s ports %v", nsName, lbId, ports)
+}
+
+func nlbSpanAttrs(pod *corev1.Pod, extras ...attribute.KeyValue) []attribute.KeyValue {
+	attrExtras := []attribute.KeyValue{
+		tracing.AttrCloudProvider(tracing.CloudProviderAlibabaCloud),
+	}
+	if pod != nil && pod.Spec.NodeName != "" {
+		attrExtras = append(attrExtras, tracing.AttrK8sNodeName(pod.Spec.NodeName))
+	}
+	attrExtras = append(attrExtras, extras...)
+	attrExtras = tracing.EnsureNetworkStatusAttr(attrExtras, telemetryfields.NetworkStatusWaiting)
+	return tracing.BaseNetworkAttrs(nlbComponentName, nlbPluginSlug, pod, attrExtras...)
+}
+
+func nlbLogger(ctx context.Context, pod *corev1.Pod) logr.Logger {
+	logger := logging.FromContextWithTrace(ctx).WithValues(
+		telemetryfields.FieldComponent, "cloudprovider",
+		telemetryfields.FieldNetworkPluginName, nlbPluginSlug,
+		telemetryfields.FieldPluginSlug, nlbPluginSlug,
+	)
+	if pod != nil {
+		podLabels := pod.GetLabels()
+		logger = logger.WithValues(
+			telemetryfields.FieldGameServerNamespace, pod.GetNamespace(),
+			telemetryfields.FieldGameServerName, pod.GetName(),
+		)
+		if gss, ok := podLabels[gamekruiseiov1alpha1.GameServerOwnerGssKey]; ok {
+			logger = logger.WithValues(
+				telemetryfields.FieldGameServerSetNamespace, pod.GetNamespace(),
+				telemetryfields.FieldGameServerSetName, gss,
+			)
+		}
+	}
+	return logger
+}
+func startNLBSpan(ctx context.Context, tracer trace.Tracer, name string, pod *corev1.Pod, extras ...attribute.KeyValue) (context.Context, trace.Span) {
+	return tracer.Start(ctx, name,
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(nlbSpanAttrs(pod, extras...)...),
+	)
+}
+
+func nlbHealthCheckAttrs(cfg *nlbHealthConfig) []attribute.KeyValue {
+	if cfg == nil {
+		return nil
+	}
+	attrs := []attribute.KeyValue{
+		nlbAttrHealthCheckFlagKey.String(cfg.lBHealthCheckFlag),
+		nlbAttrHealthCheckTypeKey.String(cfg.lBHealthCheckType),
+		nlbAttrHealthCheckPortKey.String(cfg.lBHealthCheckConnectPort),
+		nlbAttrHealthCheckTimeoutKey.String(cfg.lBHealthCheckConnectTimeout),
+		nlbAttrHealthCheckIntervalKey.String(cfg.lBHealthCheckInterval),
+		nlbAttrHealthyThresholdKey.String(cfg.lBHealthyThreshold),
+		nlbAttrUnhealthyThresholdKey.String(cfg.lBUnhealthyThreshold),
+	}
+	if cfg.lBHealthCheckUri != "" {
+		attrs = append(attrs, nlbAttrHealthCheckURIKey.String(cfg.lBHealthCheckUri))
+	}
+	if cfg.lBHealthCheckDomain != "" {
+		attrs = append(attrs, nlbAttrHealthCheckDomainKey.String(cfg.lBHealthCheckDomain))
+	}
+	if cfg.lBHealthCheckMethod != "" {
+		attrs = append(attrs, nlbAttrHealthCheckMethodKey.String(cfg.lBHealthCheckMethod))
+	}
+	return attrs
 }
 
 func parseNlbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*nlbConfig, error) {

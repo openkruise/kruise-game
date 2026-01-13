@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 )
@@ -155,10 +156,10 @@ func (w *Writer) Write(payload map[string]FileProjection) error {
 			klog.Error(err, "unable to determine whether payload should be written to disk")
 			return err
 		} else if !should && len(pathsToRemove) == 0 {
-			klog.V(6).Info("no update required for target directory", "directory", w.targetDir)
+			klog.V(6).Info("no update required for target directory", telemetryfields.FieldDirectory, w.targetDir)
 			return nil
 		} else {
-			klog.V(1).Info("write required for target directory", "directory", w.targetDir)
+			klog.V(1).Info("write required for target directory", telemetryfields.FieldDirectory, w.targetDir)
 		}
 	}
 
@@ -172,37 +173,37 @@ func (w *Writer) Write(payload map[string]FileProjection) error {
 
 	// (6)
 	if err = w.writePayloadToDir(cleanPayload, tsDir); err != nil {
-		klog.Error(err, "unable to write payload to ts data directory", "ts directory", tsDir)
+		klog.Error(err, "unable to write payload to ts data directory", telemetryfields.FieldTSDirectory, tsDir)
 		return err
 	}
-	klog.V(1).Info("performed write of new data to ts data directory", "ts directory", tsDir)
+	klog.V(1).Info("performed write of new data to ts data directory", telemetryfields.FieldTSDirectory, tsDir)
 
 	// (7)
 	if err = w.createUserVisibleFiles(cleanPayload); err != nil {
-		klog.Error(err, "unable to create visible symlinks in target directory", "target directory", w.targetDir)
+		klog.Error(err, "unable to create visible symlinks in target directory", telemetryfields.FieldTargetDirectory, w.targetDir)
 		return err
 	}
 
 	// (8)
 	newDataDirPath := path.Join(w.targetDir, newDataDirName)
 	if err = os.Symlink(tsDirName, newDataDirPath); err != nil {
-		os.RemoveAll(tsDir)
+		_ = os.RemoveAll(tsDir)
 		klog.Error(err, "unable to create symbolic link for atomic update")
 		return err
 	}
 
 	// (9)
 	if runtime.GOOS == "windows" {
-		os.Remove(dataDirPath)
+		_ = os.Remove(dataDirPath)
 		err = os.Symlink(tsDirName, dataDirPath)
-		os.Remove(newDataDirPath)
+		_ = os.Remove(newDataDirPath)
 	} else {
 		err = os.Rename(newDataDirPath, dataDirPath)
 	}
 	if err != nil {
-		os.Remove(newDataDirPath)
-		os.RemoveAll(tsDir)
-		klog.Error(err, "unable to rename symbolic link for data directory", "data directory", newDataDirPath)
+		_ = os.Remove(newDataDirPath)
+		_ = os.RemoveAll(tsDir)
+		klog.Error(err, "unable to rename symbolic link for data directory", telemetryfields.FieldDataDirectory, newDataDirPath)
 		return err
 	}
 
@@ -215,7 +216,7 @@ func (w *Writer) Write(payload map[string]FileProjection) error {
 	// (11)
 	if len(oldTsDir) > 0 {
 		if err = os.RemoveAll(oldTsPath); err != nil {
-			klog.Error(err, "unable to remove old data directory", "data directory", oldTsDir)
+			klog.Error(err, "unable to remove old data directory", telemetryfields.FieldDataDirectory, oldTsDir)
 			return err
 		}
 	}
@@ -344,7 +345,7 @@ func (w *Writer) pathsToRemove(payload map[string]FileProjection, oldTsDir strin
 
 	result := paths.Difference(newPaths)
 	if len(result) > 0 {
-		klog.V(1).Info("paths to remove", "target directory", w.targetDir, "paths", result)
+		klog.V(1).Info("paths to remove", telemetryfields.FieldTargetDirectory, w.targetDir, telemetryfields.FieldPaths, result)
 	}
 
 	return result, nil
@@ -381,13 +382,13 @@ func (w *Writer) writePayloadToDir(payload map[string]FileProjection, dir string
 
 		err := os.MkdirAll(baseDir, os.ModePerm)
 		if err != nil {
-			klog.Error(err, "unable to create directory", "directory", baseDir)
+			klog.Error(err, "unable to create directory", telemetryfields.FieldDirectory, baseDir)
 			return err
 		}
 
 		err = os.WriteFile(fullPath, content, mode)
 		if err != nil {
-			klog.Error(err, "unable to write file", "file", fullPath, "mode", mode)
+			klog.Error(err, "unable to write file", telemetryfields.FieldFile, fullPath, telemetryfields.FieldMode, mode)
 			return err
 		}
 		// Chmod is needed because os.WriteFile() ends up calling
@@ -396,7 +397,7 @@ func (w *Writer) writePayloadToDir(payload map[string]FileProjection, dir string
 		// in the file no matter what the umask is.
 		err = os.Chmod(fullPath, mode)
 		if err != nil {
-			klog.Error(err, "unable to write file", "file", fullPath, "mode", mode)
+			klog.Error(err, "unable to write file", telemetryfields.FieldFile, fullPath, telemetryfields.FieldMode, mode)
 		}
 	}
 
@@ -446,7 +447,7 @@ func (w *Writer) removeUserVisiblePaths(paths sets.Set[string]) error {
 			continue
 		}
 		if err := os.Remove(path.Join(w.targetDir, p)); err != nil {
-			klog.Error(err, "unable to prune old user-visible path", "path", p)
+			klog.Error(err, "unable to prune old user-visible path", telemetryfields.FieldPath, p)
 			lasterr = err
 		}
 	}

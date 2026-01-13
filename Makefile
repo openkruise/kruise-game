@@ -118,6 +118,8 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v4.5.5
 CONTROLLER_TOOLS_VERSION ?= v0.16.5
+GOLANGCI_VERSION ?= v2.6.2
+GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 
 KUSTOMIZE_INSTALL_SCRIPT ?= "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"
 .PHONY: kustomize
@@ -141,3 +143,16 @@ helm: ## Download helm locally if necessary.
 
 ginkgo: ## Download ginkgo locally if necessary.
 	GOBIN=$(LOCALBIN) go install github.com/onsi/ginkgo/ginkgo@v1.16.5
+
+.PHONY: golangci-lint
+golangci-lint: $(LOCALBIN) ## Download golangci-lint locally if necessary.
+ifeq (,$(wildcard $(GOLANGCI_LINT)))
+	@echo "Installing golangci-lint $(GOLANGCI_VERSION) to $(LOCALBIN)"
+	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(LOCALBIN) $(GOLANGCI_VERSION)
+else
+	@echo "golangci-lint already present at $(GOLANGCI_LINT)"
+endif
+
+.PHONY: lint
+lint: golangci-lint fmt vet ## Run linters (gofmt, go vet, golangci-lint).
+	$(GOLANGCI_LINT) run --verbose --timeout=10m
