@@ -1088,6 +1088,7 @@ func TestAutoNLBsV2Plugin_OnPodDeleted_WithCleanup(t *testing.T) {
 			Namespace: "default",
 			Labels: map[string]string{
 				gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+				GssDeletingLabelKey:                        "true", // 标记 GSS 正在删除
 			},
 			Annotations: map[string]string{
 				gamekruiseiov1alpha1.GameServerNetworkType: AutoNLBsV2Network,

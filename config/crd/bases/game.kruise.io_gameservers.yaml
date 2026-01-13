@@ -100,6 +100,12 @@ spec:
                                   the Pod where this field is used. It makes that resource available
                                   inside a container.
                                 type: string
+                              request:
+                                description: |-
+                                  Request is the name chosen for a request in the referenced claim.
+                                  If empty, everything from the claim is made available, otherwise
+                                  only the result of this request.
+                                type: string
                             required:
                             - name
                             type: object
@@ -365,6 +371,60 @@ spec:
                             node. Kubelet sets this value to Container.Resources.Requests upon successful pod admission
                             and after successfully admitting desired pod resize.
                           type: object
+                        allocatedResourcesStatus:
+                          description: |-
+                            AllocatedResourcesStatus represents the status of various resources
+                            allocated for this Pod.
+                          items:
+                            properties:
+                              name:
+                                description: Name of the resource. Must be unique
+                                  within the pod and match one of the resources from
+                                  the pod spec.
+                                type: string
+                              resources:
+                                description: |-
+                                  List of unique Resources health. Each element in the list contains an unique resource ID and resource health.
+                                  At a minimum, ResourceID must uniquely identify the Resource
+                                  allocated to the Pod on the Node for the lifetime of a Pod.
+                                  See ResourceID type for it's definition.
+                                items:
+                                  description: |-
+                                    ResourceHealth represents the health of a resource. It has the latest device health information.
+                                    This is a part of KEP https://kep.k8s.io/4680 and historical health changes are planned to be added in future iterations of a KEP.
+                                  properties:
+                                    health:
+                                      description: |-
+                                        Health of the resource.
+                                        can be one of:
+                                         - Healthy: operates as normal
+                                         - Unhealthy: reported unhealthy. We consider this a temporary health issue
+                                                      since we do not have a mechanism today to distinguish
+                                                      temporary and permanent issues.
+                                         - Unknown: The status cannot be determined.
+                                                    For example, Device Plugin got unregistered and hasn't been re-registered since.
+
+                                        In future we may want to introduce the PermanentlyUnhealthy Status.
+                                      type: string
+                                    resourceID:
+                                      description: ResourceID is the unique identifier
+                                        of the resource. See the ResourceID type for
+                                        more information.
+                                      type: string
+                                  required:
+                                  - resourceID
+                                  type: object
+                                type: array
+                                x-kubernetes-list-map-keys:
+                                - resourceID
+                                x-kubernetes-list-type: map
+                            required:
+                            - name
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
                         containerID:
                           description: |-
                             ContainerID is the ID of the container in the format '<type>://<container_id>'.
@@ -488,6 +548,12 @@ spec:
                                       the Pod where this field is used. It makes that resource available
                                       inside a container.
                                     type: string
+                                  request:
+                                    description: |-
+                                      Request is the name chosen for a request in the referenced claim.
+                                      If empty, everything from the claim is made available, otherwise
+                                      only the result of this request.
+                                    type: string
                                 required:
                                 - name
                                 type: object
@@ -599,6 +665,39 @@ spec:
                                   description: (brief) reason the container is not
                                     yet running.
                                   type: string
+                              type: object
+                          type: object
+                        user:
+                          description: User represents user identity information initially
+                            attached to the first process of the container
+                          properties:
+                            linux:
+                              description: |-
+                                Linux holds user identity information initially attached to the first process of the containers in Linux.
+                                Note that the actual running identity can be changed if the process has enough privilege to do so.
+                              properties:
+                                gid:
+                                  description: GID is the primary gid initially attached
+                                    to the first process in the container
+                                  format: int64
+                                  type: integer
+                                supplementalGroups:
+                                  description: SupplementalGroups are the supplemental
+                                    groups initially attached to the first process
+                                    in the container
+                                  items:
+                                    format: int64
+                                    type: integer
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                uid:
+                                  description: UID is the primary uid initially attached
+                                    to the first process in the container
+                                  format: int64
+                                  type: integer
+                              required:
+                              - gid
+                              - uid
                               type: object
                           type: object
                         volumeMounts:
@@ -661,6 +760,60 @@ spec:
                             node. Kubelet sets this value to Container.Resources.Requests upon successful pod admission
                             and after successfully admitting desired pod resize.
                           type: object
+                        allocatedResourcesStatus:
+                          description: |-
+                            AllocatedResourcesStatus represents the status of various resources
+                            allocated for this Pod.
+                          items:
+                            properties:
+                              name:
+                                description: Name of the resource. Must be unique
+                                  within the pod and match one of the resources from
+                                  the pod spec.
+                                type: string
+                              resources:
+                                description: |-
+                                  List of unique Resources health. Each element in the list contains an unique resource ID and resource health.
+                                  At a minimum, ResourceID must uniquely identify the Resource
+                                  allocated to the Pod on the Node for the lifetime of a Pod.
+                                  See ResourceID type for it's definition.
+                                items:
+                                  description: |-
+                                    ResourceHealth represents the health of a resource. It has the latest device health information.
+                                    This is a part of KEP https://kep.k8s.io/4680 and historical health changes are planned to be added in future iterations of a KEP.
+                                  properties:
+                                    health:
+                                      description: |-
+                                        Health of the resource.
+                                        can be one of:
+                                         - Healthy: operates as normal
+                                         - Unhealthy: reported unhealthy. We consider this a temporary health issue
+                                                      since we do not have a mechanism today to distinguish
+                                                      temporary and permanent issues.
+                                         - Unknown: The status cannot be determined.
+                                                    For example, Device Plugin got unregistered and hasn't been re-registered since.
+
+                                        In future we may want to introduce the PermanentlyUnhealthy Status.
+                                      type: string
+                                    resourceID:
+                                      description: ResourceID is the unique identifier
+                                        of the resource. See the ResourceID type for
+                                        more information.
+                                      type: string
+                                  required:
+                                  - resourceID
+                                  type: object
+                                type: array
+                                x-kubernetes-list-map-keys:
+                                - resourceID
+                                x-kubernetes-list-type: map
+                            required:
+                            - name
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
                         containerID:
                           description: |-
                             ContainerID is the ID of the container in the format '<type>://<container_id>'.
@@ -784,6 +937,12 @@ spec:
                                       the Pod where this field is used. It makes that resource available
                                       inside a container.
                                     type: string
+                                  request:
+                                    description: |-
+                                      Request is the name chosen for a request in the referenced claim.
+                                      If empty, everything from the claim is made available, otherwise
+                                      only the result of this request.
+                                    type: string
                                 required:
                                 - name
                                 type: object
@@ -895,6 +1054,39 @@ spec:
                                   description: (brief) reason the container is not
                                     yet running.
                                   type: string
+                              type: object
+                          type: object
+                        user:
+                          description: User represents user identity information initially
+                            attached to the first process of the container
+                          properties:
+                            linux:
+                              description: |-
+                                Linux holds user identity information initially attached to the first process of the containers in Linux.
+                                Note that the actual running identity can be changed if the process has enough privilege to do so.
+                              properties:
+                                gid:
+                                  description: GID is the primary gid initially attached
+                                    to the first process in the container
+                                  format: int64
+                                  type: integer
+                                supplementalGroups:
+                                  description: SupplementalGroups are the supplemental
+                                    groups initially attached to the first process
+                                    in the container
+                                  items:
+                                    format: int64
+                                    type: integer
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                uid:
+                                  description: UID is the primary uid initially attached
+                                    to the first process in the container
+                                  format: int64
+                                  type: integer
+                              required:
+                              - gid
+                              - uid
                               type: object
                           type: object
                         volumeMounts:
@@ -984,6 +1176,60 @@ spec:
                             node. Kubelet sets this value to Container.Resources.Requests upon successful pod admission
                             and after successfully admitting desired pod resize.
                           type: object
+                        allocatedResourcesStatus:
+                          description: |-
+                            AllocatedResourcesStatus represents the status of various resources
+                            allocated for this Pod.
+                          items:
+                            properties:
+                              name:
+                                description: Name of the resource. Must be unique
+                                  within the pod and match one of the resources from
+                                  the pod spec.
+                                type: string
+                              resources:
+                                description: |-
+                                  List of unique Resources health. Each element in the list contains an unique resource ID and resource health.
+                                  At a minimum, ResourceID must uniquely identify the Resource
+                                  allocated to the Pod on the Node for the lifetime of a Pod.
+                                  See ResourceID type for it's definition.
+                                items:
+                                  description: |-
+                                    ResourceHealth represents the health of a resource. It has the latest device health information.
+                                    This is a part of KEP https://kep.k8s.io/4680 and historical health changes are planned to be added in future iterations of a KEP.
+                                  properties:
+                                    health:
+                                      description: |-
+                                        Health of the resource.
+                                        can be one of:
+                                         - Healthy: operates as normal
+                                         - Unhealthy: reported unhealthy. We consider this a temporary health issue
+                                                      since we do not have a mechanism today to distinguish
+                                                      temporary and permanent issues.
+                                         - Unknown: The status cannot be determined.
+                                                    For example, Device Plugin got unregistered and hasn't been re-registered since.
+
+                                        In future we may want to introduce the PermanentlyUnhealthy Status.
+                                      type: string
+                                    resourceID:
+                                      description: ResourceID is the unique identifier
+                                        of the resource. See the ResourceID type for
+                                        more information.
+                                      type: string
+                                  required:
+                                  - resourceID
+                                  type: object
+                                type: array
+                                x-kubernetes-list-map-keys:
+                                - resourceID
+                                x-kubernetes-list-type: map
+                            required:
+                            - name
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
                         containerID:
                           description: |-
                             ContainerID is the ID of the container in the format '<type>://<container_id>'.
@@ -1107,6 +1353,12 @@ spec:
                                       the Pod where this field is used. It makes that resource available
                                       inside a container.
                                     type: string
+                                  request:
+                                    description: |-
+                                      Request is the name chosen for a request in the referenced claim.
+                                      If empty, everything from the claim is made available, otherwise
+                                      only the result of this request.
+                                    type: string
                                 required:
                                 - name
                                 type: object
@@ -1218,6 +1470,39 @@ spec:
                                   description: (brief) reason the container is not
                                     yet running.
                                   type: string
+                              type: object
+                          type: object
+                        user:
+                          description: User represents user identity information initially
+                            attached to the first process of the container
+                          properties:
+                            linux:
+                              description: |-
+                                Linux holds user identity information initially attached to the first process of the containers in Linux.
+                                Note that the actual running identity can be changed if the process has enough privilege to do so.
+                              properties:
+                                gid:
+                                  description: GID is the primary gid initially attached
+                                    to the first process in the container
+                                  format: int64
+                                  type: integer
+                                supplementalGroups:
+                                  description: SupplementalGroups are the supplemental
+                                    groups initially attached to the first process
+                                    in the container
+                                  items:
+                                    format: int64
+                                    type: integer
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                uid:
+                                  description: UID is the primary uid initially attached
+                                    to the first process in the container
+                                  format: int64
+                                  type: integer
+                              required:
+                              - gid
+                              - uid
                               type: object
                           type: object
                         volumeMounts:
@@ -1354,7 +1639,7 @@ spec:
                         resourceClaimName:
                           description: |-
                             ResourceClaimName is the name of the ResourceClaim that was
-                            generated for the Pod in the namespace of the Pod. It this is
+                            generated for the Pod in the namespace of the Pod. If this is
                             unset, then generating a ResourceClaim was not necessary. The
                             pod.spec.resourceClaims entry can be ignored in this case.
                           type: string
