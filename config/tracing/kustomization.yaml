@@ -1,0 +1,31 @@
+# Tracing-enabled overlay for E2E testing
+# This overlay adds OpenTelemetry tracing configuration to the default setup
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Use default as base
+bases:
+- ../default
+
+# Add tracing arguments patch
+patchesJson6902:
+- target:
+    group: apps
+    version: v1
+    kind: Deployment
+    name: controller-manager
+    namespace: kruise-game-system
+  patch: |-
+    - op: add
+      path: /spec/template/spec/containers/0/args/-
+      value: --enable-tracing=true
+    - op: add
+      path: /spec/template/spec/containers/0/args/-
+      value: --otel-collector-endpoint=otel-collector.observability.svc.cluster.local:4317
+    - op: add
+      path: /spec/template/spec/containers/0/args/-
+      value: --otel-sampling-rate=1.0
+    - op: add
+      path: /spec/template/spec/containers/0/args/-
+      value: --log-json-preset=otel

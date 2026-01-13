@@ -656,7 +656,7 @@ func TestElbPlugin_OnPodDeleted(t *testing.T) {
 				"game.kruise.io/network-status": `{"internalAddresses":[{"ip":"192.168.1.219","ports":[{"name":"80","protocol":"TCP","port":80}]}],"externalAddresses":[{"ip":"159.138.146.2","ports":[{"name":"80","protocol":"TCP","port":500}]}],"currentNetworkState":"Ready","createTime":null,"lastTransitionTime":null}`,
 			},
 			Labels: map[string]string{
-				"game.kruise.io/owner-gss": "test-pod",
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-pod",
 			},
 		},
 	}
@@ -716,7 +716,7 @@ func TestElbPlugin_OnPodDeleted(t *testing.T) {
 				pod: func(p *corev1.Pod) *corev1.Pod {
 					res := p.DeepCopy()
 					res.Annotations["game.kruise.io/network-conf"] = `[{"name":"PortProtocols","value":"80/TCP"},{"name":"kubernetes.io/elb.class","value":"performance"},{"name":"kubernetes.io/elb.id","value":"8f4cf216-a659-40dc-8c77-6068b036ba56"}, {"name":"Fixed","value":"true"}]`
-					res.Labels["game.kruise.io/owner-gss"] = "test-pod"
+					res.Labels[gamekruiseiov1alpha1.GameServerOwnerGssKey] = "test-pod"
 					return res
 				},
 				ctx: context.Background(),
@@ -742,7 +742,7 @@ func TestElbPlugin_OnPodDeleted(t *testing.T) {
 				pod: func(p *corev1.Pod) *corev1.Pod {
 					res := p.DeepCopy()
 					res.Annotations["game.kruise.io/network-conf"] = `[{"name":"PortProtocols","value":"80/TCP"},{"name":"kubernetes.io/elb.class","value":"performance"},{"name":"kubernetes.io/elb.id","value":"8f4cf216-a659-40dc-8c77-6068b036ba56"}, {"name":"Fixed","value":"true"}]`
-					res.Labels["game.kruise.io/owner-gss"] = "test-pod"
+					res.Labels[gamekruiseiov1alpha1.GameServerOwnerGssKey] = "test-pod"
 					return res
 				},
 				ctx: context.Background(),
@@ -777,7 +777,7 @@ func TestElbPlugin_OnPodDeleted(t *testing.T) {
 				pod: func(p *corev1.Pod) *corev1.Pod {
 					res := p.DeepCopy()
 					res.Annotations["game.kruise.io/network-conf"] = `[{"name":"PortProtocols","value":"80/TCP"},{"name":"kubernetes.io/elb.class","value":"performance"},{"name":"kubernetes.io/elb.id","value":"8f4cf216-a659-40dc-8c77-6068b036ba56"}, {"name":"Fixed","value":"true"}]`
-					res.Labels["game.kruise.io/owner-gss"] = "test-pod"
+					res.Labels[gamekruiseiov1alpha1.GameServerOwnerGssKey] = "test-pod"
 					return res
 				},
 				ctx: context.Background(),

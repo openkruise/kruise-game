@@ -1,12 +1,22 @@
 package logging
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"time"
 
 	"github.com/go-logr/zapr"
+	"go.opentelemetry.io/contrib/bridges/otelzap"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	gozap "go.uber.org/zap"
 	gozapcore "go.uber.org/zap/zapcore"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	klog "k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -137,6 +147,21 @@ func (o *Options) Apply(fs *flag.FlagSet) (Result, error) {
 		return Result{}, fmt.Errorf("unsupported log-format %s", finalFormat)
 	}
 
+	otelLogsEndpoint := fs.Lookup("otel-collector-endpoint")
+	if otelLogsEndpoint != nil && otelLogsEndpoint.Value.String() != "" {
+		endpointVal := otelLogsEndpoint.Value.String()
+		o.ZapOptions.ZapOpts = append(o.ZapOptions.ZapOpts,
+			gozap.WrapCore(func(baseCore gozapcore.Core) gozapcore.Core {
+				filteredCore := newFilterCore(baseCore, map[string]bool{"context": true})
+				otelzapCore := setupOTelLogsCore(endpointVal)
+				if otelzapCore == nil {
+					return filteredCore
+				}
+				return gozapcore.NewTee(filteredCore, otelzapCore)
+			}),
+		)
+	}
+
 	logger := zap.New(zap.UseFlagOptions(&o.ZapOptions))
 	cfg = currentJSONConfig()
 	if kv := cfg.resourceKeyValues(); len(kv) > 0 {
@@ -158,4 +183,66 @@ func (o *Options) Apply(fs *flag.FlagSet) (Result, error) {
 		JSONPreset: preset,
 		Warning:    warning,
 	}, nil
+}
+
+// setupOTelLogsCore creates an otelzap bridge core for sending logs to OTel Collector.
+// Returns nil if endpoint is empty or if setup fails (graceful degradation).
+func setupOTelLogsCore(endpoint string) gozapcore.Core {
+	if endpoint == "" {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Create OTLP Logs exporter
+	exporter, err := otlploggrpc.New(ctx,
+		otlploggrpc.WithEndpoint(endpoint),
+		otlploggrpc.WithInsecure(), // TODO: Add TLS support for production
+		otlploggrpc.WithDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+	)
+	if err != nil {
+		// Graceful degradation: log the error but continue without otelzap
+		klog.Warningf("Failed to create OTLP Logs exporter (otelzap disabled): %v", err)
+		return nil
+	}
+
+	// Create LoggerProvider
+	loggerProvider := sdklog.NewLoggerProvider(
+		sdklog.WithProcessor(sdklog.NewBatchProcessor(exporter)),
+		sdklog.WithResource(buildOTelResource()),
+	)
+
+	// Create otelzap bridge core
+	otelzapCore := otelzap.NewCore("okg-controller-manager",
+		otelzap.WithLoggerProvider(loggerProvider),
+	)
+
+	return otelzapCore
+}
+
+func buildOTelResource() *resource.Resource {
+	cfg := currentJSONConfig()
+	attrs := []attribute.KeyValue{}
+	serviceName := cfg.Resource.ServiceName
+	if serviceName == "" {
+		serviceName = defaultServiceName
+	}
+	attrs = append(attrs, semconv.ServiceNameKey.String(serviceName))
+	if cfg.Resource.Namespace != "" {
+		attrs = append(attrs, semconv.ServiceNamespaceKey.String(cfg.Resource.Namespace))
+	}
+	if cfg.Resource.ServiceVersion != "" {
+		attrs = append(attrs, semconv.ServiceVersionKey.String(cfg.Resource.ServiceVersion))
+	}
+	if cfg.Resource.ServiceInstanceID != "" {
+		attrs = append(attrs, semconv.ServiceInstanceIDKey.String(cfg.Resource.ServiceInstanceID))
+	}
+	if cfg.Resource.Namespace != "" {
+		attrs = append(attrs, semconv.K8SNamespaceNameKey.String(cfg.Resource.Namespace))
+	}
+	if cfg.Resource.PodName != "" {
+		attrs = append(attrs, semconv.K8SPodNameKey.String(cfg.Resource.PodName))
+	}
+	return resource.NewWithAttributes(semconv.SchemaURL, attrs...)
 }

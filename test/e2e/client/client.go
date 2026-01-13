@@ -20,9 +20,9 @@ import (
 )
 
 const (
-	Namespace         = "e2e-test"
-	GameServerSet     = "default-gss"
-	GameContainerName = "default-game"
+	Namespace                = "e2e-test"
+	DefaultGameServerSetName = "default-gss"
+	GameContainerName        = "default-game"
 )
 
 type Client struct {
@@ -40,6 +40,11 @@ func NewKubeClient(kruisegameClient kruisegameclientset.Interface, kubeClint cli
 // GetKubeClient returns the Kubernetes clientset for accessing core APIs.
 func (client *Client) GetKubeClient() clientset.Interface {
 	return client.kubeClint
+}
+
+// GetKruiseGameClient returns the Kruise-Game clientset for accessing game-specific APIs.
+func (client *Client) GetKruiseGameClient() kruisegameclientset.Interface {
+	return client.kruisegameClient
 }
 
 func (client *Client) CreateNamespace() error {
@@ -66,10 +71,13 @@ func (client *Client) DeleteNamespace() error {
 		})
 }
 
-func (client *Client) DefaultGameServerSet() *gameKruiseV1alpha1.GameServerSet {
+func (client *Client) DefaultGameServerSet(name string) *gameKruiseV1alpha1.GameServerSet {
+	if name == "" {
+		name = DefaultGameServerSetName
+	}
 	return &gameKruiseV1alpha1.GameServerSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      GameServerSet,
+			Name:      name,
 			Namespace: Namespace,
 		},
 		Spec: gameKruiseV1alpha1.GameServerSetSpec{
@@ -107,9 +115,12 @@ func (client *Client) UpdateGameServerSet(gss *gameKruiseV1alpha1.GameServerSet)
 	return client.kruisegameClient.GameV1alpha1().GameServerSets(Namespace).Update(context.TODO(), gss, metav1.UpdateOptions{})
 }
 
-func (client *Client) DeleteGameServerSet() error {
+func (client *Client) DeleteGameServerSet(name string) error {
+	if name == "" {
+		name = DefaultGameServerSetName
+	}
 	return wait.PollUntilContextTimeout(context.TODO(), 3*time.Second, time.Minute, true, func(ctx context.Context) (done bool, err error) {
-		err = client.kruisegameClient.GameV1alpha1().GameServerSets(Namespace).Delete(ctx, GameServerSet, metav1.DeleteOptions{})
+		err = client.kruisegameClient.GameV1alpha1().GameServerSets(Namespace).Delete(ctx, name, metav1.DeleteOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				return true, nil
@@ -119,8 +130,11 @@ func (client *Client) DeleteGameServerSet() error {
 	})
 }
 
-func (client *Client) GetGameServerSet() (*gameKruiseV1alpha1.GameServerSet, error) {
-	return client.kruisegameClient.GameV1alpha1().GameServerSets(Namespace).Get(context.TODO(), GameServerSet, metav1.GetOptions{})
+func (client *Client) GetGameServerSet(name string) (*gameKruiseV1alpha1.GameServerSet, error) {
+	if name == "" {
+		name = DefaultGameServerSetName
+	}
+	return client.kruisegameClient.GameV1alpha1().GameServerSets(Namespace).Get(context.TODO(), name, metav1.GetOptions{})
 }
 
 func (client *Client) PatchGameServer(gsName string, data []byte) (*gameKruiseV1alpha1.GameServer, error) {
@@ -131,8 +145,11 @@ func (client *Client) GetGameServer(gsName string) (*gameKruiseV1alpha1.GameServ
 	return client.kruisegameClient.GameV1alpha1().GameServers(Namespace).Get(context.TODO(), gsName, metav1.GetOptions{})
 }
 
-func (client *Client) PatchGameServerSet(data []byte) (*gameKruiseV1alpha1.GameServerSet, error) {
-	return client.kruisegameClient.GameV1alpha1().GameServerSets(Namespace).Patch(context.TODO(), GameServerSet, types.MergePatchType, data, metav1.PatchOptions{})
+func (client *Client) PatchGameServerSet(name string, data []byte) (*gameKruiseV1alpha1.GameServerSet, error) {
+	if name == "" {
+		name = DefaultGameServerSetName
+	}
+	return client.kruisegameClient.GameV1alpha1().GameServerSets(Namespace).Patch(context.TODO(), name, types.MergePatchType, data, metav1.PatchOptions{})
 }
 
 func (client *Client) GetGameServerList(labelSelector string) (*gameKruiseV1alpha1.GameServerList, error) {

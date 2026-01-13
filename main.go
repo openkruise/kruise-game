@@ -55,6 +55,8 @@ import (
 	"github.com/openkruise/kruise-game/pkg/externalscaler"
 	"github.com/openkruise/kruise-game/pkg/logging"
 	"github.com/openkruise/kruise-game/pkg/metrics"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
+	"github.com/openkruise/kruise-game/pkg/tracing"
 	"github.com/openkruise/kruise-game/pkg/util/client"
 	"github.com/openkruise/kruise-game/pkg/webhook"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -92,6 +94,8 @@ func main() {
 	var scaleServerAddr string
 	logOptions := logging.NewOptions()
 	logOptions.AddFlags(flag.CommandLine)
+	tracingOptions := tracing.NewOptions()
+	tracingOptions.AddFlags(flag.CommandLine)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8082", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
@@ -118,6 +122,22 @@ func main() {
 	setupLog = ctrl.Log.WithName("setup")
 	if logResult.Warning != "" {
 		setupLog.Info(logResult.Warning)
+	}
+
+	// Initialize tracing (non-blocking - falls back to no-op on failure)
+	if err := tracingOptions.Apply(); err != nil {
+		setupLog.Info("Tracing initialization failed, using no-op tracer", telemetryfields.FieldExceptionMessage, err.Error())
+	} else if tracingOptions.Enabled {
+		setupLog.Info("Tracing initialized successfully", telemetryfields.FieldCollector, tracingOptions.CollectorEndpoint)
+
+		// Register shutdown hook
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := tracing.Shutdown(ctx); err != nil {
+				setupLog.Error(err, "failed to shutdown tracer")
+			}
+		}()
 	}
 
 	// syncPeriod parsed
@@ -221,7 +241,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	setupLog.Info("setup controllers", "event", "controller.setup")
+	setupLog.Info("setup controllers", telemetryfields.FieldEvent, "controller.setup")
 	if err = controller.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
@@ -229,14 +249,17 @@ func main() {
 
 	signal := ctrl.SetupSignalHandler()
 	go func() {
-		setupLog.Info("waiting for cache sync to init cloud provider manager", "event", "cache.wait_for_sync")
+		setupLog.Info("waiting for cache sync to init cloud provider manager", telemetryfields.FieldEvent, "cache.wait_for_sync")
 		if mgr.GetCache().WaitForCacheSync(signal) {
-			setupLog.Info("cache synced, cloud provider manager start to init", "event", "cache.synced")
+			setupLog.Info("cache synced, cloud provider manager start to init", telemetryfields.FieldEvent, "cache.synced")
 			if enableLeaderElection {
-				setupLog.Info("waiting for leader election to init cloud provider manager", "event", "leader_election.wait_for_leadership")
+				setupLog.Info("waiting for leader election to init cloud provider manager", telemetryfields.FieldEvent, "leader_election.wait_for_leadership")
 				<-mgr.Elected()
+				setupLog.Info("leader election completed, initializing cloud provider manager", telemetryfields.FieldEvent, "leader_election.completed")
 			}
+			setupLog.Info("initializing cloud provider manager", telemetryfields.FieldEvent, "cloud_provider_manager.init_start")
 			cloudProviderManager.Init(mgr.GetClient())
+			setupLog.Info("cloud provider manager initialized successfully", telemetryfields.FieldEvent, "cloud_provider_manager.init_completed")
 			isCloudManagerInitialized.Store(true)
 		}
 	}()
@@ -277,7 +300,7 @@ func main() {
 		ScaleServerAddr: scaleServerAddr,
 	})
 
-	setupLog.Info("starting kruise-game-manager", "event", "service.start")
+	setupLog.Info("starting kruise-game-manager", telemetryfields.FieldEvent, "service.start")
 
 	if err := mgr.Start(signal); err != nil {
 		setupLog.Error(err, "problem running manager")
@@ -316,7 +339,7 @@ type serviceSummary struct {
 
 func logServiceReadySummary(logger logr.Logger, summary serviceSummary) {
 	fields := []interface{}{
-		"event", "service.ready",
+		telemetryfields.FieldEvent, "service.ready",
 		"leader_election", summary.LeaderElection,
 	}
 	if summary.MetricsAddr != "" {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
 	"github.com/openkruise/kruise-game/pkg/version"
 )
 
@@ -133,7 +134,10 @@ func firstNonEmpty(values ...string) string {
 func (cfg JSONConfig) resourceKeyValues() []interface{} {
 	var kv []interface{}
 	if cfg.Resource.ServiceName != "" {
-		kv = append(kv, "service.name", cfg.Resource.ServiceName)
+		kv = append(kv, telemetryfields.FieldServiceName, cfg.Resource.ServiceName)
+	}
+	if cfg.Resource.Namespace != "" {
+		kv = append(kv, "service.namespace", cfg.Resource.Namespace)
 	}
 	if cfg.Resource.ServiceVersion != "" {
 		kv = append(kv, "service.version", cfg.Resource.ServiceVersion)
@@ -142,10 +146,10 @@ func (cfg JSONConfig) resourceKeyValues() []interface{} {
 		kv = append(kv, "service.instance.id", cfg.Resource.ServiceInstanceID)
 	}
 	if cfg.Resource.Namespace != "" {
-		kv = append(kv, "k8s.namespace.name", cfg.Resource.Namespace)
+		kv = append(kv, telemetryfields.FieldK8sNamespaceName, cfg.Resource.Namespace)
 	}
 	if cfg.Resource.PodName != "" {
-		kv = append(kv, "k8s.pod.name", cfg.Resource.PodName)
+		kv = append(kv, telemetryfields.FieldK8sPodName, cfg.Resource.PodName)
 	}
 	return kv
 }
@@ -160,4 +164,11 @@ func ResourceKeyValues() []interface{} {
 	out := make([]interface{}, len(values))
 	copy(out, values)
 	return out
+}
+
+// ResourceMetadataSnapshot returns the current JSON logging resource metadata.
+// It is safe for consumers like tracing to reuse so resource attributes match.
+func ResourceMetadataSnapshot() ResourceMetadata {
+	cfg := currentJSONConfig()
+	return cfg.Resource
 }

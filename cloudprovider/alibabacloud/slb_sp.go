@@ -2,7 +2,11 @@ package alibabacloud
 
 import (
 	"context"
-	"fmt"
+	stdErrors "errors"
+	"strconv"
+	"strings"
+	"sync"
+
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
@@ -15,9 +19,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strconv"
-	"strings"
-	"sync"
 )
 
 const (
@@ -313,7 +314,7 @@ func (s *SlbSpPlugin) getOrAllocate(podNetConfig *lbSpConfig, pod *corev1.Pod) (
 	}
 
 	if selectId == "" {
-		return "", fmt.Errorf(ErrorUpperLimit)
+		return "", stdErrors.New(ErrorUpperLimit)
 	}
 
 	s.numBackends[selectId]++

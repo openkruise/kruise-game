@@ -23,17 +23,14 @@ func RunTestCases(f *framework.Framework) {
 		})
 
 		ginkgo.AfterEach(func() {
-			if ginkgo.CurrentGinkgoTestDescription().Failed {
-				f.DumpAuditIfFailed()
-			}
 			err := f.AfterEach()
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		})
 
-		// Run logging smoke test first for fast feedback
+		RunKubernetesPluginTracingTest(f)
+
 		RunLoggingSmokeTest(f)
 
-		// Run HA deployment update test (only in HA mode)
 		RunHADeploymentUpdateTest(f)
 
 		ginkgo.It("scale", func() {
@@ -127,7 +124,7 @@ func RunTestCases(f *framework.Framework) {
 				err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
 				gomega.Expect(err).To(gomega.BeNil())
 
-				target := fmt.Sprintf("%s-0", client.GameServerSet)
+				target := fmt.Sprintf("%s-0", gss.GetName())
 
 				gomega.Expect(f.WaitForNodePortServiceSelector(target, false)).To(gomega.BeNil())
 				gomega.Expect(f.WaitForGsDesiredNetworkState(target, gameKruiseV1alpha1.NetworkReady)).To(gomega.BeNil())
@@ -276,7 +273,7 @@ func RunTestCases(f *framework.Framework) {
 			// 3. Wait for controller to backfill reserve into GSS (both spec and annotation contain 3 and 4)
 			err = f.WaitForGss(func(g *gameKruiseV1alpha1.GameServerSet) (bool, error) {
 				rset := util.GetReserveOrdinalIntSet(g.Spec.ReserveGameServerIds)
-				if rset == nil || !(rset.Has(3) && rset.Has(4)) {
+				if rset == nil || !rset.Has(3) || !rset.Has(4) {
 					return false, nil
 				}
 				ann := g.GetAnnotations()[gameKruiseV1alpha1.GameServerSetReserveIdsKey]
@@ -305,11 +302,12 @@ func RunTestCases(f *framework.Framework) {
 			gomega.Expect(err).To(gomega.BeNil())
 
 			// 2. Mark gss-1 as Kill and wait for spec update plus pod handling
-			_, err = f.MarkGameServerOpsState(client.GameServerSet+"-1", string(gameKruiseV1alpha1.Kill))
+			target := fmt.Sprintf("%s-1", gss.GetName())
+			_, err = f.MarkGameServerOpsState(target, string(gameKruiseV1alpha1.Kill))
 			gomega.Expect(err).To(gomega.BeNil())
-			err = f.WaitForGsSpecOpsState(client.GameServerSet+"-1", string(gameKruiseV1alpha1.Kill))
+			err = f.WaitForGsSpecOpsState(target, string(gameKruiseV1alpha1.Kill))
 			gomega.Expect(err).To(gomega.BeNil())
-			err = f.WaitForPodOpsStateOrDeleted(client.GameServerSet+"-1", string(gameKruiseV1alpha1.Kill))
+			err = f.WaitForPodOpsStateOrDeleted(target, string(gameKruiseV1alpha1.Kill))
 			gomega.Expect(err).To(gomega.BeNil())
 
 			// 3. Wait for replicas to automatically become 2, and assert 1 is excluded

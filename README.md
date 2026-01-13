@@ -106,4 +106,3 @@ OpenKruiseGame has the following core features:
 * Submit [issues](https://github.com/openkruise/kruise-game/issues) to offer suggestions for OpenKruiseGame or discuss the best practices of cloud-native transformation of games.
 * Join the DingTalk group (ID: 44862615) to have a discussion with core contributors to OpenKruiseGame.
 * Contact us by email at zhongwei.lzw@alibaba-inc.com.
-

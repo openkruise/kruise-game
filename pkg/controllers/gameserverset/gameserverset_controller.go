@@ -22,6 +22,10 @@ import (
 
 	kruisev1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,13 +41,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/pkg/logging"
+	"github.com/openkruise/kruise-game/pkg/telemetryfields"
+	"github.com/openkruise/kruise-game/pkg/tracing"
 	"github.com/openkruise/kruise-game/pkg/util"
 	utildiscovery "github.com/openkruise/kruise-game/pkg/util/discovery"
 )
@@ -182,44 +188,78 @@ type GameServerSetReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.12.1/pkg/reconcile
 func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
 	namespacedName := req.NamespacedName
+
+	// Create root span for GameServerSet Reconcile (SERVER span kind)
+	tracer := otel.Tracer("okg-controller-manager")
+	ctx, span := tracer.Start(ctx, tracing.SpanReconcileGameServerSet,
+		trace.WithSpanKind(trace.SpanKindServer),
+		trace.WithAttributes(
+			tracing.AttrK8sNamespaceName(namespacedName.Namespace),
+			tracing.AttrGameServerSetNamespace(namespacedName.Namespace),
+			tracing.AttrGameServerSetName(namespacedName.Name),
+		))
+	defer span.End()
+
+	logger := logging.FromContextWithTrace(ctx).WithValues(
+		telemetryfields.FieldGameServerSetNamespace, namespacedName.Namespace,
+		telemetryfields.FieldGameServerSetName, namespacedName.Name,
+	)
 
 	// get GameServerSet
 	gss := &gamekruiseiov1alpha1.GameServerSet{}
 	err := r.Get(ctx, namespacedName, gss)
 	if err != nil {
 		if errors.IsNotFound(err) {
+			span.SetAttributes(tracing.AttrReconcileTrigger("delete"))
+			span.SetStatus(codes.Ok, "GameServerSet not found (deleted)")
 			return reconcile.Result{}, nil
 		}
-		klog.Errorf("Failed to find GameServerSet %s in %s,because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
+		logger.Error(err, "failed to get GameServerSet")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to get GameServerSet")
 		return reconcile.Result{}, err
 	}
 
-	gsm := NewGameServerSetManager(gss, r.Client, r.recorder)
+	span.SetAttributes(tracing.AttrGameServerSetName(gss.GetName()))
+	span.SetAttributes(tracing.AttrReconcileTrigger("update"))
+
+	gsm := NewGameServerSetManager(gss, r.Client, r.recorder, logger)
 	// The serverless scenario PodProbeMarker takes effect during the Webhook phase, so need to create the PodProbeMarker in advance.
-	err, done := gsm.SyncPodProbeMarker()
+	span.AddEvent(tracing.EventGameServerSetReconcileSyncPodProbeMarkerStart)
+	err, done := gsm.SyncPodProbeMarker(ctx)
 	if err != nil {
-		klog.Errorf("GameServerSet %s failed to synchronize PodProbeMarker in %s,because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
+		logger.Error(err, "failed to sync PodProbeMarker")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to sync PodProbeMarker")
 		return reconcile.Result{}, err
 	} else if !done {
+		span.AddEvent(tracing.EventGameServerSetReconcileSyncPodProbeMarkerWaiting)
+		span.SetAttributes(attribute.Bool(telemetryfields.FieldPodProbeMarkerSynced, false))
 		return reconcile.Result{}, nil
 	}
+	span.AddEvent(tracing.EventGameServerSetReconcileSyncPodProbeMarkerSuccess)
 
 	// get advanced statefulset
 	asts := &kruiseV1beta1.StatefulSet{}
 	err = r.Get(ctx, namespacedName, asts)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			err = r.initAsts(gss)
+			span.SetAttributes(tracing.AttrReconcileAction("create_statefulset"))
+			err = r.initAsts(ctx, gss)
 			if err != nil {
-				klog.Errorf("failed to create advanced statefulset %s in %s,because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
+				logger.Error(err, "failed to create Advanced StatefulSet")
+				span.RecordError(err)
+				span.SetStatus(codes.Error, "failed to create StatefulSet")
 				return reconcile.Result{}, err
 			}
 			r.recorder.Event(gss, corev1.EventTypeNormal, CreateWorkloadReason, "created Advanced StatefulSet")
+			span.SetStatus(codes.Ok, "StatefulSet created successfully")
 			return reconcile.Result{}, nil
 		}
-		klog.Errorf("failed to find advanced statefulset %s in %s,because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
+		logger.Error(err, "failed to get Advanced StatefulSet")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to get StatefulSet")
 		return reconcile.Result{}, err
 	}
 
@@ -232,52 +272,77 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}),
 	})
 	if err != nil {
-		klog.Errorf("failed to list GameServers of GameServerSet %s in %s.", gss.GetName(), gss.GetNamespace())
+		logger.Error(err, "failed to list GameServers",
+			telemetryfields.FieldGameServerSetNamespace, gss.GetNamespace(),
+			telemetryfields.FieldGameServerSetName, gss.GetName())
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to list Pods")
 		return reconcile.Result{}, err
 	}
+
+	span.SetAttributes(attribute.Int(telemetryfields.FieldPodsCount, len(podList.Items)))
 
 	gsm.SyncStsAndPodList(asts, podList.Items)
 
 	// kill game servers
 	newReplicas := gsm.GetReplicasAfterKilling()
 	if *gss.Spec.Replicas != *newReplicas {
+		span.SetAttributes(
+			tracing.AttrReconcileAction("kill_gameservers"),
+			attribute.Int(telemetryfields.FieldReplicasOld, int(*gss.Spec.Replicas)),
+			attribute.Int(telemetryfields.FieldReplicasNew, int(*newReplicas)),
+		)
 		gss.Spec.Replicas = newReplicas
-		err = r.Client.Update(ctx, gss)
+		err = r.Update(ctx, gss)
 		if err != nil {
-			klog.Errorf("failed to kill GameServers of GameServerSet %s in %s.", gss.GetName(), gss.GetNamespace())
+			logger.Error(err, "failed to update replicas after kill")
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to update replicas")
 			return reconcile.Result{}, err
 		}
+		span.SetStatus(codes.Ok, "GameServers killed successfully")
 		return reconcile.Result{}, nil
 	}
 
 	// scale game servers
 	if gsm.IsNeedToScale() {
-		err = gsm.GameServerScale()
+		span.SetAttributes(tracing.AttrReconcileAction("scale_gameservers"))
+		err = gsm.GameServerScale(ctx)
 		if err != nil {
-			klog.Errorf("GameServerSet %s failed to scale GameServers in %s,because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
+			logger.Error(err, "failed to scale GameServers")
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to scale GameServers")
 			return reconcile.Result{}, err
 		}
+		span.SetStatus(codes.Ok, "GameServers scaled successfully")
 		return reconcile.Result{}, nil
 	}
 
 	// update workload
 	if gsm.IsNeedToUpdateWorkload() {
-		err = gsm.UpdateWorkload()
+		span.SetAttributes(tracing.AttrReconcileAction("update_workload"))
+		err = gsm.UpdateWorkload(ctx)
 		if err != nil {
-			klog.Errorf("GameServerSet %s failed to synchronize workload in %s,because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
+			logger.Error(err, "failed to update workload")
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to update workload")
 			return reconcile.Result{}, err
 		}
 		r.recorder.Event(gss, corev1.EventTypeNormal, UpdateWorkloadReason, "updated Advanced StatefulSet")
+		span.SetStatus(codes.Ok, "workload updated successfully")
 		return reconcile.Result{}, nil
 	}
 
 	// sync GameServerSet Status
-	err = gsm.SyncStatus()
+	err = gsm.SyncStatus(ctx)
 	if err != nil {
-		klog.Errorf("GameServerSet %s failed to synchronize its status in %s,because of %s.", namespacedName.Name, namespacedName.Namespace, err.Error())
+		logger.Error(err, "failed to sync status")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to sync status")
 		return reconcile.Result{}, err
 	}
 
+	span.SetStatus(codes.Ok, "Reconcile completed successfully")
 	return ctrl.Result{}, nil
 }
 
@@ -288,7 +353,7 @@ func (r *GameServerSetReconciler) SetupWithManager(mgr ctrl.Manager) (c controll
 	return c, err
 }
 
-func (r *GameServerSetReconciler) initAsts(gss *gamekruiseiov1alpha1.GameServerSet) error {
+func (r *GameServerSetReconciler) initAsts(ctx context.Context, gss *gamekruiseiov1alpha1.GameServerSet) error {
 	asts := &kruiseV1beta1.StatefulSet{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "StatefulSet",
@@ -334,5 +399,5 @@ func (r *GameServerSetReconciler) initAsts(gss *gamekruiseiov1alpha1.GameServerS
 
 	asts = util.GetNewAstsFromGss(gss.DeepCopy(), asts)
 
-	return r.Client.Create(context.Background(), asts)
+	return r.Create(ctx, asts)
 }
