@@ -873,7 +873,7 @@ ReserveNlbNum
 - Default: 1
 - Configuration change supported: No
 
-ExternalTrafficPolicy
+ExternalTrafficPolicyType
 
 - Meaning: Service external traffic policy
 - Format: `Local` or `Cluster`
@@ -970,23 +970,24 @@ RetainNLBOnDelete
 
 1. **NLB Allocation**
    - Each Pod calculates its NLB based on index: `nlbIndex = podIndex / podsPerNLB`
-   - NLB naming rule: `{gssName}-{eipIspType}-{nlbIndex}`
-   - Example: `game-server-bgp-0`, `game-server-bgp-pro-0`
+   - NLB naming rule: `{gssName}-{eipIspType(lowercase)}-{nlbIndex}`
+   - Example: With `EipIspTypes=BGP`, generates `game-server-bgp-0` (note: ISP type is converted to lowercase)
 
 2. **EIP Allocation**
    - Each NLB corresponds to multiple EIPs (one per zone)
-   - EIP naming rule: `{gssName}-eip-{eipIspType}-{nlbIndex}-z{zoneIndex}`
+   - EIP naming rule: `{gssName}-eip-{eipIspType(lowercase)}-{nlbIndex}-z{zoneIndex}`
    - Example: `game-server-eip-bgp-0-z0`, `game-server-eip-bgp-0-z1`
 
 3. **Service Mapping**
    - Each Pod corresponds to multiple Services (one per line)
-   - Service naming rule: `{podName}-{eipIspType}`
-   - Example: `game-server-0-bgp`, `game-server-0-bgp-pro`
+   - Service naming rule: `{podName}-{eipIspType(lowercase)}`
+   - Example: With `EipIspTypes=BGP,BGP_PRO`, Pod `game-server-0` generates `game-server-0-bgp` and `game-server-0-bgp_pro`
 
 4. **Port Allocation**
    - Each Pod is allocated a unique port range on the NLB
-   - Calculation formula: `port = minPort + (podIndexInNLB * portCount) + portOffset`
-   - Automatically skips ports configured in `BlockPorts`
+   - Base formula: `port = minPort + (podIndexInNLB * portCount) + portOffset`
+   - Automatically skips ports configured in `BlockPorts` (actual port may be greater than formula result)
+   - Example: If `MinPort=10000`, `BlockPorts=10005`, Pod-5's first port will be `10006` instead of `10005`
 
 **Resource Lifecycle:**
 
