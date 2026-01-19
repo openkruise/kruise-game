@@ -148,12 +148,17 @@ func (o *Options) Apply(fs *flag.FlagSet) (Result, error) {
 	}
 
 	otelLogsEndpoint := fs.Lookup("otel-collector-endpoint")
+	otelLogsToken := fs.Lookup("otel-collector-token")
 	if otelLogsEndpoint != nil && otelLogsEndpoint.Value.String() != "" {
 		endpointVal := otelLogsEndpoint.Value.String()
+		tokenVal := ""
+		if otelLogsToken != nil {
+			tokenVal = otelLogsToken.Value.String()
+		}
 		o.ZapOptions.ZapOpts = append(o.ZapOptions.ZapOpts,
 			gozap.WrapCore(func(baseCore gozapcore.Core) gozapcore.Core {
 				filteredCore := newFilterCore(baseCore, map[string]bool{"context": true})
-				otelzapCore := setupOTelLogsCore(endpointVal)
+				otelzapCore := setupOTelLogsCore(endpointVal, tokenVal)
 				if otelzapCore == nil {
 					return filteredCore
 				}
@@ -187,7 +192,7 @@ func (o *Options) Apply(fs *flag.FlagSet) (Result, error) {
 
 // setupOTelLogsCore creates an otelzap bridge core for sending logs to OTel Collector.
 // Returns nil if endpoint is empty or if setup fails (graceful degradation).
-func setupOTelLogsCore(endpoint string) gozapcore.Core {
+func setupOTelLogsCore(endpoint, token string) gozapcore.Core {
 	if endpoint == "" {
 		return nil
 	}
@@ -195,12 +200,22 @@ func setupOTelLogsCore(endpoint string) gozapcore.Core {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Create OTLP Logs exporter
-	exporter, err := otlploggrpc.New(ctx,
+	// Build exporter options
+	exporterOpts := []otlploggrpc.Option{
 		otlploggrpc.WithEndpoint(endpoint),
 		otlploggrpc.WithInsecure(), // TODO: Add TLS support for production
 		otlploggrpc.WithDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
-	)
+	}
+
+	// Add authentication header if token is provided
+	if token != "" {
+		exporterOpts = append(exporterOpts, otlploggrpc.WithHeaders(map[string]string{
+			"Authorization": "Bearer " + token,
+		}))
+	}
+
+	// Create OTLP Logs exporter
+	exporter, err := otlploggrpc.New(ctx, exporterOpts...)
 	if err != nil {
 		// Graceful degradation: log the error but continue without otelzap
 		klog.Warningf("Failed to create OTLP Logs exporter (otelzap disabled): %v", err)
