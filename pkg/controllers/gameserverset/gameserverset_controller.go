@@ -120,8 +120,8 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 
 // watch pod
 func watchPod(mgr manager.Manager, c controller.Controller) (err error) {
-	if err := c.Watch(source.Kind(mgr.GetCache(), &corev1.Pod{}, &handler.TypedFuncs[*corev1.Pod]{
-		CreateFunc: func(ctx context.Context, createEvent event.TypedCreateEvent[*corev1.Pod], limitingInterface workqueue.RateLimitingInterface) {
+	if err := c.Watch(source.Kind(mgr.GetCache(), &corev1.Pod{}, &handler.TypedFuncs[*corev1.Pod, reconcile.Request]{
+		CreateFunc: func(ctx context.Context, createEvent event.TypedCreateEvent[*corev1.Pod], limitingInterface workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 			pod := createEvent.Object
 			if gssName, exist := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; exist {
 				limitingInterface.Add(reconcile.Request{NamespacedName: types.NamespacedName{
@@ -130,7 +130,7 @@ func watchPod(mgr manager.Manager, c controller.Controller) (err error) {
 				}})
 			}
 		},
-		UpdateFunc: func(ctx context.Context, updateEvent event.TypedUpdateEvent[*corev1.Pod], limitingInterface workqueue.RateLimitingInterface) {
+		UpdateFunc: func(ctx context.Context, updateEvent event.TypedUpdateEvent[*corev1.Pod], limitingInterface workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 			pod := updateEvent.ObjectNew
 			if gssName, exist := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; exist {
 				limitingInterface.Add(reconcile.Request{NamespacedName: types.NamespacedName{
@@ -139,7 +139,7 @@ func watchPod(mgr manager.Manager, c controller.Controller) (err error) {
 				}})
 			}
 		},
-		DeleteFunc: func(ctx context.Context, deleteEvent event.TypedDeleteEvent[*corev1.Pod], limitingInterface workqueue.RateLimitingInterface) {
+		DeleteFunc: func(ctx context.Context, deleteEvent event.TypedDeleteEvent[*corev1.Pod], limitingInterface workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 			pod := deleteEvent.Object
 			if gssName, exist := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]; exist {
 				limitingInterface.Add(reconcile.Request{NamespacedName: types.NamespacedName{

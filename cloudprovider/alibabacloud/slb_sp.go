@@ -60,7 +60,7 @@ func (s *SlbSpPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.C
 
 	lbId, err := s.getOrAllocate(podNetConfig, pod)
 	if err != nil {
-		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
 	}
 
 	// Get Svc
@@ -74,7 +74,7 @@ func (s *SlbSpPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.C
 			// Create Svc
 			return pod, cperrors.ToPluginError(s.createSvc(c, ctx, pod, podNetConfig, lbId), cperrors.ApiCallError)
 		}
-		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 	}
 
 	pod, err = networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
@@ -96,7 +96,7 @@ func (s *SlbSpPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context
 	podNetConfig := parseLbSpConfig(networkManager.GetNetworkConfig())
 	podSlbId, err := s.getOrAllocate(podNetConfig, pod)
 	if err != nil {
-		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
 	}
 
 	// Get Svc
@@ -110,7 +110,7 @@ func (s *SlbSpPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context
 			// Create Svc
 			return pod, cperrors.ToPluginError(s.createSvc(c, ctx, pod, podNetConfig, podSlbId), cperrors.ApiCallError)
 		}
-		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 	}
 
 	_, hasLabel := pod.Labels[SlbIdLabelKey]
@@ -135,7 +135,7 @@ func (s *SlbSpPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context
 	}
 
 	// network not ready
-	if svc.Status.LoadBalancer.Ingress == nil {
+	if len(svc.Status.LoadBalancer.Ingress) == 0 {
 		return pod, nil
 	}
 

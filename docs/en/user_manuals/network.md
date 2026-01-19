@@ -130,9 +130,16 @@ Clients can access the game server by using 47.97.227.137:512.
 
 OpenKruiseGame supports the following network plugins:
 - Kubernetes-HostPort
+- Kubernetes-NodePort
+- Kubernetes-Ingress
 - AlibabaCloud-NATGW
 - AlibabaCloud-SLB
+- AlibabaCloud-NLB
+- AlibabaCloud-AutoNLBs-V2
+- AlibabaCloud-EIP
 - AlibabaCloud-SLB-SharedPort
+- AlibabaCloud-NLB-SharedPort
+- Volcengine-CLB
 - Volcengine-EIP
 - HwCloud-ELB
 - HwCloud-CCE-ELB
@@ -734,6 +741,566 @@ The network status of GameServer would be as follows:
 ```
 
 Clients can access the game server by using nlb-muyo7fv6z646ygcxxx.cn-xxx.nlb.aliyuncs.com:1047
+
+---
+
+### AlibabaCloud-AutoNLBs-V2
+
+#### Plugin name
+
+`AlibabaCloud-AutoNLBs-V2`
+
+#### Cloud Provider
+
+AlibabaCloud
+
+#### Plugin description
+
+AutoNLBs-V2 is an enhanced version of the Alibaba Cloud NLB (Network Load Balancer) network model, designed specifically for large-scale game server scenarios. This plugin manages NLB and EIP resources through CRD (Custom Resource Definition), implementing resource pooling, prewarming mechanisms, and multi-ISP access capabilities, significantly improving network readiness speed and resource utilization.
+
+**Key Features:**
+
+1. **Resource Pooling and Reuse**
+   - NLB instances are independent of GameServerSet lifecycle and support cross-GSS reuse
+   - EIP resource pooling management to avoid frequent creation and deletion
+   - Reduces costs and resource creation time
+
+2. **Service Prewarming Mechanism**
+   - Pre-create Service resource pool, Pods directly associate when created
+   - Network readiness time reduced from minutes to seconds
+   - Supports large-scale concurrent Pod creation scenarios
+
+3. **Multi-ISP Access Support**
+   - Supports BGP, BGP_PRO, and single-line ISP (ChinaTelecom, ChinaMobile, ChinaUnicom)
+   - A single Pod can have multiple network lines simultaneously
+   - Suitable for multi-carrier access scenarios
+
+4. **Automatic Resource Management**
+   - Automatically calculates NLB allocation based on Pod index
+   - Intelligent port allocation to avoid port conflicts
+   - Supports dynamic scaling
+
+5. **Depends on CRD Operators**
+   - Requires deployment of [AlibabaCloud-NLB-Operator](https://github.com/chrisliu1995/AlibabaCloud-NLB-Operator)
+   - Requires deployment of [alibabacloud-eip-operator](https://github.com/chrisliu1995/alibabacloud-eip-operator)
+
+- This network plugin supports network isolation: Yes
+
+#### Prerequisites
+
+1. **Clone Helm Chart Repository**
+```bash
+git clone https://github.com/chrisliu1995/AlibabaCloud-Operator-Charts.git
+cd AlibabaCloud-Operator-Charts
+```
+
+2. **Deploy NLB and EIP Operators**
+```bash
+helm install alibabacloud-operators . \
+  --namespace kruise-game-system \
+  --create-namespace \
+  --set global.alibabacloud.accessKeyId=<your-access-key-id> \
+  --set global.alibabacloud.accessKeySecret=<your-access-key-secret> \
+  --set global.alibabacloud.region=<your-region>
+```
+
+3. **Verify Installation**
+```bash
+kubectl get pods -n kruise-game-system
+```
+
+**Notes:**
+- Ensure the Alibaba Cloud account has permissions to create/manage NLB and EIP (`AliyunNLBFullAccess`, `AliyunEIPFullAccess`)
+- Operators are deployed in the `kruise-game-system` namespace by default, which can be customized via the `--namespace` parameter
+- `region` parameter examples: `cn-hangzhou`, `cn-beijing`, etc.
+- For more configuration options, please refer to: https://github.com/chrisliu1995/AlibabaCloud-Operator-Charts
+
+#### Network parameters
+
+ZoneMaps
+
+- Meaning: VPC and availability zone mapping configuration for creating NLB instances
+- Format: `vpc-id@zone1:vswitch1,zone2:vswitch2,...`
+- Example: `vpc-xxx@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb`
+- Configuration change supported: No (immutable after creation)
+- Note: At least 2 availability zones required
+
+PortProtocols
+
+- Meaning: Ports and protocols to be exposed by Pod, supports multiple ports/protocols
+- Format: `port1/protocol1,port2/protocol2,...` (protocol names must be in uppercase)
+- Example: `8080/TCP,9000/UDP`
+- Configuration change supported: No
+
+EipIspTypes
+
+- Meaning: List of EIP line types, supports multi-line access
+- Format: `type1,type2,...`
+- Available values:
+  - `BGP`: BGP multi-line (default)
+  - `BGP_PRO`: BGP premium line
+  - `ChinaTelecom`: China Telecom single-line
+  - `ChinaMobile`: China Mobile single-line
+  - `ChinaUnicom`: China Unicom single-line
+- Example: `BGP,BGP_PRO` or `ChinaTelecom,ChinaMobile,ChinaUnicom`
+- Configuration change supported: No
+
+MinPort
+
+- Meaning: Minimum value for NLB external port allocation
+- Format: Number, range [1, 65535]
+- Default: 1000
+- Configuration change supported: No
+
+MaxPort
+
+- Meaning: Maximum value for NLB external port allocation
+- Format: Number, range [1, 65535]
+- Default: 1499
+- Configuration change supported: No
+
+BlockPorts
+
+- Meaning: List of ports to skip (blocked ports)
+- Format: `port1,port2,...`
+- Example: `1100,1200,1300`
+- Configuration change supported: No
+
+ReserveNlbNum
+
+- Meaning: Number of reserved NLB instances (for prewarming)
+- Format: Number
+- Default: 1
+- Configuration change supported: No
+
+ExternalTrafficPolicyType
+
+- Meaning: Service external traffic policy
+- Format: `Local` or `Cluster`
+- Default: `Local` (preserves source IP)
+- Configuration change supported: No
+
+LBHealthCheckFlag
+
+- Meaning: Whether to enable NLB health check
+- Format: `on` or `off`
+- Default: `on`
+- Configuration change supported: Yes
+
+LBHealthCheckType
+
+- Meaning: Health check protocol type
+- Format: `tcp` or `http`
+- Default: `tcp`
+- Configuration change supported: Yes
+- Note: Only effective when `LBHealthCheckFlag=on`
+
+LBHealthCheckConnectPort
+
+- Meaning: Health check port
+- Format: Number, range [0, 65535]
+- Default: `0` (uses backend server port)
+- Configuration change supported: Yes
+
+LBHealthCheckConnectTimeout
+
+- Meaning: Health check timeout (seconds)
+- Format: Number, range [1, 300]
+- Default: `5`
+- Configuration change supported: Yes
+
+LBHealthCheckInterval
+
+- Meaning: Health check interval (seconds)
+- Format: Number, range [1, 50]
+- Default: `10`
+- Configuration change supported: Yes
+
+LBHealthyThreshold
+
+- Meaning: Health check success threshold (consecutive successful times)
+- Format: Number, range [2, 10]
+- Default: `2`
+- Configuration change supported: Yes
+
+LBUnhealthyThreshold
+
+- Meaning: Health check failure threshold (consecutive failure times)
+- Format: Number, range [2, 10]
+- Default: `2`
+- Configuration change supported: Yes
+
+LBHealthCheckUri
+
+- Meaning: HTTP health check path
+- Format: Path starting with `/`, length 1-80 characters
+- Example: `/health`
+- Configuration change supported: Yes
+- Note: Only required when `LBHealthCheckType=http`
+
+LBHealthCheckDomain
+
+- Meaning: HTTP health check domain
+- Format: Domain string, length 1-80 characters
+- Configuration change supported: Yes
+- Note: Only effective when `LBHealthCheckType=http`
+
+LBHealthCheckMethod
+
+- Meaning: HTTP health check method
+- Format: `GET` or `HEAD`
+- Default: `GET`
+- Configuration change supported: Yes
+- Note: Only effective when `LBHealthCheckType=http`
+
+RetainNLBOnDelete
+
+- Meaning: Whether to retain NLB and EIP resources when GameServerSet is deleted
+- Format: `true` or `false`
+- Default: `true` (retain resources, support reuse)
+- Configuration change supported: No
+- Description:
+  - When set to `true`, NLB and EIP resources will be retained after GSS deletion, allowing reuse by other GSS, reducing costs and creation time
+  - When set to `false`, NLB and EIP resources will be cascade deleted when GSS is deleted
+  - Regardless of this setting, Service resources are always deleted with GSS
+
+#### How it works
+
+**Resource Mapping Relationships:**
+
+1. **NLB Allocation**
+   - Each Pod calculates its NLB based on index: `nlbIndex = podIndex / podsPerNLB`
+   - NLB naming rule: `{gssName}-{eipIspType(lowercase)}-{nlbIndex}`
+   - Example: With `EipIspTypes=BGP`, generates `game-server-bgp-0` (note: ISP type is converted to lowercase)
+
+2. **EIP Allocation**
+   - Each NLB corresponds to multiple EIPs (one per zone)
+   - EIP naming rule: `{gssName}-eip-{eipIspType(lowercase)}-{nlbIndex}-z{zoneIndex}`
+   - Example: `game-server-eip-bgp-0-z0`, `game-server-eip-bgp-0-z1`
+
+3. **Service Mapping**
+   - Each Pod corresponds to multiple Services (one per line)
+   - Service naming rule: `{podName}-{eipIspType(lowercase)}`
+   - Example: With `EipIspTypes=BGP,BGP_PRO`, Pod `game-server-0` generates `game-server-0-bgp` and `game-server-0-bgp_pro`
+
+4. **Port Allocation**
+   - Each Pod is allocated a unique port range on the NLB
+   - Base formula: `port = minPort + (podIndexInNLB * portCount) + portOffset`
+   - Automatically skips ports configured in `BlockPorts` (actual port may be greater than formula result)
+   - Example: If `MinPort=10000`, `BlockPorts=10005`, Pod-5's first port will be `10006` instead of `10005`
+
+**Resource Lifecycle:**
+
+- **NLB & EIP**: By default, no OwnerReference is set, independent of GameServerSet, supports cross-GSS reuse (can be changed to cascade deletion via `RetainNLBOnDelete=false` parameter)
+- **Service**: OwnerReference points to GameServerSet, deleted when GSS is deleted
+- **Resource Cleanup**:
+  - `RetainNLBOnDelete=true` (default): NLB and EIP require manual deletion or batch management through labels
+  - `RetainNLBOnDelete=false`: NLB and EIP will be automatically deleted with GSS
+
+#### Plugin configuration
+
+No additional configuration needed (resources created dynamically via CRD)
+
+#### Example
+
+**Example 1: Single-line BGP Access**
+
+```yaml
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: gs-auto-nlb-v2
+  namespace: default
+spec:
+  replicas: 3
+  updateStrategy:
+    rollingUpdate:
+      podUpdatePolicy: InPlaceIfPossible
+  network:
+    networkType: AlibabaCloud-AutoNLBs-V2
+    networkConf:
+    - name: ZoneMaps
+      value: "vpc-xxx@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"
+    - name: PortProtocols
+      value: "8080/TCP,9000/UDP"
+    - name: EipIspTypes
+      value: "BGP"
+    - name: MinPort
+      value: "10000"
+    - name: MaxPort
+      value: "10499"
+    - name: ReserveNlbNum
+      value: "1"
+  gameServerTemplate:
+    spec:
+      containers:
+      - image: registry.cn-hangzhou.aliyuncs.com/gs-demo/gameserver:network
+        name: gameserver
+```
+
+**Example 2: Multi-line Access (BGP + BGP_PRO)**
+
+```yaml
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: gs-multi-isp
+  namespace: default
+spec:
+  replicas: 5
+  updateStrategy:
+    rollingUpdate:
+      podUpdatePolicy: InPlaceIfPossible
+  network:
+    networkType: AlibabaCloud-AutoNLBs-V2
+    networkConf:
+    - name: ZoneMaps
+      value: "vpc-yyy@cn-beijing-a:vsw-111,cn-beijing-b:vsw-222"
+    - name: PortProtocols
+      value: "7777/TCP"
+    - name: EipIspTypes
+      value: "BGP,BGP_PRO"
+    - name: MinPort
+      value: "20000"
+    - name: MaxPort
+      value: "20999"
+    - name: LBHealthCheckFlag
+      value: "on"
+    - name: LBHealthCheckType
+      value: "tcp"
+  gameServerTemplate:
+    spec:
+      containers:
+      - image: my-game-server:v1.0
+        name: gameserver
+        ports:
+        - containerPort: 7777
+          protocol: TCP
+```
+
+**Example 3: Three-network Single-line Access**
+
+```yaml
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: gs-three-isp
+  namespace: default
+spec:
+  replicas: 10
+  updateStrategy:
+    rollingUpdate:
+      podUpdatePolicy: InPlaceIfPossible
+  network:
+    networkType: AlibabaCloud-AutoNLBs-V2
+    networkConf:
+    - name: ZoneMaps
+      value: "vpc-zzz@cn-shanghai-a:vsw-aaa,cn-shanghai-b:vsw-bbb"
+    - name: PortProtocols
+      value: "8000/TCP,8001/UDP"
+    - name: EipIspTypes
+      value: "ChinaTelecom,ChinaMobile,ChinaUnicom"
+    - name: MinPort
+      value: "30000"
+    - name: MaxPort
+      value: "30999"
+    - name: BlockPorts
+      value: "30100,30200,30300"
+  gameServerTemplate:
+    spec:
+      containers:
+      - image: game-server:latest
+        name: gameserver
+```
+
+**Example 4: Enable Cascade Deletion**
+
+```yaml
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: gs-cascade-delete
+  namespace: default
+spec:
+  replicas: 5
+  updateStrategy:
+    rollingUpdate:
+      podUpdatePolicy: InPlaceIfPossible
+  network:
+    networkType: AlibabaCloud-AutoNLBs-V2
+    networkConf:
+    - name: ZoneMaps
+      value: "vpc-xxx@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"
+    - name: PortProtocols
+      value: "8080/TCP"
+    - name: EipIspTypes
+      value: "BGP"
+    - name: MinPort
+      value: "10000"
+    - name: MaxPort
+      value: "10999"
+    - name: RetainNLBOnDelete
+      value: "false"  # Enable cascade deletion, automatically clean up NLB and EIP when GSS is deleted
+  gameServerTemplate:
+    spec:
+      containers:
+      - image: registry.cn-hangzhou.aliyuncs.com/gs-demo/gameserver:network
+        name: gameserver
+```
+
+#### Generated GameServer Network Status
+
+> **Note**: In Auto NLB V2 mode, `externalAddresses` will be populated with:
+> - `endPoint` field: NLB hostname + ISP type (format: `{nlb-hostname}/{ispType}`)
+> - `ip` field: Usually empty (Alibaba Cloud NLB Service only returns hostname, not IP)
+
+**Single-line Scenario NetworkStatus Example:**
+
+```yaml
+networkStatus:
+  createTime: "2025-01-15T08:30:00Z"
+  currentNetworkState: Ready
+  desiredNetworkState: Ready
+  externalAddresses:
+  - endPoint: nlb-xxx.cn-hangzhou.nlb.aliyuncs.com/BGP
+    ip: ""
+    ports:
+    - name: "8080"
+      port: 10000
+      protocol: TCP
+    - name: "9000"
+      port: 10001
+      protocol: UDP
+  internalAddresses:
+  - ip: 192.168.1.10
+    ports:
+    - name: "8080"
+      port: 8080
+      protocol: TCP
+    - name: "9000"
+      port: 9000
+      protocol: UDP
+  lastTransitionTime: "2025-01-15T08:30:05Z"
+  networkType: AlibabaCloud-AutoNLBs-V2
+```
+
+**Multi-line Scenario NetworkStatus Example:**
+
+```yaml
+networkStatus:
+  createTime: "2025-01-15T09:00:00Z"
+  currentNetworkState: Ready
+  desiredNetworkState: Ready
+  externalAddresses:
+  # BGP line
+  - endPoint: nlb-aaa.cn-beijing.nlb.aliyuncs.com/BGP
+    ip: ""
+    ports:
+    - name: "7777"
+      port: 20000
+      protocol: TCP
+  # BGP_PRO line
+  - endPoint: nlb-bbb.cn-beijing.nlb.aliyuncs.com/BGP_PRO
+    ip: ""
+    ports:
+    - name: "7777"
+      port: 20000
+      protocol: TCP
+  internalAddresses:
+  - ip: 192.168.2.20
+    ports:
+    - name: "7777"
+      port: 7777
+      protocol: TCP
+  lastTransitionTime: "2025-01-15T09:00:10Z"
+  networkType: AlibabaCloud-AutoNLBs-V2
+```
+
+#### Resource Viewing
+
+**View NLB CRD resources:**
+
+```bash
+kubectl get nlb -n default
+```
+
+Example output:
+```
+NAME                   LOADBALANCERID         STATUS   AGE
+gs-auto-nlb-v2-bgp-0   nlb-xxx123            Active   10m
+gs-auto-nlb-v2-bgp-1   nlb-yyy456            Active   8m
+```
+
+**View EIP CRD resources:**
+
+```bash
+kubectl get eip -n default
+```
+
+Example output:
+```
+NAME                           ALLOCATIONID      IP              STATUS
+gs-auto-nlb-v2-eip-bgp-0-z0   eip-aaa111        47.96.100.1     InUse
+gs-auto-nlb-v2-eip-bgp-0-z1   eip-bbb222        47.96.100.2     InUse
+```
+
+**View Service resources:**
+
+```bash
+kubectl get svc -l game.kruise.io/owner-gss=gs-auto-nlb-v2
+```
+
+#### Best Practices
+
+1. **Port Planning**
+   - Set reasonable `MinPort` and `MaxPort` ranges to ensure sufficient port space
+   - Calculation formula: `Total ports = (MaxPort - MinPort + 1) - BlockPorts count`
+   - Pods per NLB: `podsPerNLB = Total ports / PortProtocols count`
+
+2. **Resource Reuse**
+   - NLB and EIP resources are retained and can be reused by new GSS after deletion
+   - Use label `game.kruise.io/nlb-pool-gss` to manage NLB ownership
+
+3. **Multi-line Selection**
+   - **BGP multi-line**: Suitable for nationwide users, automatically selects optimal line
+   - **BGP_PRO premium**: Suitable for latency-sensitive games, higher cost
+   - **Three-network single-line**: Suitable for scenarios with concentrated carrier users, most cost-effective
+
+4. **Health Check Configuration**
+   - Production environments recommend enabling health checks (`LBHealthCheckFlag=on`)
+   - TCP checks suitable for most scenarios, HTTP checks suitable for web games
+
+5. **Capacity Planning**
+   - Set appropriate `ReserveNlbNum` to prewarm resources in advance
+   - Avoid frequent NLB creation causing network jitter
+
+#### Important Notes
+
+1. **Resource Cleanup**
+   - **Default mode (`RetainNLBOnDelete=true`)**: NLB and EIP resources are not automatically cleaned when GameServerSet is deleted
+   - Manually delete unused NLB/EIP CRD resources
+   - Batch cleanup via labels:
+     ```bash
+     kubectl delete nlb -l game.kruise.io/nlb-pool-gss=gs-name
+     kubectl delete eip -l game.kruise.io/eip-pool-gss=gs-name
+     ```
+   - **Cascade deletion mode (`RetainNLBOnDelete=false`)**: NLB and EIP resources will be automatically deleted when GSS is deleted, no manual cleanup required
+
+2. **Network Configuration Immutability**
+   - Parameters like `ZoneMaps`, `PortProtocols`, `EipIspTypes` cannot be changed after creation
+   - When changes are needed, recommend creating a new GameServerSet and migrating
+
+3. **Single-line ISP Billing**
+   - `ChinaTelecom`, `ChinaMobile`, `ChinaUnicom` only support bandwidth-based billing (PayByBandwidth)
+   - BGP and BGP_PRO support traffic-based billing (PayByTraffic)
+
+4. **Permission Requirements**
+   - Operators require Alibaba Cloud RAM permissions: `AliyunNLBFullAccess`, `AliyunEIPFullAccess`
+   - Ensure network resources like VPC, VSwitch, security groups are configured correctly
+
+5. **Performance Considerations**
+   - In large-scale scenarios (100+ Pods), recommend creating sufficient NLB instances in advance
+   - Service prewarming mechanism can significantly reduce Pod startup network readiness time
 
 ---
 

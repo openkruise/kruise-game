@@ -215,7 +215,7 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		if err != nil {
-			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.InternalError, err.Error())
 		}
 		// record an event that the service needs update
 		span.AddEvent(tracing.EventNetworkNodePortServiceUpdated, trace.WithAttributes(nodePortAttrServicePortCount.Int(len(svc.Spec.Ports))))

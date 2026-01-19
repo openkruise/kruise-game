@@ -193,7 +193,7 @@ func (s *SlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 			}
 			return pod, cperrors.ToPluginError(c.Create(ctx, service), cperrors.ApiCallError)
 		}
-		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 	}
 
 	// old svc remain
@@ -207,11 +207,11 @@ func (s *SlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		if err != nil {
-			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.InternalError, err.Error())
 		}
 		service, err := s.consSvc(sc, pod, c, ctx)
 		if err != nil {
-			return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
 		}
 		return pod, cperrors.ToPluginError(c.Update(ctx, service), cperrors.ApiCallError)
 	}
@@ -229,7 +229,7 @@ func (s *SlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	}
 
 	// network not ready
-	if svc.Status.LoadBalancer.Ingress == nil {
+	if len(svc.Status.LoadBalancer.Ingress) == 0 {
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
@@ -291,7 +291,7 @@ func (s *SlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.C
 	networkConfig := networkManager.GetNetworkConfig()
 	sc, err := parseLbConfig(networkConfig)
 	if err != nil {
-		return cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+		return cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
 	}
 
 	var podKeys []string
