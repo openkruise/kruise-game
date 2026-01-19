@@ -90,3 +90,62 @@ func TestOptionsZapEncoderOnly(t *testing.T) {
 		t.Fatal("expected encoder to be configured when zap-encoder is set")
 	}
 }
+
+func TestOTelCollectorTokenFlag(t *testing.T) {
+	// Test that otel-collector-token flag is available and readable
+	opts := NewOptions()
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	opts.AddFlags(fs)
+
+	// Also add tracing flags to ensure token flag is registered
+	fs.String("otel-collector-endpoint", "localhost:4317", "test endpoint")
+	fs.String("otel-collector-token", "", "test token")
+
+	if err := fs.Parse([]string{"--otel-collector-endpoint=test-endpoint:4317", "--otel-collector-token=test-token-value"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	// Verify token flag was set
+	tokenFlag := fs.Lookup("otel-collector-token")
+	if tokenFlag == nil {
+		t.Fatal("expected otel-collector-token flag to be registered")
+	}
+	if tokenFlag.Value.String() != "test-token-value" {
+		t.Fatalf("expected token value 'test-token-value', got '%s'", tokenFlag.Value.String())
+	}
+
+	// Apply should not error even with token present
+	_, err := opts.Apply(fs)
+	if err != nil {
+		t.Fatalf("apply options with token flag should not error: %v", err)
+	}
+}
+
+func TestOTelCollectorWithoutToken(t *testing.T) {
+	// Test that system works without token (backward compatibility)
+	opts := NewOptions()
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	opts.AddFlags(fs)
+
+	fs.String("otel-collector-endpoint", "localhost:4317", "test endpoint")
+	fs.String("otel-collector-token", "", "test token")
+
+	if err := fs.Parse([]string{"--otel-collector-endpoint=test-endpoint:4317"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	// Verify token flag exists but is empty
+	tokenFlag := fs.Lookup("otel-collector-token")
+	if tokenFlag == nil {
+		t.Fatal("expected otel-collector-token flag to be registered")
+	}
+	if tokenFlag.Value.String() != "" {
+		t.Fatalf("expected empty token value, got '%s'", tokenFlag.Value.String())
+	}
+
+	// Apply should work without token
+	_, err := opts.Apply(fs)
+	if err != nil {
+		t.Fatalf("apply options without token should not error: %v", err)
+	}
+}

@@ -24,6 +24,7 @@ import (
 const (
 	FlagEnableTracing         = "enable-tracing"
 	FlagOtelCollectorEndpoint = "otel-collector-endpoint"
+	FlagOtelCollectorToken    = "otel-collector-token"
 	FlagOtelSamplingRate      = "otel-sampling-rate"
 )
 
@@ -35,6 +36,10 @@ type TracingOptions struct {
 	// CollectorEndpoint is the OTLP gRPC endpoint (e.g., "localhost:4317")
 	CollectorEndpoint string
 
+	// CollectorToken is the authentication token for OTLP gRPC endpoint
+	// If provided, it will be sent as "Authorization: Bearer <token>" header
+	CollectorToken string
+
 	// SamplingRate is the trace sampling ratio (0.0 to 1.0)
 	// 1.0 means sample all traces, 0.1 means sample 10%
 	SamplingRate float64
@@ -45,6 +50,7 @@ func NewOptions() *TracingOptions {
 	return &TracingOptions{
 		Enabled:           false, // Default disabled for safety
 		CollectorEndpoint: "localhost:4317",
+		CollectorToken:    "",  // No authentication by default
 		SamplingRate:      1.0, // Sample all traces by default
 	}
 }
@@ -56,6 +62,9 @@ func (o *TracingOptions) AddFlags(fs *flag.FlagSet) {
 
 	fs.StringVar(&o.CollectorEndpoint, FlagOtelCollectorEndpoint, o.CollectorEndpoint,
 		"OpenTelemetry Collector OTLP gRPC endpoint (e.g., 'otel-collector.observability.svc.cluster.local:4317')")
+
+	fs.StringVar(&o.CollectorToken, FlagOtelCollectorToken, o.CollectorToken,
+		"Authentication token for OTLP gRPC endpoint. If provided, sent as 'Authorization: Bearer <token>' header.")
 
 	fs.Float64Var(&o.SamplingRate, FlagOtelSamplingRate, o.SamplingRate,
 		"OpenTelemetry trace sampling rate (0.0 to 1.0). 1.0 samples all traces, 0.1 samples 10%.")

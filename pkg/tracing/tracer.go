@@ -58,12 +58,22 @@ func (o *TracingOptions) Apply() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	exporter, err := otlptracegrpc.New(ctx,
+	// Build exporter options
+	exporterOpts := []otlptracegrpc.Option{
 		otlptracegrpc.WithEndpoint(o.CollectorEndpoint),
 		otlptracegrpc.WithInsecure(), // TODO: Add TLS support for production
 		// Note: Removed grpc.WithBlock() to allow non-blocking connection
 		// gRPC will automatically retry connection in the background
-	)
+	}
+
+	// Add authentication header if token is provided
+	if o.CollectorToken != "" {
+		exporterOpts = append(exporterOpts, otlptracegrpc.WithHeaders(map[string]string{
+			"Authorization": "Bearer " + o.CollectorToken,
+		}))
+	}
+
+	exporter, err := otlptracegrpc.New(ctx, exporterOpts...)
 	if err != nil {
 		// Fall back to no-op tracer on failure
 		otel.SetTracerProvider(sdktrace.NewTracerProvider())

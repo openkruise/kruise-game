@@ -18,6 +18,7 @@ package tracing
 
 import (
 	"errors"
+	"flag"
 	"testing"
 
 	"go.opentelemetry.io/otel"
@@ -33,6 +34,10 @@ func TestNewOptions(t *testing.T) {
 
 	if opts.CollectorEndpoint != "localhost:4317" {
 		t.Errorf("Expected CollectorEndpoint to be 'localhost:4317', got '%s'", opts.CollectorEndpoint)
+	}
+
+	if opts.CollectorToken != "" {
+		t.Errorf("Expected CollectorToken to be empty by default, got '%s'", opts.CollectorToken)
 	}
 
 	if opts.SamplingRate != 1.0 {
@@ -121,5 +126,82 @@ func TestApply_InvalidCollectorEndpoint(t *testing.T) {
 	tp := otel.GetTracerProvider()
 	if _, ok := tp.(*sdktrace.TracerProvider); !ok {
 		t.Error("Expected a TracerProvider to be set even on failure")
+	}
+}
+
+func TestAddFlags(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	opts := NewOptions()
+	opts.AddFlags(fs)
+
+	// Verify all flags are registered
+	tests := []struct {
+		flagName string
+	}{
+		{flagName: FlagEnableTracing},
+		{flagName: FlagOtelCollectorEndpoint},
+		{flagName: FlagOtelCollectorToken},
+		{flagName: FlagOtelSamplingRate},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.flagName, func(t *testing.T) {
+			if fs.Lookup(tt.flagName) == nil {
+				t.Errorf("Flag %s not registered", tt.flagName)
+			}
+		})
+	}
+
+	// Test setting token flag
+	err := fs.Set(FlagOtelCollectorToken, "test-token-123")
+	if err != nil {
+		t.Fatalf("Failed to set token flag: %v", err)
+	}
+	if opts.CollectorToken != "test-token-123" {
+		t.Errorf("Expected CollectorToken to be 'test-token-123', got '%s'", opts.CollectorToken)
+	}
+}
+
+func TestApply_WithToken(t *testing.T) {
+	// This test verifies that Apply() accepts token parameter without error
+	// Even though collector is unreachable, it should handle token gracefully
+	opts := &TracingOptions{
+		Enabled:           true,
+		CollectorEndpoint: "unreachable:4317",
+		CollectorToken:    "test-bearer-token",
+		SamplingRate:      1.0,
+	}
+
+	err := opts.Apply()
+	// Should fail due to unreachable endpoint but not due to token
+	if err != nil && !errors.Is(err, ErrCollectorUnavailable) {
+		t.Fatalf("Unexpected error type: %v", err)
+	}
+
+	// Verify fallback tracer is set
+	tp := otel.GetTracerProvider()
+	if _, ok := tp.(*sdktrace.TracerProvider); !ok {
+		t.Error("Expected a TracerProvider to be set")
+	}
+}
+
+func TestApply_WithoutToken(t *testing.T) {
+	// Test that Apply() works without token (backward compatibility)
+	opts := &TracingOptions{
+		Enabled:           true,
+		CollectorEndpoint: "unreachable:4317",
+		CollectorToken:    "", // No token
+		SamplingRate:      0.5,
+	}
+
+	err := opts.Apply()
+	if err != nil && !errors.Is(err, ErrCollectorUnavailable) {
+		t.Fatalf("Unexpected error type: %v", err)
+	}
+
+	// Verify fallback tracer is set
+	tp := otel.GetTracerProvider()
+	if _, ok := tp.(*sdktrace.TracerProvider); !ok {
+		t.Error("Expected a TracerProvider to be set")
 	}
 }
