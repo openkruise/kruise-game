@@ -48,6 +48,8 @@ const (
 	MinPortConfigName       = "MinPort"
 	MaxPortConfigName       = "MaxPort"
 	BlockPortsConfigName    = "BlockPorts"
+	// EIP 高防护相关配置
+	SecurityProtectionTypesConfigName = "SecurityProtectionTypes" // EIP 安全防护类型，多个用逗号分隔
 
 	NLBZoneMapsServiceAnnotationKey = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-zone-maps"
 	NLBAddressTypeAnnotationKey     = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-address-type"
@@ -62,16 +64,17 @@ type AutoNLBsPlugin struct {
 }
 
 type autoNLBsConfig struct {
-	minPort               int32
-	maxPort               int32
-	blockPorts            []int32
-	zoneMaps              string
-	reserveNlbNum         int
-	targetPorts           []int
-	protocols             []corev1.Protocol
-	eipIspTypes           []string
-	externalTrafficPolicy corev1.ServiceExternalTrafficPolicyType
-	retainNLBOnDelete     bool // 是否在 GSS 删除时保留 NLB 和 EIP 资源（默认 true）
+	minPort                 int32
+	maxPort                 int32
+	blockPorts              []int32
+	zoneMaps                string
+	reserveNlbNum           int
+	targetPorts             []int
+	protocols               []corev1.Protocol
+	eipIspTypes             []string
+	externalTrafficPolicy   corev1.ServiceExternalTrafficPolicyType
+	retainNLBOnDelete       bool     // 是否在 GSS 删除时保留 NLB 和 EIP 资源（默认 true）
+	securityProtectionTypes []string // EIP 安全防护类型（如 AntiDDoS_Enhanced）
 	*nlbHealthConfig
 }
 
@@ -471,6 +474,7 @@ func parseAutoNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*autoNL
 	blockPorts := make([]int32, 0)
 	minPort := int32(1000)
 	maxPort := int32(1499)
+	securityProtectionTypes := make([]string, 0) // 默认为空，不启用高防护
 
 	for _, c := range conf {
 		switch c.Name {
@@ -519,6 +523,15 @@ func parseAutoNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*autoNL
 			} else {
 				maxPort = int32(val)
 			}
+		case SecurityProtectionTypesConfigName:
+			// 解析安全防护类型，支持逗号分隔多个类型
+			if c.Value != "" {
+				securityProtectionTypes = strings.Split(c.Value, ",")
+				// 去除空格
+				for i := range securityProtectionTypes {
+					securityProtectionTypes[i] = strings.TrimSpace(securityProtectionTypes[i])
+				}
+			}
 		}
 	}
 
@@ -541,16 +554,17 @@ func parseAutoNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*autoNL
 	}
 
 	return &autoNLBsConfig{
-		blockPorts:            blockPorts,
-		minPort:               minPort,
-		maxPort:               maxPort,
-		nlbHealthConfig:       nlbHealthConfig,
-		reserveNlbNum:         reserveNlbNum,
-		eipIspTypes:           eipIspTypes,
-		protocols:             protocols,
-		targetPorts:           ports,
-		zoneMaps:              zoneMaps,
-		externalTrafficPolicy: externalTrafficPolicy,
-		retainNLBOnDelete:     retainNLBOnDelete,
+		blockPorts:              blockPorts,
+		minPort:                 minPort,
+		maxPort:                 maxPort,
+		nlbHealthConfig:         nlbHealthConfig,
+		reserveNlbNum:           reserveNlbNum,
+		eipIspTypes:             eipIspTypes,
+		protocols:               protocols,
+		targetPorts:             ports,
+		zoneMaps:                zoneMaps,
+		externalTrafficPolicy:   externalTrafficPolicy,
+		retainNLBOnDelete:       retainNLBOnDelete,
+		securityProtectionTypes: securityProtectionTypes,
 	}, nil
 }
