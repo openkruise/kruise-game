@@ -181,6 +181,101 @@ func TestParseAutoNLBsConfig(t *testing.T) {
 			expectError:   true,
 			errorContains: "MinPort",
 		},
+		{
+			name: "valid config with SecurityProtectionTypes - single type",
+			conf: []gamekruiseiov1alpha1.NetworkConfParams{
+				{Name: "ZoneMaps", Value: "vpc-xxx@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+				{Name: "PortProtocols", Value: "8080/TCP"},
+				{Name: "EipIspTypes", Value: "BGP"},
+				{Name: "SecurityProtectionTypes", Value: "AntiDDoS_Enhanced"},
+				{Name: "MinPort", Value: "10000"},
+				{Name: "MaxPort", Value: "10999"},
+			},
+			expectConfig: &autoNLBsConfig{
+				zoneMaps:                "vpc-xxx@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb",
+				eipIspTypes:             []string{"BGP"},
+				targetPorts:             []int{8080},
+				protocols:               []corev1.Protocol{corev1.ProtocolTCP},
+				minPort:                 10000,
+				maxPort:                 10999,
+				reserveNlbNum:           1,
+				externalTrafficPolicy:   corev1.ServiceExternalTrafficPolicyTypeLocal,
+				retainNLBOnDelete:       true,
+				securityProtectionTypes: []string{"AntiDDoS_Enhanced"},
+			},
+			expectError: false,
+		},
+		{
+			name: "valid config with SecurityProtectionTypes - whitespace trimming",
+			conf: []gamekruiseiov1alpha1.NetworkConfParams{
+				{Name: "ZoneMaps", Value: "vpc-xxx@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+				{Name: "PortProtocols", Value: "8080/TCP,9000/UDP"},
+				{Name: "EipIspTypes", Value: "BGP"},
+				{Name: "SecurityProtectionTypes", Value: " AntiDDoS_Enhanced "},
+				{Name: "MinPort", Value: "10000"},
+				{Name: "MaxPort", Value: "10999"},
+			},
+			expectConfig: &autoNLBsConfig{
+				zoneMaps:                "vpc-xxx@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb",
+				eipIspTypes:             []string{"BGP"},
+				targetPorts:             []int{8080, 9000},
+				protocols:               []corev1.Protocol{corev1.ProtocolTCP, corev1.ProtocolUDP},
+				minPort:                 10000,
+				maxPort:                 10999,
+				reserveNlbNum:           1,
+				externalTrafficPolicy:   corev1.ServiceExternalTrafficPolicyTypeLocal,
+				retainNLBOnDelete:       true,
+				securityProtectionTypes: []string{"AntiDDoS_Enhanced"},
+			},
+			expectError: false,
+		},
+		{
+			name: "empty SecurityProtectionTypes should result in empty slice",
+			conf: []gamekruiseiov1alpha1.NetworkConfParams{
+				{Name: "ZoneMaps", Value: "vpc-xxx@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+				{Name: "PortProtocols", Value: "8080/TCP"},
+				{Name: "EipIspTypes", Value: "BGP"},
+				{Name: "SecurityProtectionTypes", Value: ""},
+				{Name: "MinPort", Value: "10000"},
+				{Name: "MaxPort", Value: "10999"},
+			},
+			expectConfig: &autoNLBsConfig{
+				zoneMaps:                "vpc-xxx@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb",
+				eipIspTypes:             []string{"BGP"},
+				targetPorts:             []int{8080},
+				protocols:               []corev1.Protocol{corev1.ProtocolTCP},
+				minPort:                 10000,
+				maxPort:                 10999,
+				reserveNlbNum:           1,
+				externalTrafficPolicy:   corev1.ServiceExternalTrafficPolicyTypeLocal,
+				retainNLBOnDelete:       true,
+				securityProtectionTypes: []string{},
+			},
+			expectError: false,
+		},
+		{
+			name: "no SecurityProtectionTypes specified - default to empty",
+			conf: []gamekruiseiov1alpha1.NetworkConfParams{
+				{Name: "ZoneMaps", Value: "vpc-xxx@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+				{Name: "PortProtocols", Value: "8080/TCP"},
+				{Name: "EipIspTypes", Value: "BGP"},
+				{Name: "MinPort", Value: "10000"},
+				{Name: "MaxPort", Value: "10999"},
+			},
+			expectConfig: &autoNLBsConfig{
+				zoneMaps:                "vpc-xxx@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb",
+				eipIspTypes:             []string{"BGP"},
+				targetPorts:             []int{8080},
+				protocols:               []corev1.Protocol{corev1.ProtocolTCP},
+				minPort:                 10000,
+				maxPort:                 10999,
+				reserveNlbNum:           1,
+				externalTrafficPolicy:   corev1.ServiceExternalTrafficPolicyTypeLocal,
+				retainNLBOnDelete:       true,
+				securityProtectionTypes: []string{},
+			},
+			expectError: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -229,6 +324,10 @@ func TestParseAutoNLBsConfig(t *testing.T) {
 
 			if config.retainNLBOnDelete != tt.expectConfig.retainNLBOnDelete {
 				t.Errorf("retainNLBOnDelete: expected %v, got %v", tt.expectConfig.retainNLBOnDelete, config.retainNLBOnDelete)
+			}
+
+			if !stringSliceEqual(config.securityProtectionTypes, tt.expectConfig.securityProtectionTypes) {
+				t.Errorf("securityProtectionTypes: expected %v, got %v", tt.expectConfig.securityProtectionTypes, config.securityProtectionTypes)
 			}
 		})
 	}

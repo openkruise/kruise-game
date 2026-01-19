@@ -1230,12 +1230,13 @@ func (a *AutoNLBsV2Plugin) ensureEIPCR(ctx context.Context, c client.Client, nam
 			},
 		},
 		Spec: eipv1.EIPSpec{
-			Name:               eipName,
-			Bandwidth:          "5",                // 默认带宽 5Mbps，可以后续通过配置调整
-			InternetChargeType: internetChargeType, // 根据 ISP 类型选择计费方式
-			ISP:                eipIspType,         // 设置 ISP 线路类型（支持单线 EIP）
-			ReleaseStrategy:    "OnDelete",         // CR 删除时释放 EIP
-			Description:        fmt.Sprintf("EIP for GameServerSet %s, NLB index %d, zone %d", gssName, nlbIndex, zoneIndex),
+			Name:                    eipName,
+			Bandwidth:               "5",                // 默认带宽 5Mbps，可以后续通过配置调整
+			InternetChargeType:      internetChargeType, // 根据 ISP 类型选择计费方式
+			ISP:                     eipIspType,         // 设置 ISP 线路类型（支持单线 EIP）
+			ReleaseStrategy:         "OnDelete",         // CR 删除时释放 EIP
+			Description:             fmt.Sprintf("EIP for GameServerSet %s, NLB index %d, zone %d", gssName, nlbIndex, zoneIndex),
+			SecurityProtectionTypes: config.securityProtectionTypes, // 安全防护类型（高防护 EIP）
 		},
 	}
 
