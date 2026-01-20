@@ -1,0 +1,126 @@
+package testcase
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"time"
+
+	"github.com/onsi/ginkgo"
+	"github.com/onsi/gomega"
+	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	"github.com/openkruise/kruise-game/test/e2e/client"
+	"github.com/openkruise/kruise-game/test/e2e/framework"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/remotecommand"
+)
+
+func RunServiceQualityScaleDownTest(f *framework.Framework) {
+	ginkgo.Describe("ServiceQuality scale down", func() {
+		ginkgo.It("deletes GameServers with WaitToBeDeleted ServiceQuality first", func() {
+			// 1. Deploy GameServerSet with 3 replicas
+			// We need a stable GSS for this test
+			gss, err := f.DeployGameServerSet()
+			gomega.Expect(err).To(gomega.BeNil())
+
+			err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
+			gomega.Expect(err).To(gomega.BeNil())
+
+			// 2. Define ServiceQuality
+			// This ServiceQuality checks for existence of /tmp/wait-to-delete
+			// If exists, it sets opsState to WaitToBeDeleted
+			probeAction := gameKruiseV1alpha1.ServiceQualityAction{
+				State: true,
+				GameServerSpec: gameKruiseV1alpha1.GameServerSpec{
+					OpsState: gameKruiseV1alpha1.WaitToDelete,
+				},
+			}
+
+			sq := gameKruiseV1alpha1.ServiceQuality{
+				Name:          "wait-to-delete",
+				ContainerName: client.GameContainerName,
+				Probe: corev1.Probe{
+					ProbeHandler: corev1.ProbeHandler{
+						Exec: &corev1.ExecAction{
+							Command: []string{"cat", "/tmp/wait-to-delete"},
+						},
+					},
+				},
+				ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{probeAction},
+			}
+
+			// 3. Patch GSS with ServiceQuality
+			gss, err = f.PatchGssSpec(map[string]interface{}{
+				"serviceQualities": []gameKruiseV1alpha1.ServiceQuality{sq},
+			})
+			gomega.Expect(err).To(gomega.BeNil())
+			gomega.Expect(f.WaitForGssObservedGeneration(gss.Generation)).To(gomega.BeNil())
+
+			// 4. Trigger ServiceQuality on pod 1
+			// We create the file /tmp/wait-to-delete in pod 1
+			targetPodName := fmt.Sprintf("%s-1", gss.GetName())
+			// Ensure pod is ready before exec
+			err = f.WaitForPodRunning(targetPodName)
+			gomega.Expect(err).To(gomega.BeNil())
+
+			err = execCommandInPod(f, targetPodName, client.GameContainerName, []string{"touch", "/tmp/wait-to-delete"})
+			gomega.Expect(err).To(gomega.BeNil())
+
+			// 5. Wait for opsState to update to WaitToBeDeleted
+			err = f.WaitForGsOpsStateUpdate(targetPodName, string(gameKruiseV1alpha1.WaitToDelete))
+			gomega.Expect(err).To(gomega.BeNil())
+
+			// 6. Scale down to 2 replicas
+			// Since pod 1 is WaitToBeDeleted, it should be prioritized for deletion
+			// Normally scale down removes highest ordinal (2), but priority should override this
+			gss, err = f.GameServerScale(gss, 2, nil)
+			gomega.Expect(err).To(gomega.BeNil())
+
+			// 7. Verify correct pods remain (should be 0 and 2)
+			// Pod 1 should be gone
+			err = f.ExpectGssCorrect(gss, []int{0, 2})
+			gomega.Expect(err).To(gomega.BeNil())
+		})
+	})
+}
+
+// execCommandInPod executes a command in the specified container
+func execCommandInPod(f *framework.Framework, podName, containerName string, cmd []string) error {
+	req := f.KubeClientSet().CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(client.Namespace).
+		SubResource("exec")
+
+	req.VersionedParams(&corev1.PodExecOptions{
+		Container: containerName,
+		Command:   cmd,
+		Stdin:     false,
+		Stdout:    true,
+		Stderr:    true,
+		TTY:       false,
+	}, scheme.ParameterCodec)
+
+	// Create SPDY executor
+	exec, err := remotecommand.NewSPDYExecutor(f.RestConfig, "POST", req.URL())
+	if err != nil {
+		return fmt.Errorf("failed to init executor: %v", err)
+	}
+
+	// Calculate a context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Execute synchronously
+	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: io.Discard,
+		Stderr: io.Discard,
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to execute command %v in pod %s: %v", cmd, podName, err)
+	}
+
+	return nil
+}

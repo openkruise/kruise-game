@@ -33,6 +33,8 @@ func RunTestCases(f *framework.Framework) {
 
 		RunHADeploymentUpdateTest(f)
 
+		RunServiceQualityScaleDownTest(f)
+
 		ginkgo.It("scale", func() {
 
 			// deploy
