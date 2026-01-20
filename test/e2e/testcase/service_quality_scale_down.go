@@ -22,10 +22,10 @@ func RunServiceQualityScaleDownTest(f *framework.Framework) {
 			// 1. Deploy GameServerSet with 3 replicas
 			// We need a stable GSS for this test
 			gss, err := f.DeployGameServerSet()
-			gomega.Expect(err).To(gomega.BeNil())
+			gomega.Expect(err).To(gomega.BeNil(), "Failed to deploy GameServerSet")
 
 			err = f.ExpectGssCorrect(gss, []int{0, 1, 2})
-			gomega.Expect(err).To(gomega.BeNil())
+			gomega.Expect(err).To(gomega.BeNil(), "Failed to verify initial GSS state")
 
 			// 2. Define ServiceQuality
 			// This ServiceQuality checks for existence of /tmp/wait-to-delete
@@ -46,6 +46,7 @@ func RunServiceQualityScaleDownTest(f *framework.Framework) {
 							Command: []string{"/bin/sh", "-c", "cat /tmp/wait-to-delete"},
 						},
 					},
+					PeriodSeconds: 1,
 				},
 				ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{probeAction},
 			}
@@ -54,15 +55,15 @@ func RunServiceQualityScaleDownTest(f *framework.Framework) {
 			gss, err = f.PatchGssSpec(map[string]interface{}{
 				"serviceQualities": []gameKruiseV1alpha1.ServiceQuality{sq},
 			})
-			gomega.Expect(err).To(gomega.BeNil())
-			gomega.Expect(f.WaitForGssObservedGeneration(gss.Generation)).To(gomega.BeNil())
+			gomega.Expect(err).To(gomega.BeNil(), "Failed to patch GSS with ServiceQuality")
+			gomega.Expect(f.WaitForGssObservedGeneration(gss.Generation)).To(gomega.BeNil(), "Timeout waiting for GSS generation update")
 
 			// 4. Trigger ServiceQuality on pod 1
 			// We create the file /tmp/wait-to-delete in pod 1
 			targetPodName := fmt.Sprintf("%s-1", gss.GetName())
 			// Ensure pod is ready before exec
 			err = f.WaitForPodRunning(targetPodName)
-			gomega.Expect(err).To(gomega.BeNil())
+			gomega.Expect(err).To(gomega.BeNil(), "Timeout waiting for pod %s to be ready", targetPodName)
 
 			// Use /bin/sh -c for robustness
 			err = execCommandInPod(f, targetPodName, client.GameContainerName, []string{"/bin/sh", "-c", "touch /tmp/wait-to-delete"})
@@ -74,18 +75,18 @@ func RunServiceQualityScaleDownTest(f *framework.Framework) {
 
 			// 5. Wait for opsState to update to WaitToBeDeleted
 			err = f.WaitForGsOpsStateUpdate(targetPodName, string(gameKruiseV1alpha1.WaitToDelete))
-			gomega.Expect(err).To(gomega.BeNil())
+			gomega.Expect(err).To(gomega.BeNil(), "Timeout waiting for OpsState of %s to become WaitToBeDeleted", targetPodName)
 
 			// 6. Scale down to 2 replicas
 			// Since pod 1 is WaitToBeDeleted, it should be prioritized for deletion
 			// Normally scale down removes highest ordinal (2), but priority should override this
 			gss, err = f.GameServerScale(gss, 2, nil)
-			gomega.Expect(err).To(gomega.BeNil())
+			gomega.Expect(err).To(gomega.BeNil(), "Failed to scale down GSS")
 
 			// 7. Verify correct pods remain (should be 0 and 2)
 			// Pod 1 should be gone
 			err = f.ExpectGssCorrect(gss, []int{0, 2})
-			gomega.Expect(err).To(gomega.BeNil())
+			gomega.Expect(err).To(gomega.BeNil(), "Failed to verify correct scaling behavior (expected pods 0 and 2)")
 		})
 	})
 }
