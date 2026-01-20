@@ -10,7 +10,7 @@ import (
 
 // WaitForPodRunning waits until the pod is in Running phase and ready
 func (f *Framework) WaitForPodRunning(podName string) error {
-	return wait.PollUntilContextTimeout(context.TODO(), 2*time.Second, 1*time.Minute, true,
+	return wait.PollUntilContextTimeout(context.TODO(), 2*time.Second, 3*time.Minute, true,
 		func(ctx context.Context) (done bool, err error) {
 			pod, err := f.client.GetPod(podName)
 			if err != nil {

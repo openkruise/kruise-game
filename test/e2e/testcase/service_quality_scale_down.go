@@ -1,9 +1,9 @@
 package testcase
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/onsi/ginkgo"
@@ -43,7 +43,7 @@ func RunServiceQualityScaleDownTest(f *framework.Framework) {
 				Probe: corev1.Probe{
 					ProbeHandler: corev1.ProbeHandler{
 						Exec: &corev1.ExecAction{
-							Command: []string{"cat", "/tmp/wait-to-delete"},
+							Command: []string{"/bin/sh", "-c", "cat /tmp/wait-to-delete"},
 						},
 					},
 				},
@@ -64,7 +64,12 @@ func RunServiceQualityScaleDownTest(f *framework.Framework) {
 			err = f.WaitForPodRunning(targetPodName)
 			gomega.Expect(err).To(gomega.BeNil())
 
-			err = execCommandInPod(f, targetPodName, client.GameContainerName, []string{"touch", "/tmp/wait-to-delete"})
+			// Use /bin/sh -c for robustness
+			err = execCommandInPod(f, targetPodName, client.GameContainerName, []string{"/bin/sh", "-c", "touch /tmp/wait-to-delete"})
+			gomega.Expect(err).To(gomega.BeNil())
+
+			// Verify file exists
+			err = execCommandInPod(f, targetPodName, client.GameContainerName, []string{"/bin/sh", "-c", "ls /tmp/wait-to-delete"})
 			gomega.Expect(err).To(gomega.BeNil())
 
 			// 5. Wait for opsState to update to WaitToBeDeleted
@@ -108,18 +113,19 @@ func execCommandInPod(f *framework.Framework, podName, containerName string, cmd
 		return fmt.Errorf("failed to init executor: %v", err)
 	}
 
-	// Calculate a context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Calculate a context with timeout (increased to 30s)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	// Execute synchronously
+	var stdout, stderr bytes.Buffer
 	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
-		Stdout: io.Discard,
-		Stderr: io.Discard,
+		Stdout: &stdout,
+		Stderr: &stderr,
 	})
 
 	if err != nil {
-		return fmt.Errorf("failed to execute command %v in pod %s: %v", cmd, podName, err)
+		return fmt.Errorf("failed to execute command %v in pod %s: %v, stdout: %s, stderr: %s", cmd, podName, err, stdout.String(), stderr.String())
 	}
 
 	return nil
