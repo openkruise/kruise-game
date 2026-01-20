@@ -286,6 +286,7 @@ func getPodFromRequest(req admission.Request, decoder admission.Decoder) (*corev
 
 func getAdmissionResponse(ctx context.Context, req admission.Request, result patchResult) admission.Response {
 	if result.err != nil {
+		//nolint:staticcheck // SA1006: admission.Denied is not a printf-style function
 		return admission.Denied(result.err.Error())
 	}
 	if req.Operation == admissionv1.Delete {

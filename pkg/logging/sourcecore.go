@@ -101,6 +101,11 @@ func isWrapperFrame(file string) bool {
 		return false
 	}
 
+	// Exclude test files from being treated as wrappers
+	if strings.HasSuffix(path, "_test.go") {
+		return false
+	}
+
 	wrapperSubstrings := []string{
 		"/k8s.io/klog/",
 		"/github.com/go-logr/",

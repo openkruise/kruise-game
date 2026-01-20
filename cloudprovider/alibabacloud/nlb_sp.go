@@ -2,6 +2,8 @@ package alibabacloud
 
 import (
 	"context"
+	"strconv"
+
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
@@ -13,7 +15,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strconv"
 )
 
 const (
@@ -57,7 +58,7 @@ func (N *NlbSpPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.C
 			// Create Svc
 			return pod, cperrors.ToPluginError(c.Create(ctx, consNlbSvc(podNetConfig, pod, c, ctx)), cperrors.ApiCallError)
 		}
-		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 	}
 	return pod, nil
 }
@@ -86,7 +87,7 @@ func (N *NlbSpPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context
 			// Create Svc
 			return pod, cperrors.ToPluginError(c.Create(ctx, consNlbSvc(podNetConfig, pod, c, ctx)), cperrors.ApiCallError)
 		}
-		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 	}
 
 	// update svc
@@ -94,7 +95,7 @@ func (N *NlbSpPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		if err != nil {
-			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.InternalError, err.Error())
 		}
 		return pod, cperrors.ToPluginError(c.Update(ctx, consNlbSvc(podNetConfig, pod, c, ctx)), cperrors.ApiCallError)
 	}
@@ -119,7 +120,7 @@ func (N *NlbSpPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context
 	}
 
 	// network not ready
-	if svc.Status.LoadBalancer.Ingress == nil {
+	if len(svc.Status.LoadBalancer.Ingress) == 0 {
 		return pod, nil
 	}
 

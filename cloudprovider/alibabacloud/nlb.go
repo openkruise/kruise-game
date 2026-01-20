@@ -325,7 +325,7 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		if err != nil {
-			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.InternalError, err.Error())
 		}
 		_, updateSpan := startNLBSpan(ctx, tracer, tracing.SpanReconcileNLBService, pod,
 			nlbAttrPortCountKey.Int64(int64(len(sc.targetPorts))),
@@ -447,7 +447,6 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 		lbSpan.AddEvent(tracing.EventGameServerReconcileWaitNetworkState, trace.WithAttributes(tracing.AttrNetworkStatus(telemetryfields.NetworkStatusWaiting)))
 		lbSpan.End()
 		finalNetworkStatus = telemetryfields.NetworkStatusNotReady
-
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		if err != nil {

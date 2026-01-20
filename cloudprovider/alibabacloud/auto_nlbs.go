@@ -43,7 +43,7 @@ const (
 	AliasAutoNLBs   = "Auto-NLBs-Network"
 
 	ReserveNlbNumConfigName = "ReserveNlbNum"
-	EipTypesConfigName      = "EipTypes"
+	EipIspTypesConfigName   = "EipIspTypes"
 	ZoneMapsConfigName      = "ZoneMaps"
 	MinPortConfigName       = "MinPort"
 	MaxPortConfigName       = "MaxPort"
@@ -69,8 +69,9 @@ type autoNLBsConfig struct {
 	reserveNlbNum         int
 	targetPorts           []int
 	protocols             []corev1.Protocol
-	eipTypes              []string
+	eipIspTypes           []string
 	externalTrafficPolicy corev1.ServiceExternalTrafficPolicyType
+	retainNLBOnDelete     bool // 是否在 GSS 删除时保留 NLB 和 EIP 资源（默认 true）
 	*nlbHealthConfig
 }
 
@@ -115,13 +116,13 @@ func (a *AutoNLBsPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx contex
 	networkConfig := networkManager.GetNetworkConfig()
 	conf, err := parseAutoNLBsConfig(networkConfig)
 	if err != nil {
-		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
 	}
 
 	a.ensureMaxPodIndex(pod)
 	gssName := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]
 	if err := a.ensureServices(ctx, c, pod.GetNamespace(), gssName, conf); err != nil {
-		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 	}
 
 	containerPorts := make([]corev1.ContainerPort, 0)
@@ -153,8 +154,8 @@ func (a *AutoNLBsPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx contex
 	lenRange := int(conf.maxPort) - int(conf.minPort) - len(conf.blockPorts) + 1
 	svcIndex := podIndex / (lenRange / len(conf.targetPorts))
 
-	for _, eipType := range conf.eipTypes {
-		svcName := gssName + "-" + eipType + "-" + strconv.Itoa(svcIndex)
+	for _, eipIspType := range conf.eipIspTypes {
+		svcName := gssName + "-" + eipIspType + "-" + strconv.Itoa(svcIndex)
 		pod.Spec.ReadinessGates = append(pod.Spec.ReadinessGates, corev1.PodReadinessGate{
 			ConditionType: corev1.PodConditionType(PrefixReadyReadinessGate + svcName),
 		})
@@ -169,7 +170,7 @@ func (a *AutoNLBsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx cont
 	networkConfig := networkManager.GetNetworkConfig()
 	conf, err := parseAutoNLBsConfig(networkConfig)
 	if err != nil {
-		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
 	}
 
 	if networkStatus == nil {
@@ -193,15 +194,15 @@ func (a *AutoNLBsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx cont
 	podIndex := util.GetIndexFromGsName(pod.GetName())
 	lenRange := int(conf.maxPort) - int(conf.minPort) - len(conf.blockPorts) + 1
 	svcIndex := podIndex / (lenRange / len(conf.targetPorts))
-	for i, eipType := range conf.eipTypes {
-		svcName := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey] + "-" + eipType + "-" + strconv.Itoa(svcIndex)
+	for i, eipIspType := range conf.eipIspTypes {
+		svcName := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey] + "-" + eipIspType + "-" + strconv.Itoa(svcIndex)
 		svc := &corev1.Service{}
 		err := c.Get(ctx, types.NamespacedName{
 			Name:      svcName,
 			Namespace: pod.GetNamespace(),
 		}, svc)
 		if err != nil {
-			return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 		}
 
 		if len(svc.Status.LoadBalancer.Ingress) == 0 {
@@ -210,9 +211,9 @@ func (a *AutoNLBsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx cont
 			return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 		}
 
-		endPoints = endPoints + svc.Status.LoadBalancer.Ingress[0].Hostname + "/" + eipType
+		endPoints = endPoints + svc.Status.LoadBalancer.Ingress[0].Hostname + "/" + eipIspType
 
-		if i == len(conf.eipTypes)-1 {
+		if i == len(conf.eipIspTypes)-1 {
 			for i, port := range conf.targetPorts {
 				if conf.protocols[i] == ProtocolTCPUDP {
 					portNameTCP := "tcp-" + strconv.Itoa(podIndex) + strconv.Itoa(port)
@@ -321,10 +322,10 @@ func (a *AutoNLBsPlugin) checkSvcNumToCreate(namespace, gssName string, config *
 func (a *AutoNLBsPlugin) ensureServices(ctx context.Context, client client.Client, namespace, gssName string, config *autoNLBsConfig) error {
 	expectSvcNum := a.checkSvcNumToCreate(namespace, gssName, config)
 
-	for _, eipType := range config.eipTypes {
+	for _, eipIspType := range config.eipIspTypes {
 		for j := 0; j < expectSvcNum; j++ {
 			// get svc
-			svcName := gssName + "-" + eipType + "-" + strconv.Itoa(j)
+			svcName := gssName + "-" + eipIspType + "-" + strconv.Itoa(j)
 			svc := &corev1.Service{}
 			err := client.Get(ctx, types.NamespacedName{
 				Name:      svcName,
@@ -333,7 +334,7 @@ func (a *AutoNLBsPlugin) ensureServices(ctx context.Context, client client.Clien
 			if err != nil {
 				if errors.IsNotFound(err) {
 					// create svc
-					toAddSvc := a.consSvc(namespace, gssName, eipType, j, config)
+					toAddSvc := a.consSvc(namespace, gssName, eipIspType, j, config)
 					if err := setSvcOwner(client, ctx, toAddSvc, namespace, gssName); err != nil {
 						return err
 					} else {
@@ -390,7 +391,7 @@ func (a *AutoNLBsPlugin) consSvcPorts(svcIndex int, config *autoNLBsConfig) []co
 	return ports
 }
 
-func (a *AutoNLBsPlugin) consSvc(namespace, gssName, eipType string, svcIndex int, conf *autoNLBsConfig) *corev1.Service {
+func (a *AutoNLBsPlugin) consSvc(namespace, gssName, eipIspType string, svcIndex int, conf *autoNLBsConfig) *corev1.Service {
 	loadBalancerClass := "alibabacloud.com/nlb"
 	svcAnnotations := map[string]string{
 		//SlbConfigHashKey:               util.GetHash(conf),
@@ -410,13 +411,13 @@ func (a *AutoNLBsPlugin) consSvc(namespace, gssName, eipType string, svcIndex in
 			svcAnnotations[LBHealthCheckMethodAnnotationKey] = conf.lBHealthCheckMethod
 		}
 	}
-	if strings.Contains(eipType, IntranetEIPType) {
+	if strings.Contains(eipIspType, IntranetEIPType) {
 		svcAnnotations[NLBAddressTypeAnnotationKey] = IntranetEIPType
 	}
 
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        gssName + "-" + eipType + "-" + strconv.Itoa(svcIndex),
+			Name:        gssName + "-" + eipIspType + "-" + strconv.Itoa(svcIndex),
 			Namespace:   namespace,
 			Annotations: svcAnnotations,
 			Labels: map[string]string{
@@ -461,10 +462,11 @@ func setSvcOwner(c client.Client, ctx context.Context, svc *corev1.Service, name
 
 func parseAutoNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*autoNLBsConfig, error) {
 	reserveNlbNum := 1
-	eipTypes := []string{"default"}
+	eipIspTypes := []string{"BGP"}
 	ports := make([]int, 0)
 	protocols := make([]corev1.Protocol, 0)
 	externalTrafficPolicy := corev1.ServiceExternalTrafficPolicyTypeLocal
+	retainNLBOnDelete := true // 默认保留 NLB 和 EIP
 	zoneMaps := ""
 	blockPorts := make([]int32, 0)
 	minPort := int32(1000)
@@ -492,12 +494,17 @@ func parseAutoNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*autoNL
 			}
 		case ReserveNlbNumConfigName:
 			reserveNlbNum, _ = strconv.Atoi(c.Value)
-		case EipTypesConfigName:
-			eipTypes = strings.Split(c.Value, ",")
+		case EipIspTypesConfigName:
+			eipIspTypes = strings.Split(c.Value, ",")
 		case ZoneMapsConfigName:
 			zoneMaps = c.Value
 		case BlockPortsConfigName:
 			blockPorts = util.StringToInt32Slice(c.Value, ",")
+		case RetainNLBOnDeleteConfigName:
+			// 解析 RetainNLBOnDelete 参数
+			if strings.EqualFold(c.Value, "false") {
+				retainNLBOnDelete = false
+			}
 		case MinPortConfigName:
 			val, err := strconv.ParseInt(c.Value, 10, 32)
 			if err != nil {
@@ -539,10 +546,11 @@ func parseAutoNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*autoNL
 		maxPort:               maxPort,
 		nlbHealthConfig:       nlbHealthConfig,
 		reserveNlbNum:         reserveNlbNum,
-		eipTypes:              eipTypes,
+		eipIspTypes:           eipIspTypes,
 		protocols:             protocols,
 		targetPorts:           ports,
 		zoneMaps:              zoneMaps,
 		externalTrafficPolicy: externalTrafficPolicy,
+		retainNLBOnDelete:     retainNLBOnDelete,
 	}, nil
 }

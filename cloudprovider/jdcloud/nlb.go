@@ -201,7 +201,7 @@ func (c *NlbPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx cont
 		if errors.IsNotFound(err) {
 			return pod, cperrors.ToPluginError(client.Create(ctx, c.consSvc(config, pod, client, ctx)), cperrors.ApiCallError)
 		}
-		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 	}
 
 	// update svc
@@ -209,7 +209,7 @@ func (c *NlbPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx cont
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		if err != nil {
-			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.InternalError, err.Error())
 		}
 		return pod, cperrors.ToPluginError(client.Update(ctx, c.consSvc(config, pod, client, ctx)), cperrors.ApiCallError)
 	}

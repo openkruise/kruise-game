@@ -19,6 +19,10 @@ package alibabacloud
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
@@ -33,9 +37,6 @@ import (
 	log "k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strconv"
-	"strings"
-	"sync"
 )
 
 const (
@@ -155,7 +156,7 @@ func (m *MultiNlbsPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx conte
 	networkConfig := networkManager.GetNetworkConfig()
 	conf, err := parseMultiNLBsConfig(networkConfig)
 	if err != nil {
-		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
 	}
 	var lbNames []string
 	for _, lbName := range conf.lbNames {
@@ -179,7 +180,7 @@ func (m *MultiNlbsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx con
 	networkConfig := networkManager.GetNetworkConfig()
 	conf, err := parseMultiNLBsConfig(networkConfig)
 	if err != nil {
-		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
 	}
 	if networkStatus == nil {
 		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
@@ -210,7 +211,7 @@ func (m *MultiNlbsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx con
 				}
 				return pod, cperrors.ToPluginError(c.Create(ctx, service), cperrors.ApiCallError)
 			}
-			return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 		}
 	}
 
@@ -231,7 +232,7 @@ func (m *MultiNlbsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx con
 				}
 				return pod, cperrors.ToPluginError(c.Create(ctx, service), cperrors.ApiCallError)
 			}
-			return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 		}
 
 		// old svc remain
@@ -245,7 +246,7 @@ func (m *MultiNlbsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx con
 			networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 			pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 			if err != nil {
-				return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
+				return pod, cperrors.NewPluginErrorWithMessage(cperrors.InternalError, err.Error())
 			}
 			service, err := m.consSvc(podLbsPorts, conf, pod, lbName, c, ctx)
 			if err != nil {
@@ -267,7 +268,7 @@ func (m *MultiNlbsPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx con
 		}
 
 		// network not ready
-		if svc.Status.LoadBalancer.Ingress == nil {
+		if len(svc.Status.LoadBalancer.Ingress) == 0 {
 			networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 			pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 			return pod, cperrors.ToPluginError(err, cperrors.InternalError)
@@ -344,7 +345,7 @@ func (m *MultiNlbsPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx con
 	networkConfig := networkManager.GetNetworkConfig()
 	sc, err := parseMultiNLBsConfig(networkConfig)
 	if err != nil {
-		return cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+		return cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 	}
 
 	var podKeys []string

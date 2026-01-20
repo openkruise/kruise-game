@@ -197,7 +197,7 @@ func (c *ClbPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx cont
 			return pod, cperrors.ToPluginError(client.Create(ctx, svc), cperrors.ApiCallError)
 		}
 		log.Errorf("[CLB] client.Get svc failed: %v", err)
-		return pod, cperrors.NewPluginError(cperrors.ApiCallError, err.Error())
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError, err.Error())
 	}
 	if len(svc.OwnerReferences) > 0 && svc.OwnerReferences[0].Kind == "Pod" && svc.OwnerReferences[0].UID != pod.UID {
 		log.Infof("[CLB] waiting old svc %s/%s deleted. old owner pod uid is %s, but now is %s", svc.Namespace, svc.Name, svc.OwnerReferences[0].UID, pod.UID)
@@ -210,7 +210,7 @@ func (c *ClbPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx cont
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		if err != nil {
-			return pod, cperrors.NewPluginError(cperrors.InternalError, err.Error())
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.InternalError, err.Error())
 		}
 		newSvc, err := c.consSvc(config, pod, client, ctx)
 		if err != nil {

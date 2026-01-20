@@ -16,8 +16,6 @@ limitations under the License.
 
 package errors
 
-import "fmt"
-
 // PluginErrorType describes a high-level category of a given error
 type PluginErrorType string
 
@@ -30,6 +28,8 @@ const (
 	ParameterError PluginErrorType = "parameterError"
 	// NotImplementedError an error related to be not implemented by developers
 	NotImplementedError PluginErrorType = "notImplementedError"
+	// RetryError is an error indicating the operation should be retried
+	RetryError PluginErrorType = "retryError"
 )
 
 type PluginError interface {
@@ -53,12 +53,17 @@ func (c pluginErrorImplErrorImpl) Type() PluginErrorType {
 	return c.errorType
 }
 
-// NewPluginError returns new plugin error with a message constructed from format string
-func NewPluginError(errorType PluginErrorType, msg string, args ...interface{}) PluginError {
+// NewPluginErrorWithMessage returns new plugin error with a simple message string
+func NewPluginErrorWithMessage(errorType PluginErrorType, msg string) PluginError {
 	return pluginErrorImplErrorImpl{
 		errorType: errorType,
-		msg:       fmt.Sprintf(msg, args...),
+		msg:       msg,
 	}
+}
+
+// NewPluginError is an alias for NewPluginErrorWithMessage
+func NewPluginError(errorType PluginErrorType, msg string) PluginError {
+	return NewPluginErrorWithMessage(errorType, msg)
 }
 
 func ToPluginError(err error, errorType PluginErrorType) PluginError {
