@@ -15,11 +15,11 @@ enable = true
 max_port = 32050
 min_port = 32001
 ```
-### Preparation： ###
+### Preparation: ###
 
 Due to the difference in AWS design, to achieve NLB port-to-Pod port mapping, three types of CRD resources need to be created: Listener/TargetGroup/TargetGroupBinding
 
-#### Deploy elbv2-controller：
+#### Deploy elbv2-controller:
 
 Definition and controller for Listener/TargetGroup CRDs: https://github.com/aws-controllers-k8s/elbv2-controller. This project links k8s resources with AWS cloud resources. Download the chart: https://gallery.ecr.aws/aws-controllers-k8s/elbv2-chart, example value.yaml:
 
@@ -34,14 +34,14 @@ aws:
 
 The key to deploying this project lies in authorizing the k8s ServiceAccount to access the NLB SDK, which is recommended to be done through an IAM role:
 
-##### Step 1：Enable OIDC provider for the EKS cluster
+##### Step 1:Enable OIDC provider for the EKS cluster
 
 1. Sign in to the AWS Management Console.
-2. Navigate to the EKS console：https://console.aws.amazon.com/eks/
+2. Navigate to the EKS console:https://console.aws.amazon.com/eks/
 3. Select your cluster.
 4. On the cluster details page, ensure that the OIDC provider is enabled. Obtain the OIDC provider URL for the EKS cluster. In the "Configuration" section of the cluster details page, find the "OpenID Connect provider URL".
 
-##### Step 2：Configure the IAM role trust policy
+##### Step 2:Configure the IAM role trust policy
 1. In the IAM console, create a new identity provider and select "OpenID Connect".
    - For the Provider URL, enter the OIDC provider URL of your EKS cluster.
    - For Audience, enter: `sts.amazonaws.com`
@@ -68,12 +68,12 @@ The key to deploying this project lies in authorizing the k8s ServiceAccount to 
        ]
      }
      ```
-     - Replace `<AWS_ACCOUNT_ID>`、`<REGION>`、`<OIDC_ID>`、`<NAMESPACE>` and `<SERVICE_ACCOUNT_NAME>` with your actual values.
+     - Replace `<AWS_ACCOUNT_ID>`,`<REGION>`,`<OIDC_ID>`,`<NAMESPACE>` and `<SERVICE_ACCOUNT_NAME>` with your actual values.
      - Add the permission `ElasticLoadBalancingFullAccess`
 
 
 
-#### Deploy AWS Load Balancer Controller：
+#### Deploy AWS Load Balancer Controller:
 
 CRD and controller for TargetGroupBinding: https://github.com/kubernetes-sigs/aws-load-balancer-controller/
 
@@ -97,15 +97,15 @@ Official deployment documentation: https://docs.aws.amazon.com/eks/latest/usergu
 - Meaning: Fill in the health check parameters for the nlb target group, can be left blank to use default values.
 - Format: Separate each configuration with a comma. For example: "healthCheckEnabled:true,healthCheckIntervalSeconds:30,healthCheckPath:/health,healthCheckPort:8081,healthCheckProtocol:HTTP,healthCheckTimeoutSeconds:10,healthyThresholdCount:5,unhealthyThresholdCount:2"
 - Support for change: Yes
-- Parameter explanation：
-    - **healthCheckEnabled**：Indicates whether health checks are enabled. If the target type is lambda, health checks are disabled by default but can be enabled. If the target type is instance, ip, or alb, health checks are always enabled and cannot be disabled.
-    - **healthCheckIntervalSeconds**：The approximate amount of time, in seconds, between health checks of an individual target. The range is 5-300. If the target group protocol is TCP, TLS, UDP, TCP_UDP, HTTP, or HTTPS, the default is 30 seconds. If the target group protocol is GENEVE, the default is 10 seconds. If the target type is lambda, the default is 35 seconds.
-    - **healthCheckPath**：The destination for health checks on the targets. For HTTP/HTTPS health checks, this is the path. For GRPC protocol version, this is the path of a custom health check method with the format /package.service/method. The default is /Amazon Web Services.ALB/healthcheck.
-    - **healthCheckPort**：The port the load balancer uses when performing health checks on targets. The default is traffic-port, which is the port on which each target receives traffic from the load balancer. If the protocol is GENEVE, the default is port 80.
-    - **healthCheckProtocol**：The protocol the load balancer uses when performing health checks on targets. For Application Load Balancers, the default is HTTP. For Network Load Balancers and Gateway Load Balancers, the default is TCP. The GENEVE, TLS, UDP, and TCP_UDP protocols are not supported for health checks.
-    - **healthCheckTimeoutSeconds**：The amount of time, in seconds, during which no response from a target means a failed health check. The range is 2–120 seconds. For target groups with a protocol of HTTP, the default is 6 seconds. For target groups with a protocol of TCP, TLS, or HTTPS, the default is 10 seconds. For target groups with a protocol of GENEVE, the default is 5 seconds. If the target type is lambda, the default is 30 seconds.
-    - **healthyThresholdCount**：The number of consecutive health check successes required before considering a target healthy. The range is 2-10. If the target group protocol is TCP, TCP_UDP, UDP, TLS, HTTP, or HTTPS, the default is 5. For target groups with a protocol of GENEVE, the default is 5. If the target type is lambda, the default is 5.
-    - **unhealthyThresholdCount**：The number of consecutive health check failures required before considering a target unhealthy. The range is 2-10. If the target group protocol is TCP, TCP_UDP, UDP, TLS, HTTP, or HTTPS, the default is 2. For target groups with a protocol of GENEVE, the default is 2. If the target type is lambda, the default is 5.
+- Parameter explanation:
+    - **healthCheckEnabled**: Indicates whether health checks are enabled. If the target type is lambda, health checks are disabled by default but can be enabled. If the target type is instance, ip, or alb, health checks are always enabled and cannot be disabled.
+    - **healthCheckIntervalSeconds**: The approximate amount of time, in seconds, between health checks of an individual target. The range is 5-300. If the target group protocol is TCP, TLS, UDP, TCP_UDP, HTTP, or HTTPS, the default is 30 seconds. If the target group protocol is GENEVE, the default is 10 seconds. If the target type is lambda, the default is 35 seconds.
+    - **healthCheckPath**: The destination for health checks on the targets. For HTTP/HTTPS health checks, this is the path. For GRPC protocol version, this is the path of a custom health check method with the format /package.service/method. The default is /Amazon Web Services.ALB/healthcheck.
+    - **healthCheckPort**: The port the load balancer uses when performing health checks on targets. The default is traffic-port, which is the port on which each target receives traffic from the load balancer. If the protocol is GENEVE, the default is port 80.
+    - **healthCheckProtocol**: The protocol the load balancer uses when performing health checks on targets. For Application Load Balancers, the default is HTTP. For Network Load Balancers and Gateway Load Balancers, the default is TCP. The GENEVE, TLS, UDP, and TCP_UDP protocols are not supported for health checks.
+    - **healthCheckTimeoutSeconds**: The amount of time, in seconds, during which no response from a target means a failed health check. The range is 2–120 seconds. For target groups with a protocol of HTTP, the default is 6 seconds. For target groups with a protocol of TCP, TLS, or HTTPS, the default is 10 seconds. For target groups with a protocol of GENEVE, the default is 5 seconds. If the target type is lambda, the default is 30 seconds.
+    - **healthyThresholdCount**: The number of consecutive health check successes required before considering a target healthy. The range is 2-10. If the target group protocol is TCP, TCP_UDP, UDP, TLS, HTTP, or HTTPS, the default is 5. For target groups with a protocol of GENEVE, the default is 5. If the target type is lambda, the default is 5.
+    - **unhealthyThresholdCount**: The number of consecutive health check failures required before considering a target unhealthy. The range is 2-10. If the target group protocol is TCP, TCP_UDP, UDP, TLS, HTTP, or HTTPS, the default is 2. For target groups with a protocol of GENEVE, the default is 2. If the target type is lambda, the default is 5.
 
 #### PortProtocols
 - Meaning: Ports and protocols exposed by the pod, supports specifying multiple ports/protocols.

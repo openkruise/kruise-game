@@ -5,7 +5,7 @@ To install OpenKruiseGame, you need to install Kruise and Kruise-Game, and requi
 We recommend that you use Helm V3.5 or later to install Kruise.
 
 ```shell
-# Firstly add openkruise charts repository if you haven't do this.
+# Firstly add openkruise charts repository if you haven't done this.
 $ helm repo add openkruise https://openkruise.github.io/charts/
 
 # [Optional]

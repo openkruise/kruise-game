@@ -16,36 +16,36 @@ max_port = 700
 min_port = 500
 ```
 
-### Parameter
+### Parameters
 #### NlbIds
-- Meaning：fill in the id of the clb. You can fill in more than one. You need to create the clb in [JdCloud].
-- Value：each clbId is divided by `,` . For example：`netlb-aaa,netlb-bbb,...`
-- Configurable：Y
+- Meaning: fill in the id of the clb. You can fill in more than one. You need to create the clb in [JdCloud].
+- Value: each clbId is divided by `,` . For example:`netlb-aaa,netlb-bbb,...`
+- Configurable: Y
 
 #### PortProtocols
-- Meaning：the ports and protocols exposed by the pod, support filling in multiple ports/protocols
-- Value：`port1/protocol1`,`port2/protocol2`,... The protocol names must be in uppercase letters.
-- Configurable：Y
+- Meaning: the ports and protocols exposed by the pod, support filling in multiple ports/protocols
+- Value: `port1/protocol1`,`port2/protocol2`,... The protocol names must be in uppercase letters.
+- Configurable: Y
 
 #### Fixed
-- Meaning：whether the mapping relationship is fixed. If the mapping relationship is fixed, the mapping relationship remains unchanged even if the pod is deleted and recreated.
-- Value：false / true
-- Configurable：Y
+- Meaning: whether the mapping relationship is fixed. If the mapping relationship is fixed, the mapping relationship remains unchanged even if the pod is deleted and recreated.
+- Value: false / true
+- Configurable: Y
 
 #### AllocateLoadBalancerNodePorts
-- Meaning：Whether the generated service is assigned nodeport, this can be set to false only in nlb passthrough mode
-- Value：false / true
-- Configurable：Y
+- Meaning: Whether the generated service is assigned nodeport, this can be set to false only in nlb passthrough mode
+- Value: false / true
+- Configurable: Y
 
 #### AllowNotReadyContainers
-- Meaning：the container names that are allowed not ready when inplace updating, when traffic will not be cut.
-- Value：{containerName_0},{containerName_1},... eg：sidecar
-- Configurable：It cannot be changed during the in-place updating process.
+- Meaning: the container names that are allowed not ready when inplace updating, when traffic will not be cut.
+- Value:{containerName_0},{containerName_1},... eg: sidecar
+- Configurable: It cannot be changed during the in-place updating process.
 
 #### Annotations
-- Meaning：the anno added to the service
-- Value：key1:value1,key2:value2...
-- Configurable：Y
+- Meaning: the anno added to the service
+- Value: key1: value1,key2: value2...
+- Configurable: Y
 
 
 ### Example
@@ -81,7 +81,7 @@ spec:
       - name: Annotations
         #Fill in the anno related to clb on the service
         #The format is as follows: {key1}:{value1},{key2}:{value2}...
-        value: "key1:value1,key2:value2"
+        value: "key1: value1,key2: value2"
   gameServerTemplate: 
     spec:
       containers:
@@ -89,7 +89,7 @@ spec:
           - /data/server/start.sh
           command:
           - /bin/bash
-          image: gss-cn-north-1.jcr.service.jdcloud.com/gsshosting/pal:v1
+          image: gss-cn-north-1.jcr.service.jdcloud.com/gsshosting/pal: v1
           name: game-server
 EOF
 ```
@@ -97,7 +97,7 @@ EOF
 Check the network status in GameServer:
 ```
 networkStatus:
-    createTime: "2024-11-04T08:00:20Z"
+    createTime: "2024-11-04T08: 00: 20Z"
     currentNetworkState: Ready
     desiredNetworkState: Ready
     externalAddresses:
@@ -112,7 +112,7 @@ networkStatus:
       - name: "8211"
         port: 8211
         protocol: UDP
-    lastTransitionTime: "2024-11-04T08:00:20Z"
+    lastTransitionTime: "2024-11-04T08: 00: 20Z"
     networkType: JdCloud-NLB
 ```
 
@@ -127,27 +127,27 @@ JdCloud Container Service supports binding an Elastic Public IP directly to a po
 ###  Parameter
 
 #### BandwidthConfigName
-- Meaning：The bandwidth of the Elastic Public IP, measured in Mbps, has a value range of [1, 1024].
-- Value：Must be an integer
-- Configurable：Y
+- Meaning: The bandwidth of the Elastic Public IP, measured in Mbps, has a value range of [1, 1024].
+- Value: Must be an integer
+- Configurable: Y
 
 #### ChargeTypeConfigName
-- Meaning：The billing method for the Elastic Public IP
-- Value：string, `postpaid_by_usage`/`postpaid_by_duration`
-- Configurable：Y
+- Meaning: The billing method for the Elastic Public IP
+- Value: string, `postpaid_by_usage`/`postpaid_by_duration`
+- Configurable: Y
 
 #### FixedEIPConfigName
-- Meaning：Whether to fixed the Elastic Public IP,if so, the EIP will not be changed when the pod is recreated.
-- Value：string, "false" / "true"
-- Configurable：Y
+- Meaning: Whether to fixed the Elastic Public IP,if so, the EIP will not be changed when the pod is recreated.
+- Value: string, "false" / "true"
+- Configurable: Y
 
 #### AssignEIPConfigName
-- Meaning：Whether to designate a specific Elastic Public IP. If true, provide the ID of the Elastic Public IP; otherwise, an EIP will be automatically allocated.
-- Value：string, "false" / "true"
+- Meaning: Whether to designate a specific Elastic Public IP. If true, provide the ID of the Elastic Public IP; otherwise, an EIP will be automatically allocated.
+- Value: string, "false" / "true"
 
 #### EIPIdConfigName
-- Meaning：If a specific Elastic Public IP is designated, the ID of the Elastic Public IP must be provided, and the component will automatically perform the lookup and binding.
-- Value：string，for example：`fip-xxxxxxxx`
+- Meaning: If a specific Elastic Public IP is designated, the ID of the Elastic Public IP must be provided, and the component will automatically perform the lookup and binding.
+- Value: string，for example:`fip-xxxxxxxx`
 
 ### Example
 ```yaml
@@ -163,7 +163,7 @@ spec:
         - /data/server/start.sh
       command:
         - /bin/bash
-      image: gss-cn-north-1.jcr.service.jdcloud.com/gsshosting/pal:v1
+      image: gss-cn-north-1.jcr.service.jdcloud.com/gsshosting/pal: v1
       name: game-server
   network:
     networkType: JdCloud-EIP
@@ -181,13 +181,13 @@ EOF
 Check the network status in GameServer:
 ```
 networkStatus:
-    createTime: "2024-11-04T10:53:14Z"
+    createTime: "2024-11-04T10: 53: 14Z"
     currentNetworkState: Ready
     desiredNetworkState: Ready
     externalAddresses:
     - ip: xxx.xxx.xxx.xxx
     internalAddresses:
     - ip: 10.0.0.95
-    lastTransitionTime: "2024-11-04T10:53:14Z"
+    lastTransitionTime: "2024-11-04T10: 53: 14Z"
     networkType: JdCloud-EIP
 ```

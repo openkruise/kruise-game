@@ -52,11 +52,11 @@ type GameServerContainer struct {
 	// Name indicates the name of the container to update.
 	Name string `json:"name"`
 	// Image indicates the image of the container to update.
-	// When Image updated, pod.spec.containers[*].image will be updated immediately.
+	// When Image is updated, pod.spec.containers[*].image will be updated immediately.
 	Image string `json:"image,omitempty"`
 	// Resources indicates the resources of the container to update.
-	// When Resources updated, pod.spec.containers[*].Resources will be not updated immediately,
-	// which will be updated when pod recreate.
+	// When Resources are updated, pod.spec.containers[*].Resources will not be updated immediately,
+	// which will be updated when the pod is recreated.
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
@@ -98,7 +98,7 @@ type ServiceQuality struct {
 type ServiceQualityCondition struct {
 	Name   string `json:"name"`
 	Status string `json:"status,omitempty"`
-	// Result indicate the probe message returned by the script
+	// Result indicates the probe message returned by the script
 	Result                   string      `json:"result,omitempty"`
 	LastProbeTime            metav1.Time `json:"lastProbeTime,omitempty"`
 	LastTransitionTime       metav1.Time `json:"lastTransitionTime,omitempty"`
@@ -107,8 +107,8 @@ type ServiceQualityCondition struct {
 
 type ServiceQualityAction struct {
 	State bool `json:"state"`
-	// Result indicate the probe message returned by the script.
-	// When Result is defined, it would exec action only when the according Result is actually returns.
+	// Result indicates the probe message returned by the script.
+	// When Result is defined, it would exec action only when the corresponding Result is actually returned.
 	Result         string `json:"result,omitempty"`
 	GameServerSpec `json:",inline"`
 	Annotations    map[string]string `json:"annotations,omitempty"`
@@ -148,7 +148,7 @@ type GameServerCondition struct {
 	// Unique, one-word, CamelCase reason for the condition's last transition.
 	// +optional
 	Reason string `json:"reason,omitempty"`
-	// Human-readable message indicating details about last transition.
+	// Human-readable message indicating details about the last transition.
 	// +optional
 	Message string `json:"message,omitempty"`
 }

@@ -4,9 +4,9 @@ OpenKruiseGame allows you to set the states of game servers. You can manually se
 
 1. Scale in game servers based on the opsState values. Scale in the game servers for which the opsState values are `WaitToBeDeleted`, `None`, `Allocated`, and `Maintaining` in sequence.
 
-2. If two or more game servers have the same opsState value, game servers are performed based on the values of DeletionPriority. The game server with the largest DeletionPriority value is deleted first.
+2. If two or more game servers have the same opsState value, game servers are prioritized based on the values of DeletionPriority. The game server with the largest DeletionPriority value is deleted first.
 
-3. If two or multiple game servers have the same opsState value and DeletionPriority value, the game server whose name contains the largest sequence number in the end is deleted first.
+3. If two or more game servers have the same opsState value and DeletionPriority value, the game server whose name contains the largest sequence number at the end is deleted first.
 
 ### Examples
 
