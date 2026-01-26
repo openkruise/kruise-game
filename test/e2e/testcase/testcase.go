@@ -112,6 +112,81 @@ func RunTestCases(f *framework.Framework) {
 			gomega.Expect(err).To(gomega.BeNil())
 		})
 
+		ginkgo.It("service qualities scale down prioritizes WaitToBeDeleted", func() {
+			// Deploy GSS and scale to 5
+			gss, err := f.DeployGssWithServiceQualities()
+			gomega.Expect(err).To(gomega.BeNil())
+			gss, err = f.GameServerScale(gss, 5, nil)
+			gomega.Expect(err).To(gomega.BeNil())
+			gomega.Expect(f.ExpectGssCorrect(gss, []int{0, 1, 2, 3, 4})).To(gomega.BeNil())
+
+			// ServiceQuality probe (per issue):
+			// exit 0 -> WaitToBeDeleted (idle pods)
+			// exit 1 -> None (active pod: -4)
+			patchFields := map[string]interface{}{
+				"serviceQualities": []map[string]interface{}{
+					{
+						"name":          "idle-check",
+						"containerName": "default-game",
+						"permanent":     false,
+						"exec": map[string]interface{}{
+							"command": []string{
+								"sh", "-c",
+								"hostname | grep -q -- '-4$' && exit 1 || exit 0",
+							},
+						},
+						"serviceQualityAction": []map[string]interface{}{
+							{"state": true, "opsState": "WaitToBeDeleted"},
+							{"state": false, "opsState": "None"},
+						},
+					},
+				},
+			}
+			gss, err = f.PatchGssSpec(patchFields)
+			gomega.Expect(err).To(gomega.BeNil())
+
+			// Wait for opsState convergence
+			for i := 0; i < 4; i++ {
+				gomega.Expect(
+					f.WaitForGsSpecOpsState(fmt.Sprintf("%s-%d", gss.GetName(), i), "WaitToBeDeleted"),
+				).To(gomega.BeNil())
+			}
+			gomega.Expect(
+				f.WaitForGsSpecOpsState(fmt.Sprintf("%s-4", gss.GetName()), "None"),
+			).To(gomega.BeNil())
+
+			// Scale down 5 -> 3
+			gss, err = f.GameServerScale(gss, 3, nil)
+			gomega.Expect(err).To(gomega.BeNil())
+
+			// Wait for scale-down to complete
+			var remaining []int
+			gomega.Eventually(func() []int {
+				remaining = []int{}
+				for i := 0; i < 5; i++ {
+					if gs, err := f.GetGameServer(fmt.Sprintf("%s-%d", gss.GetName(), i)); err == nil && gs != nil {
+						remaining = append(remaining, i)
+					}
+				}
+				return remaining
+			}, 2*time.Minute, 2*time.Second).Should(
+				gomega.And(
+					gomega.HaveLen(3),
+					gomega.ContainElement(4), // active pod must survive
+				),
+			)
+
+			// Verify core requirement: pod 4 (opsState=None) survived
+			gs4, err := f.GetGameServer(fmt.Sprintf("%s-4", gss.GetName()))
+			gomega.Expect(err).To(gomega.BeNil())
+			gomega.Expect(string(gs4.Spec.OpsState)).To(gomega.Equal("None"),
+				"Pod 4 with opsState=None should be protected from deletion")
+
+			// Verify the other 2 remaining pods exist (no specific opsState check to avoid flake)
+			gomega.Expect(remaining).To(gomega.HaveLen(3))
+			gomega.Expect(remaining).To(gomega.ContainElement(4))
+		})
+
 		ginkgo.Describe("network control", func() {
 			ginkgo.It("disables NodePort traffic when networkDisabled is true", func() {
 				networkConf := []gameKruiseV1alpha1.NetworkConfParams{
