@@ -23,11 +23,12 @@ import (
 )
 
 const (
-	defaultLogFormat   = "console"
-	defaultJSONPreset  = string(JSONPresetKibana)
-	logFormatFlagName  = "log-format"
-	jsonPresetFlagName = "log-json-preset"
-	zapEncoderFlagName = "zap-encoder"
+	defaultLogFormat       = "console"
+	defaultJSONPreset      = string(JSONPresetKibana)
+	logFormatFlagName      = "log-format"
+	jsonPresetFlagName     = "log-json-preset"
+	zapEncoderFlagName     = "zap-encoder"
+	enableOTelLogsFlagName = "enable-otel-logs"
 )
 
 // Options centralizes all flags and zap configuration required for logger bootstrap.
@@ -35,8 +36,9 @@ type Options struct {
 	ZapOptions zap.Options
 	JSONConfig JSONConfig
 
-	logFormat     string
-	logJSONPreset string
+	logFormat      string
+	logJSONPreset  string
+	enableOTelLogs bool
 }
 
 // Result captures the final logging state after Apply runs.
@@ -77,6 +79,7 @@ func (o *Options) AddFlags(fs *flag.FlagSet) {
 
 	fs.StringVar(&o.logFormat, logFormatFlagName, o.logFormat, "Log output format. 'console' or 'json'. Defaults to 'console'. Overrides --zap-encoder.")
 	fs.StringVar(&o.logJSONPreset, jsonPresetFlagName, o.logJSONPreset, "JSON field layout preset when --log-format=json. Options: 'kibana' or 'otel'.")
+	fs.BoolVar(&o.enableOTelLogs, enableOTelLogsFlagName, o.enableOTelLogs, "Enable OTLP logs export to OpenTelemetry Collector. Requires --otel-collector-endpoint. Default is false.")
 	o.ZapOptions.BindFlags(fs)
 }
 
@@ -147,24 +150,27 @@ func (o *Options) Apply(fs *flag.FlagSet) (Result, error) {
 		return Result{}, fmt.Errorf("unsupported log-format %s", finalFormat)
 	}
 
-	otelLogsEndpoint := fs.Lookup("otel-collector-endpoint")
-	otelLogsToken := fs.Lookup("otel-collector-token")
-	if otelLogsEndpoint != nil && otelLogsEndpoint.Value.String() != "" {
-		endpointVal := otelLogsEndpoint.Value.String()
-		tokenVal := ""
-		if otelLogsToken != nil {
-			tokenVal = otelLogsToken.Value.String()
+	// Only enable OTLP logs export when explicitly requested via --enable-otel-logs
+	if o.enableOTelLogs {
+		otelLogsEndpoint := fs.Lookup("otel-collector-endpoint")
+		otelLogsToken := fs.Lookup("otel-collector-token")
+		if otelLogsEndpoint != nil && otelLogsEndpoint.Value.String() != "" {
+			endpointVal := otelLogsEndpoint.Value.String()
+			tokenVal := ""
+			if otelLogsToken != nil {
+				tokenVal = otelLogsToken.Value.String()
+			}
+			o.ZapOptions.ZapOpts = append(o.ZapOptions.ZapOpts,
+				gozap.WrapCore(func(baseCore gozapcore.Core) gozapcore.Core {
+					filteredCore := newFilterCore(baseCore, map[string]bool{"context": true})
+					otelzapCore := setupOTelLogsCore(endpointVal, tokenVal)
+					if otelzapCore == nil {
+						return filteredCore
+					}
+					return gozapcore.NewTee(filteredCore, otelzapCore)
+				}),
+			)
 		}
-		o.ZapOptions.ZapOpts = append(o.ZapOptions.ZapOpts,
-			gozap.WrapCore(func(baseCore gozapcore.Core) gozapcore.Core {
-				filteredCore := newFilterCore(baseCore, map[string]bool{"context": true})
-				otelzapCore := setupOTelLogsCore(endpointVal, tokenVal)
-				if otelzapCore == nil {
-					return filteredCore
-				}
-				return gozapcore.NewTee(filteredCore, otelzapCore)
-			}),
-		)
 	}
 
 	logger := zap.New(zap.UseFlagOptions(&o.ZapOptions))
@@ -210,7 +216,7 @@ func setupOTelLogsCore(endpoint, token string) gozapcore.Core {
 	// Add authentication header if token is provided
 	if token != "" {
 		exporterOpts = append(exporterOpts, otlploggrpc.WithHeaders(map[string]string{
-			"Authorization": "Bearer " + token,
+			"Authentication": token,
 		}))
 	}
 

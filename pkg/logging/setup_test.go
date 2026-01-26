@@ -149,3 +149,100 @@ func TestOTelCollectorWithoutToken(t *testing.T) {
 		t.Fatalf("apply options without token should not error: %v", err)
 	}
 }
+
+func TestEnableOTelLogsFlag_DefaultDisabled(t *testing.T) {
+	// Test that OTLP logs export is disabled by default even with endpoint configured
+	opts := NewOptions()
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	opts.AddFlags(fs)
+
+	// Register tracing flags (simulating main.go behavior)
+	fs.String("otel-collector-endpoint", "localhost:4317", "test endpoint")
+	fs.String("otel-collector-token", "", "test token")
+
+	// Only set endpoint, NOT --enable-otel-logs
+	if err := fs.Parse([]string{"--otel-collector-endpoint=test-endpoint:4317"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	// Verify enable-otel-logs flag exists and defaults to false
+	enableLogsFlag := fs.Lookup(enableOTelLogsFlagName)
+	if enableLogsFlag == nil {
+		t.Fatal("expected enable-otel-logs flag to be registered")
+	}
+	if enableLogsFlag.Value.String() != "false" {
+		t.Fatalf("expected enable-otel-logs to default to false, got '%s'", enableLogsFlag.Value.String())
+	}
+
+	// Apply should work without enabling OTLP logs
+	_, err := opts.Apply(fs)
+	if err != nil {
+		t.Fatalf("apply options should not error: %v", err)
+	}
+
+	// enableOTelLogs should be false
+	if opts.enableOTelLogs {
+		t.Fatal("expected enableOTelLogs to be false by default")
+	}
+}
+
+func TestEnableOTelLogsFlag_ExplicitlyEnabled(t *testing.T) {
+	// Test that OTLP logs export can be explicitly enabled
+	opts := NewOptions()
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	opts.AddFlags(fs)
+
+	// Register tracing flags (simulating main.go behavior)
+	fs.String("otel-collector-endpoint", "localhost:4317", "test endpoint")
+	fs.String("otel-collector-token", "", "test token")
+
+	// Set both endpoint AND --enable-otel-logs=true
+	if err := fs.Parse([]string{
+		"--otel-collector-endpoint=test-endpoint:4317",
+		"--enable-otel-logs=true",
+	}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	// Verify enable-otel-logs flag is set to true
+	enableLogsFlag := fs.Lookup(enableOTelLogsFlagName)
+	if enableLogsFlag == nil {
+		t.Fatal("expected enable-otel-logs flag to be registered")
+	}
+	if enableLogsFlag.Value.String() != "true" {
+		t.Fatalf("expected enable-otel-logs to be true, got '%s'", enableLogsFlag.Value.String())
+	}
+
+	// Apply should work with OTLP logs enabled
+	_, err := opts.Apply(fs)
+	if err != nil {
+		t.Fatalf("apply options should not error: %v", err)
+	}
+
+	// enableOTelLogs should be true
+	if !opts.enableOTelLogs {
+		t.Fatal("expected enableOTelLogs to be true when explicitly enabled")
+	}
+}
+
+func TestEnableOTelLogsFlag_EnabledWithoutEndpoint(t *testing.T) {
+	// Test that enabling OTLP logs without endpoint doesn't cause errors
+	opts := NewOptions()
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	opts.AddFlags(fs)
+
+	// Register tracing flags but with empty endpoint
+	fs.String("otel-collector-endpoint", "", "test endpoint")
+	fs.String("otel-collector-token", "", "test token")
+
+	// Set --enable-otel-logs=true but no endpoint
+	if err := fs.Parse([]string{"--enable-otel-logs=true"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	// Apply should work gracefully (no endpoint means no OTLP logs setup)
+	_, err := opts.Apply(fs)
+	if err != nil {
+		t.Fatalf("apply options should not error even without endpoint: %v", err)
+	}
+}

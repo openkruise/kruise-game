@@ -27,6 +27,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+	"k8s.io/klog/v2"
 
 	"github.com/openkruise/kruise-game/pkg/logging"
 	"github.com/openkruise/kruise-game/pkg/version"
@@ -39,6 +40,24 @@ var (
 	// ErrCollectorUnavailable is returned when OTLP collector is unreachable
 	ErrCollectorUnavailable = errors.New("OTel Collector unavailable")
 )
+
+// loggingExporter wraps a SpanExporter to log export errors
+type loggingExporter struct {
+	sdktrace.SpanExporter
+}
+
+func (e *loggingExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
+	if len(spans) == 0 {
+		return nil
+	}
+	err := e.SpanExporter.ExportSpans(ctx, spans)
+	if err != nil {
+		klog.Errorf("Failed to export %d traces: %v", len(spans), err)
+	} else {
+		klog.Infof("Successfully exported %d traces to collector", len(spans))
+	}
+	return err
+}
 
 // Apply initializes the global TracerProvider based on the given options.
 // If initialization fails, it falls back to a no-op tracer and returns an error.
@@ -69,7 +88,7 @@ func (o *TracingOptions) Apply() error {
 	// Add authentication header if token is provided
 	if o.CollectorToken != "" {
 		exporterOpts = append(exporterOpts, otlptracegrpc.WithHeaders(map[string]string{
-			"Authorization": "Bearer " + o.CollectorToken,
+			"Authentication": o.CollectorToken,
 		}))
 	}
 
@@ -116,9 +135,9 @@ func (o *TracingOptions) Apply() error {
 		res = resource.Default()
 	}
 
-	// Create TracerProvider
+	// Create TracerProvider with logging exporter wrapper
 	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
+		sdktrace.WithBatcher(&loggingExporter{SpanExporter: exporter}),
 		sdktrace.WithSampler(sdktrace.TraceIDRatioBased(o.SamplingRate)),
 		sdktrace.WithResource(res),
 	)
