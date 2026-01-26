@@ -54,7 +54,7 @@ OpenKruiseGame has the following core features:
 * Independent of cloud service providers
 * Complex game server orchestration
 
-### Users of OpenKruiseGame(OKG)
+### Users of OpenKruiseGame (OKG)
 
 <table>
     <tr style="border: none;">

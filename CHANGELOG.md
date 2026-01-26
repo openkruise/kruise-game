@@ -83,7 +83,7 @@
 - Feat: add lifecycle field for gameserverset. https://github.com/openkruise/kruise-game/pull/162
 
 ### Bug Fixes
-- Fix the allocation error when Ali loadbalancers reache the limit of ports number. https://github.com/openkruise/kruise-game/pull/149
+- Fix the allocation error when Ali loadbalancers reach the limit of ports number. https://github.com/openkruise/kruise-game/pull/149
 - Fix: AmazonWebServices-NLB controller parameter modification. https://github.com/openkruise/kruise-game/pull/164
 - Fix old svc remain after pod recreate when using ali-lb models. https://github.com/openkruise/kruise-game/pull/165
 
@@ -155,7 +155,7 @@
 - Change autoscaler trigger metricType from Value to AverageValue. https://github.com/openkruise/kruise-game/pull/64
 - Decouple triggering network update from Gs Ready. https://github.com/openkruise/kruise-game/pull/71
 - Add reserveIds when init asts. https://github.com/openkruise/kruise-game/pull/73
-- AlibabaCloud-SLB support muti-slbIds. https://github.com/openkruise/kruise-game/pull/69/commits/42b8ab3e739c872f477d4faa7286ace3a87a07d6
+- AlibabaCloud-SLB supports multi-slbIds. https://github.com/openkruise/kruise-game/pull/69/commits/42b8ab3e739c872f477d4faa7286ace3a87a07d6
 
 
 ### Bug Fixes

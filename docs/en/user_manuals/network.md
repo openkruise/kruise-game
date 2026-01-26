@@ -443,20 +443,20 @@ Fixed
 
 ExternalTrafficPolicyType
 
-- Meaning: Service LB forward type, if Local， Service LB just forward traffice to local node Pod, we can keep source IP without SNAT
+- Meaning: Service LB forward type, if Local, Service LB just forward traffic to local node Pod, we can keep source IP without SNAT
 - Value: : Local/Cluster Default value is Cluster
-- Configuration change supported or not: not. It maybe related to "IP/Port mapping relationship Fixed", recommend not to change
+- Configuration change supported or not: not. It may be related to "IP/Port mapping relationship Fixed", recommend not to change
 
 AllowNotReadyContainers
 
 - Meaning: the container names that are allowed not ready when inplace updating, when traffic will not be cut.
-- Value: {containerName_0},{containerName_1},... Example：sidecar
+- Value: {containerName_0},{containerName_1},... Example:sidecar
 - Configuration change supported or not: It cannot be changed during the in-place updating process.
 
 LBHealthCheckSwitch
 
-- Meaning：Whether to enable health check
-- Format："on" means on, "off" means off. Default is on
+- Meaning:Whether to enable health check
+- Format:"on" means on, "off" means off. Default is on
 - Whether to support changes: Yes
 
 LBHealthCheckFlag
@@ -497,8 +497,8 @@ LBHealthCheckInterval
 
 LBHealthCheckProtocolPort
 
-- Meaning：the protocols & ports of HTTP type health check.
-- Format：Multiple values are separated by ','. e.g. https:443,http:80
+- Meaning:the protocols & ports of HTTP type health check.
+- Format:Multiple values are separated by ','. e.g. https:443,http:80
 - Whether to support changes: Yes
 
 LBHealthCheckUri
@@ -565,7 +565,7 @@ PortProtocols
 AllowNotReadyContainers
 
 - Meaning: the container names that are allowed not ready when inplace updating, when traffic will not be cut.
-- Value: {containerName_0},{containerName_1},... Example：sidecar
+- Value: {containerName_0},{containerName_1},... Example:sidecar
 - Configuration change supported or not: It cannot be changed during the in-place updating process.
 
 #### Plugin configuration
@@ -612,7 +612,7 @@ Fixed
 AllowNotReadyContainers
 
 - Meaning: the container names that are allowed not ready when inplace updating, when traffic will not be cut.
-- Value: {containerName_0},{containerName_1},... Example：sidecar
+- Value: {containerName_0},{containerName_1},... Example:sidecar
 - Configuration change supported or not: It cannot be changed during the in-place updating process.
 
 LBHealthCheckFlag
@@ -1353,7 +1353,7 @@ BandwidthPackageId
 ChargeType
 
 - Meaning: Specifies the metering method of the EIP.
-- Value：
+- Value:
   - PayByTraffic: Fees are charged based on data transfer.
   - PayByBandwidth: Fees are charged based on bandwidth usage.
 - Configuration change supported or not: no.
@@ -1411,7 +1411,7 @@ The network status of GameServer would be as follows:
     networkType: AlibabaCloud-EIP
 ```
 
-The generated podeip eip-nginx-0 would be as follows：
+The generated podeip eip-nginx-0 would be as follows:
 
 ```yaml
 apiVersion: alibabacloud.com/v1beta1
@@ -1481,7 +1481,7 @@ PortProtocols
 AllowNotReadyContainers
 
 - Meaning: the container names that are allowed not ready when inplace updating, when traffic will not be cut.
-- Value: {containerName_0},{containerName_1},... Example：sidecar
+- Value: {containerName_0},{containerName_1},... Example:sidecar
 - Configuration change supported or not: It cannot be changed during the in-place updating process.
 
 #### Plugin configuration
@@ -1692,15 +1692,15 @@ Fixed
 AllowNotReadyContainers
 
 - Meaning: the container names that are allowed not ready when inplace updating, when traffic will not be cut.
-- Value: {containerName_0},{containerName_1},... Example：sidecar
+- Value: {containerName_0},{containerName_1},... Example:sidecar
 - Configuration change supported or not: It cannot be changed during the in-place updating process.
 
 
 ExternalTrafficPolicyType
 
-- Meaning: Service LB forward type, if Local， Service LB just forward traffice to local node Pod, we can keep source IP without SNAT
+- Meaning: Service LB forward type, if Local, Service LB just forward traffic to local node Pod, we can keep source IP without SNAT
 - Value: : Local/Cluster Default value is Cluster
-- Configuration change supported or not: not. It maybe related to "IP/Port mapping relationship Fixed", recommend not to change
+- Configuration change supported or not: not. It may be related to "IP/Port mapping relationship Fixed", recommend not to change
 
 
 LB config parameters consistent with huawei cloud ccm https://github.com/kubernetes-sigs/cloud-provider-huaweicloud/blob/master/docs/usage-guide.md

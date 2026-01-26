@@ -137,7 +137,7 @@ type RollingUpdateStatefulSetStrategy struct {
 	Paused bool `json:"paused,omitempty"`
 	// UnorderedUpdate contains strategies for non-ordered update.
 	// If it is not nil, pods will be updated with non-ordered sequence.
-	// Noted that UnorderedUpdate can only be allowed to work with Parallel podManagementPolicy
+	// Note that UnorderedUpdate can only be allowed to work with Parallel podManagementPolicy
 	// +optional
 	// UnorderedUpdate *kruiseV1beta1.UnorderedUpdateStrategy `json:"unorderedUpdate,omitempty"`
 	// InPlaceUpdateStrategy contains strategies for in-place update.
@@ -199,7 +199,7 @@ type GameServerSetStatus struct {
 //+genclient
 //+kubebuilder:object:root=true
 //+kubebuilder:printcolumn:name="DESIRED",type="integer",JSONPath=".spec.replicas",description="The desired number of GameServers."
-//+kubebuilder:printcolumn:name="CURRENT",type="integer",JSONPath=".status.currentReplicas",description="The number of currently all GameServers."
+//+kubebuilder:printcolumn:name="CURRENT",type="integer",JSONPath=".status.currentReplicas",description="The total number of current GameServers."
 //+kubebuilder:printcolumn:name="UPDATED",type="integer",JSONPath=".status.updatedReplicas",description="The number of GameServers updated."
 //+kubebuilder:printcolumn:name="READY",type="integer",JSONPath=".status.readyReplicas",description="The number of GameServers ready."
 //+kubebuilder:printcolumn:name="Maintaining",type="integer",JSONPath=".status.maintainingReplicas",description="The number of GameServers Maintaining."
