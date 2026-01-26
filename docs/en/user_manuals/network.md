@@ -845,6 +845,23 @@ EipIspTypes
 - Example: `BGP,BGP_PRO` or `ChinaTelecom,ChinaMobile,ChinaUnicom`
 - Configuration change supported: No
 
+SecurityProtectionTypes
+
+- Meaning: EIP security protection types, supports DDoS protection
+- Format: `type1,type2,...` (comma-separated for multiple types)
+- Available values:
+  - `AntiDDoS_Enhanced`: DDoS Protection (Enhanced) - Provides Tbps-level professional DDoS protection
+- Example: `AntiDDoS_Enhanced`
+- Configuration change supported: No
+- Default: Empty (no protection enabled)
+- Usage restrictions:
+  - Only supports pay-as-you-go mode (`PostPaid`)
+  - Only supports BGP (multi-line) ISP type
+  - Not compatible with single-line ISP types (ChinaTelecom/ChinaMobile/ChinaUnicom)
+  - Supported regions: cn-beijing, cn-hangzhou, cn-shanghai, cn-hongkong, etc.
+  - Additional security protection fees apply
+- Note: Currently only `AntiDDoS_Enhanced` type is supported. If configured with incompatible ISP types, EIP CR creation will fail with error from Alibaba Cloud API
+
 MinPort
 
 - Meaning: Minimum value for NLB external port allocation
@@ -1148,6 +1165,50 @@ spec:
         name: gameserver
 ```
 
+**Example 5: Enable DDoS Protection (Enhanced)**
+
+```yaml
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: gs-ddos-protected
+  namespace: default
+spec:
+  replicas: 5
+  updateStrategy:
+    rollingUpdate:
+      podUpdatePolicy: InPlaceIfPossible
+  network:
+    networkType: AlibabaCloud-AutoNLBs-V2
+    networkConf:
+    - name: ZoneMaps
+      value: "vpc-xxx@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"
+    - name: PortProtocols
+      value: "8080/TCP,9000/UDP"
+    - name: EipIspTypes
+      value: "BGP"  # DDoS protection requires BGP line
+    - name: SecurityProtectionTypes
+      value: "AntiDDoS_Enhanced"  # Enable DDoS Protection (Enhanced)
+    - name: MinPort
+      value: "10000"
+    - name: MaxPort
+      value: "10999"
+    - name: LBHealthCheckFlag
+      value: "on"
+  gameServerTemplate:
+    spec:
+      containers:
+      - image: registry.cn-hangzhou.aliyuncs.com/gs-demo/gameserver:network
+        name: gameserver
+```
+
+> **Important Notes for DDoS Protection:**
+> - Must use BGP line type (`EipIspTypes: BGP`), not compatible with single-line ISP (ChinaTelecom/ChinaMobile/ChinaUnicom)
+> - Only supports pay-as-you-go mode, cannot use subscription billing
+> - Additional security protection fees will apply
+> - Check EIP CR status to verify successful activation: `kubectl get eip -n default`
+> - If configuration is incompatible, EIP CR creation will fail with error message from Alibaba Cloud API
+
 #### Generated GameServer Network Status
 
 > **Note**: In Auto NLB V2 mode, `externalAddresses` will be populated with:
@@ -1287,7 +1348,7 @@ kubectl get svc -l game.kruise.io/owner-gss=gs-auto-nlb-v2
    - **Cascade deletion mode (`RetainNLBOnDelete=false`)**: NLB and EIP resources will be automatically deleted when GSS is deleted, no manual cleanup required
 
 2. **Network Configuration Immutability**
-   - Parameters like `ZoneMaps`, `PortProtocols`, `EipIspTypes` cannot be changed after creation
+   - Parameters like `ZoneMaps`, `PortProtocols`, `EipIspTypes`, `SecurityProtectionTypes` cannot be changed after creation
    - When changes are needed, recommend creating a new GameServerSet and migrating
 
 3. **Single-line ISP Billing**
