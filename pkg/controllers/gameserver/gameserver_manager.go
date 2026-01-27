@@ -516,7 +516,19 @@ func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, 
 				// exec action (only apply fields explicitly set in action)
 				for _, action := range sq.ServiceQualityAction {
 					state, err := strconv.ParseBool(string(podCondition.Status))
-					if err == nil && state == action.State && (action.Result == "" || podConditionMessage == action.Result) {
+
+					matched := false
+					if err == nil && state == action.State {
+						if action.Result == "" {
+							matched = true
+						} else if podConditionMessage == action.Result {
+							matched = true
+						} else if !state && podConditionMessage == "" {
+							matched = true
+						}
+					}
+
+					if matched {
 						// Apply GameServerSpec fields with template support
 						// DeletionPriority: support template variable
 						if action.DeletionPriority != nil {
