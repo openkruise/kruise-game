@@ -21,7 +21,7 @@ spec:
       jsonPath: .spec.replicas
       name: DESIRED
       type: integer
-    - description: The number of currently all GameServers.
+    - description: The total number of current GameServers.
       jsonPath: .status.currentReplicas
       name: CURRENT
       type: integer
@@ -794,7 +794,7 @@ spec:
                                 image:
                                   description: |-
                                     Image indicates the image of the container to update.
-                                    When Image updated, pod.spec.containers[*].image will be updated immediately.
+                                    When Image is updated, pod.spec.containers[*].image will be updated immediately.
                                   type: string
                                 name:
                                   description: Name indicates the name of the container
@@ -803,8 +803,8 @@ spec:
                                 resources:
                                   description: |-
                                     Resources indicates the resources of the container to update.
-                                    When Resources updated, pod.spec.containers[*].Resources will be not updated immediately,
-                                    which will be updated when pod recreate.
+                                    When Resources are updated, pod.spec.containers[*].Resources will not be updated immediately,
+                                    which will be updated when the pod is recreated.
                                   properties:
                                     claims:
                                       description: |-
@@ -882,8 +882,8 @@ spec:
                             type: string
                           result:
                             description: |-
-                              Result indicate the probe message returned by the script.
-                              When Result is defined, it would exec action only when the according Result is actually returns.
+                              Result indicates the probe message returned by the script.
+                              When Result is defined, it would exec action only when the corresponding Result is actually returned.
                             type: string
                           state:
                             type: boolean
@@ -947,6 +947,18 @@ spec:
                   - permanent
                   type: object
                 type: array
+              topologyDeletionPriority:
+                properties:
+                  basePriority:
+                    default: 100
+                    type: integer
+                  ownerCountWeight:
+                    default: 5
+                    type: integer
+                  podCountWeight:
+                    default: 10
+                    type: integer
+                type: object
               updateStrategy:
                 properties:
                   rollingUpdate:
@@ -957,7 +969,7 @@ spec:
                         description: |-
                           UnorderedUpdate contains strategies for non-ordered update.
                           If it is not nil, pods will be updated with non-ordered sequence.
-                          Noted that UnorderedUpdate can only be allowed to work with Parallel podManagementPolicy
+                          Note that UnorderedUpdate can only be allowed to work with Parallel podManagementPolicy
                           UnorderedUpdate *kruiseV1beta1.UnorderedUpdateStrategy `json:"unorderedUpdate,omitempty"`
                           InPlaceUpdateStrategy contains strategies for in-place update.
                         properties:
