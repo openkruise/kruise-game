@@ -73,6 +73,7 @@ type GameServerManager struct {
 	client        client.Client
 	eventRecorder record.EventRecorder
 	logger        logr.Logger
+	topologyRater *TopologyRater
 }
 
 func isNeedToSyncMetadata(gss *gameKruiseV1alpha1.GameServerSet, gs *gameKruiseV1alpha1.GameServer) bool {
@@ -383,13 +384,30 @@ func (manager GameServerManager) SyncPodToGs(ctx context.Context, gss *gameKruis
 		return err
 	}
 
-	// patch gs status
+	if gss.Spec.TopologyDeletionPriority != nil && gs.Spec.DeletionPriority == nil {
+		if manager.topologyRater != nil {
+			topologyPriority, err := manager.topologyRater.CalculateDeletionPriority(ctx, gs, pod, gss.Spec.TopologyDeletionPriority)
+			if err != nil {
+				manager.logger.Error(err, "failed to calculate topology-based deletion priority",
+					telemetryfields.FieldGameServerNamespace, gs.GetNamespace(),
+					telemetryfields.FieldGameServerName, gs.GetName())
+			} else if topologyPriority != nil {
+				podDeletePriority = *topologyPriority
+				manager.logger.V(1).Info("calculated topology-based deletion priority",
+					telemetryfields.FieldGameServerNamespace, gs.GetNamespace(),
+					telemetryfields.FieldGameServerName, gs.GetName(),
+					"priority", topologyPriority.String())
+			}
+		}
+	}
+
 	newStatus := gameKruiseV1alpha1.GameServerStatus{
 		PodStatus:                 pod.Status,
 		CurrentState:              podGsState,
 		DesiredState:              gameKruiseV1alpha1.Ready,
 		UpdatePriority:            &podUpdatePriority,
 		DeletionPriority:          &podDeletePriority,
+
 		ServiceQualitiesCondition: sqConditions,
 		NetworkStatus:             manager.syncNetworkStatus(),
 		LastTransitionTime:        oldGsStatus.LastTransitionTime,
@@ -619,12 +637,13 @@ func (manager GameServerManager) syncPodContainers(gsContainers []gameKruiseV1al
 	return newContainers
 }
 
-func NewGameServerManager(gs *gameKruiseV1alpha1.GameServer, pod *corev1.Pod, c client.Client, recorder record.EventRecorder, logger logr.Logger) Control {
+func NewGameServerManager(gameServer *gameKruiseV1alpha1.GameServer, pod *corev1.Pod, c client.Client, eventRecorder record.EventRecorder, logger logr.Logger) Control {
 	return &GameServerManager{
-		gameServer:    gs,
+		gameServer:    gameServer,
 		pod:           pod,
 		client:        c,
-		eventRecorder: recorder,
+		eventRecorder: eventRecorder,
 		logger:        logger,
+		topologyRater: NewTopologyRater(c),
 	}
 }
