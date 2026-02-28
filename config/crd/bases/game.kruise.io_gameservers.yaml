@@ -71,7 +71,7 @@ spec:
                     image:
                       description: |-
                         Image indicates the image of the container to update.
-                        When Image updated, pod.spec.containers[*].image will be updated immediately.
+                        When Image is updated, pod.spec.containers[*].image will be updated immediately.
                       type: string
                     name:
                       description: Name indicates the name of the container to update.
@@ -79,8 +79,8 @@ spec:
                     resources:
                       description: |-
                         Resources indicates the resources of the container to update.
-                        When Resources updated, pod.spec.containers[*].Resources will be not updated immediately,
-                        which will be updated when pod recreate.
+                        When Resources are updated, pod.spec.containers[*].Resources will not be updated immediately,
+                        which will be updated when the pod is recreated.
                       properties:
                         claims:
                           description: |-
@@ -176,7 +176,7 @@ spec:
                       type: string
                     message:
                       description: Human-readable message indicating details about
-                        last transition.
+                        the last transition.
                       type: string
                     reason:
                       description: Unique, one-word, CamelCase reason for the condition's
@@ -1672,8 +1672,8 @@ spec:
                     name:
                       type: string
                     result:
-                      description: Result indicate the probe message returned by the
-                        script
+                      description: Result indicates the probe message returned by
+                        the script
                       type: string
                     status:
                       type: string

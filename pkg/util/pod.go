@@ -35,7 +35,10 @@ func GetPodConditionFromList(conditions []corev1.PodCondition, conditionType cor
 	return -1, nil
 }
 
-func IsContainersPreInplaceUpdating(pod *corev1.Pod, gss *gameKruiseV1alpha1.GameServerSet, containerNames []string) bool {
+// GetDiffContainerNames returns the names of containers whose current image
+// (from pod.Status.ContainerStatuses) differs from the desired image
+// (from gss.Spec.GameServerTemplate.Spec.Containers).
+func GetDiffContainerNames(pod *corev1.Pod, gss *gameKruiseV1alpha1.GameServerSet) []string {
 	var diffNames []string
 	for _, actual := range pod.Status.ContainerStatuses {
 		for _, expect := range gss.Spec.GameServerTemplate.Spec.Containers {
@@ -44,6 +47,11 @@ func IsContainersPreInplaceUpdating(pod *corev1.Pod, gss *gameKruiseV1alpha1.Gam
 			}
 		}
 	}
+	return diffNames
+}
+
+func IsContainersPreInplaceUpdating(pod *corev1.Pod, gss *gameKruiseV1alpha1.GameServerSet, containerNames []string) bool {
+	diffNames := GetDiffContainerNames(pod, gss)
 	for _, containerName := range containerNames {
 		if IsStringInList(containerName, diffNames) {
 			return true

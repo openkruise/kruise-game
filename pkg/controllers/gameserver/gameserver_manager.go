@@ -60,7 +60,7 @@ const (
 type Control interface {
 	// SyncGsToPod compares the pod with GameServer, and decide whether to update the pod based on the results.
 	// When the fields of the pod is different from that of GameServer, pod will be updated.
-	SyncGsToPod(context.Context) error
+	SyncGsToPod(context.Context, *gameKruiseV1alpha1.GameServerSet) error
 	// SyncPodToGs compares the GameServer with pod, and update the GameServer.
 	SyncPodToGs(context.Context, *gameKruiseV1alpha1.GameServerSet) error
 	// WaitOrNot compare the current game server network status to decide whether to re-queue.
@@ -92,7 +92,7 @@ func syncMetadataFromGss(gss *gameKruiseV1alpha1.GameServerSet) metav1.ObjectMet
 	}
 }
 
-func (manager GameServerManager) SyncGsToPod(ctx context.Context) error {
+func (manager GameServerManager) SyncGsToPod(ctx context.Context, gss *gameKruiseV1alpha1.GameServerSet) error {
 	pod := manager.pod
 	gs := manager.gameServer
 	podLabels := pod.GetLabels()
@@ -102,8 +102,8 @@ func (manager GameServerManager) SyncGsToPod(ctx context.Context) error {
 	podGsState := podLabels[gameKruiseV1alpha1.GameServerStateKey]
 	podNetworkDisabled := podLabels[gameKruiseV1alpha1.GameServerNetworkDisabled]
 
-	newLabels := make(map[string]string)
-	newAnnotations := make(map[string]string)
+	newLabels := make(map[string]interface{})
+	newAnnotations := make(map[string]interface{})
 	// tolerate nil pointers in spec priorities
 	var gsDpStr, gsUpStr string
 	if gs.Spec.DeletionPriority != nil {
@@ -215,6 +215,27 @@ func (manager GameServerManager) SyncGsToPod(ctx context.Context) error {
 		}
 	}
 
+	// sync GameServerUpdatingContainersKey annotation: when Pod enters the PreUpdate state,
+	// compute the diff container names and write them to the annotation; during the Updating
+	// state, keep the annotation as-is so that hooks can consume it; in any other state,
+	// remove the annotation to clean up after the update is complete.
+	switch gsState {
+	case gameKruiseV1alpha1.PreUpdate:
+		if gss != nil {
+			diffNames := util.GetDiffContainerNames(pod, gss)
+			updatingValue := strings.Join(diffNames, ",")
+			if pod.GetAnnotations()[gameKruiseV1alpha1.GameServerUpdatingContainersKey] != updatingValue {
+				newAnnotations[gameKruiseV1alpha1.GameServerUpdatingContainersKey] = updatingValue
+			}
+		}
+	case gameKruiseV1alpha1.Updating:
+		// keep the existing annotation unchanged so that hooks can read it
+	default:
+		if _, exists := pod.GetAnnotations()[gameKruiseV1alpha1.GameServerUpdatingContainersKey]; exists {
+			newAnnotations[gameKruiseV1alpha1.GameServerUpdatingContainersKey] = nil
+		}
+	}
+
 	// sync annotations from gs to pod
 	for gsKey, gsValue := range gs.GetAnnotations() {
 		if util.IsHasPrefixGsSyncToPod(gsKey) {
@@ -255,7 +276,7 @@ func (manager GameServerManager) SyncGsToPod(ctx context.Context) error {
 			traceparent := tracing.GenerateTraceparent(spanContext)
 			if traceparent != "" {
 				if len(newAnnotations) == 0 {
-					newAnnotations = make(map[string]string)
+					newAnnotations = make(map[string]interface{})
 				}
 				newAnnotations[telemetryfields.AnnotationTraceparent] = traceparent
 			}
@@ -263,7 +284,7 @@ func (manager GameServerManager) SyncGsToPod(ctx context.Context) error {
 
 		patchPod := make(map[string]interface{})
 		if len(newLabels) != 0 || len(newAnnotations) != 0 {
-			patchPod["metadata"] = map[string]map[string]string{"labels": newLabels, "annotations": newAnnotations}
+			patchPod["metadata"] = map[string]map[string]interface{}{"labels": newLabels, "annotations": newAnnotations}
 		}
 		if containers != nil {
 			patchPod["spec"] = map[string]interface{}{"containers": containers}
