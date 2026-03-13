@@ -124,8 +124,14 @@ func TestHostPortTracingOnPodAdded(t *testing.T) {
 	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
 
-	// Create plugin and call OnPodAdded
-	plugin := &HostPortPlugin{}
+	// Create plugin with proper initialization
+	plugin := &HostPortPlugin{
+		minPort:    8000,
+		maxPort:    9000,
+		shardCount: 1,
+		shardMask:  0,
+		shards:     []*PortShard{newPortShard(0, 8000, 9000)},
+	}
 	ctx := context.Background()
 	_, err := plugin.OnPodAdded(fakeClient, pod, ctx)
 
@@ -269,8 +275,14 @@ func TestHostPortTracingOnPodUpdated(t *testing.T) {
 	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, node).Build()
 
-	// Create plugin and call OnPodUpdated
-	plugin := &HostPortPlugin{}
+	// Create plugin with proper initialization
+	plugin := &HostPortPlugin{
+		minPort:    8000,
+		maxPort:    9000,
+		shardCount: 1,
+		shardMask:  0,
+		shards:     []*PortShard{newPortShard(0, 8000, 9000)},
+	}
 	ctx := context.Background()
 	_, err := plugin.OnPodUpdated(fakeClient, pod, ctx)
 
@@ -414,8 +426,14 @@ func TestHostPortTracingErrorHandling(t *testing.T) {
 	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
 
-	// Create plugin and call OnPodAdded (should encounter errors)
-	plugin := &HostPortPlugin{}
+	// Create plugin with proper initialization (error handling test)
+	plugin := &HostPortPlugin{
+		minPort:    8000,
+		maxPort:    9000,
+		shardCount: 1,
+		shardMask:  0,
+		shards:     []*PortShard{newPortShard(0, 8000, 9000)},
+	}
 	ctx := context.Background()
 	_, err := plugin.OnPodAdded(fakeClient, pod, ctx)
 
@@ -507,8 +525,14 @@ func TestHostPortTracingAllocatePortsChildSpan(t *testing.T) {
 	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
 
-	// Create plugin and call OnPodAdded
-	plugin := &HostPortPlugin{}
+	// Create plugin with proper initialization
+	plugin := &HostPortPlugin{
+		minPort:    8000,
+		maxPort:    9000,
+		shardCount: 1,
+		shardMask:  0,
+		shards:     []*PortShard{newPortShard(0, 8000, 9000)},
+	}
 	ctx := context.Background()
 	_, err := plugin.OnPodAdded(fakeClient, pod, ctx)
 
@@ -622,10 +646,17 @@ func TestHostPortTracingOnPodDeleted(t *testing.T) {
 	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
 
-	plugin := &HostPortPlugin{}
-	// Populate podAllocated to simulate existing allocation
-	plugin.podAllocated = make(map[string]string)
-	plugin.podAllocated["default/test-pod-del"] = "8080"
+	plugin := &HostPortPlugin{
+		minPort:    8000,
+		maxPort:    9000,
+		shardCount: 1,
+		shardMask:  0,
+		shards:     make([]*PortShard, 1),
+	}
+	// Initialize shard and populate podAllocated to simulate existing allocation
+	plugin.shards[0] = newPortShard(0, 8000, 9000)
+	plugin.shards[0].podAllocated["default/test-pod-del"] = "8080"
+	plugin.shards[0].portAmount[8080] = 1
 
 	ctx := context.Background()
 	_ = plugin.OnPodDeleted(fakeClient, pod, ctx)
@@ -655,5 +686,131 @@ func TestHostPortTracingOnPodDeleted(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("Expected %s event in root span on pod deleted", tracing.EventNetworkHostPortReleased)
+	}
+}
+
+// TestShardedLockDistribution tests that pods are evenly distributed across shards
+func TestShardedLockDistribution(t *testing.T) {
+	shardCount := 16
+	plugin := &HostPortPlugin{
+		minPort:    20000,
+		maxPort:    60000,
+		shardCount: shardCount,
+		shardMask:  int32(shardCount - 1),
+		shards:     make([]*PortShard, shardCount),
+	}
+
+	// Initialize shards
+	portsPerShard := (60000 - 20000 + 1) / int32(shardCount)
+	for i := 0; i < shardCount; i++ {
+		shardMin := int32(20000 + int32(i)*portsPerShard)
+		shardMax := shardMin + portsPerShard - 1
+		if i == shardCount-1 {
+			shardMax = 60000
+		}
+		plugin.shards[i] = newPortShard(i, shardMin, shardMax)
+	}
+
+	// Test distribution with 100 different GSS names
+	distribution := make(map[int]int)
+	for i := 0; i < 100; i++ {
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-pod-" + string(rune(i)),
+				Labels: map[string]string{
+					gamekruiseiov1alpha1.GameServerOwnerGssKey: "gss-" + string(rune(i%10)),
+				},
+			},
+		}
+		shard := plugin.getShard(pod)
+		distribution[shard.id]++
+	}
+
+	// Verify no shard has more than 3x average (allowing for some variance due to hash distribution)
+	avg := float64(100) / float64(shardCount)
+	for shardID, count := range distribution {
+		if float64(count) > avg*3 {
+			t.Errorf("Shard %d has %d allocations, expected around %f", shardID, count, avg)
+		}
+	}
+	t.Logf("Distribution across %d shards: %v", shardCount, distribution)
+}
+
+// TestShardedLockConcurrency tests concurrent port allocation across shards
+func TestShardedLockConcurrency(t *testing.T) {
+	shardCount := 4
+	plugin := &HostPortPlugin{
+		minPort:    20000,
+		maxPort:    21000,
+		shardCount: shardCount,
+		shardMask:  int32(shardCount - 1),
+		shards:     make([]*PortShard, shardCount),
+	}
+
+	// Initialize shards
+	portsPerShard := (21000 - 20000 + 1) / int32(shardCount)
+	for i := 0; i < shardCount; i++ {
+		shardMin := int32(20000 + int32(i)*portsPerShard)
+		shardMax := shardMin + portsPerShard - 1
+		if i == shardCount-1 {
+			shardMax = 21000
+		}
+		plugin.shards[i] = newPortShard(i, shardMin, shardMax)
+	}
+
+	// Allocate ports concurrently from different GSS (different shards)
+	done := make(chan bool, 4)
+	for i := 0; i < 4; i++ {
+		go func(idx int) {
+			podKey := "default/pod-" + string(rune('A'+idx))
+			gssName := "gss-" + string(rune('A'+idx))
+			shard := plugin.getShardByKey(gssName)
+			ports := shard.allocate(2, podKey)
+			if len(ports) != 2 {
+				t.Errorf("Expected 2 ports, got %d", len(ports))
+			}
+			done <- true
+		}(i)
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < 4; i++ {
+		<-done
+	}
+
+	// Verify allocations
+	totalAllocated := 0
+	for _, shard := range plugin.shards {
+		totalAllocated += shard.getAllocatedPodCount()
+	}
+	if totalAllocated != 4 {
+		t.Errorf("Expected 4 total allocations, got %d", totalAllocated)
+	}
+}
+
+// TestBackwardCompatibility tests that shardCount=1 behaves like the original implementation
+func TestBackwardCompatibility(t *testing.T) {
+	// With shardCount=1, all pods should go to shard 0
+	plugin := &HostPortPlugin{
+		minPort:    8000,
+		maxPort:    9000,
+		shardCount: 1,
+		shardMask:  0,
+		shards:     []*PortShard{newPortShard(0, 8000, 9000)},
+	}
+
+	for i := 0; i < 10; i++ {
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-pod-" + string(rune(i)),
+				Labels: map[string]string{
+					gamekruiseiov1alpha1.GameServerOwnerGssKey: "gss-" + string(rune(i)),
+				},
+			},
+		}
+		shard := plugin.getShard(pod)
+		if shard.id != 0 {
+			t.Errorf("Expected shard 0, got shard %d", shard.id)
+		}
 	}
 }
