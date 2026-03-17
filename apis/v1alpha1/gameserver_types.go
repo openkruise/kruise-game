@@ -35,6 +35,7 @@ const (
 	GameServerNetworkTriggerTime      = "game.kruise.io/network-trigger-time"
 	GameServerOpsStateLastChangedTime = "game.kruise.io/opsState-last-changed-time"
 	GameServerStateLastChangedTime    = "game.kruise.io/state-last-changed-time"
+	GameServerNodeNameKey             = "game.kruise.io/node-name"
 )
 
 // GameServerSpec defines the desired state of GameServer

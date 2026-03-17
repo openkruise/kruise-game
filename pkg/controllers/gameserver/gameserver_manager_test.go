@@ -1202,6 +1202,13 @@ func TestSyncPodToGs(t *testing.T) {
 			}
 		}
 
+		// gs nodeName label
+		if test.pod.Spec.NodeName != "" {
+			if gsLabels[gameKruiseV1alpha1.GameServerNodeNameKey] != test.pod.Spec.NodeName {
+				t.Errorf("case %d: expect nodeName label %s=%s exists on gs, but actually %s", i, gameKruiseV1alpha1.GameServerNodeNameKey, test.pod.Spec.NodeName, gsLabels[gameKruiseV1alpha1.GameServerNodeNameKey])
+			}
+		}
+
 		// gs status conditions
 		if !isConditionsEqual(test.gsStatus.Conditions, gs.Status.Conditions) {
 			t.Errorf("case %d: expect conditions is %v, but actually %v", i, test.gsStatus.Conditions, gs.Status.Conditions)
