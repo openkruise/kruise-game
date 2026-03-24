@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/go-logr/logr"
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
@@ -60,7 +61,7 @@ const (
 	// Shard configuration constants
 	DefaultShardCount = 1 // Default to 1 for backward compatibility
 	MinShardCount     = 1
-	MaxShardCount     = 128
+	MaxShardCount     = 256
 )
 
 var (
@@ -78,6 +79,11 @@ var (
 	hostPortAttrShardIDKey           = attribute.Key("game.kruise.io.network.plugin.kubernetes.hostport.shard_id")
 )
 
+// HostPortPlugin implements the HostPort network plugin with optimized concurrent access
+// Key design:
+// 1. Shared port pool with lock-free lookup using sync.Map
+// 2. Atomic operations for port usage counting
+// 3. Sharded locks only for pod allocation records
 type HostPortPlugin struct {
 	// Global configuration (read-only after init)
 	maxPort    int32
@@ -85,25 +91,13 @@ type HostPortPlugin struct {
 	shardCount int
 	shardMask  int32 // shardCount - 1, for fast modulo using &
 
-	// Sharded port allocation state
-	shards []*PortShard
-}
+	// Shared port pool - lock-free access
+	availablePorts sync.Map // port -> struct{} (set of available ports)
+	portUsage      []int32  // atomic counter for each port
 
-// PortShard represents an independent port allocation unit with its own lock
-type PortShard struct {
-	mutex sync.RWMutex
-
-	// Shard identifier
-	id int
-
-	// Port range for this shard
-	minPort int32
-	maxPort int32
-
-	// Port allocation state
-	podAllocated map[string]string // podKey -> "port1,port2,..."
-	portAmount   map[int32]int     // port -> usage count
-	amountStat   []int             // usage count statistics
+	// Sharded locks only for pod allocation records
+	shardMutexes []sync.Mutex
+	podAllocated []map[string]string // podKey -> "port1,port2,..."
 }
 
 func init() {
@@ -119,21 +113,16 @@ func (hpp *HostPortPlugin) Alias() string {
 	return ""
 }
 
-// getShard returns the shard for a given pod using GameServerSet name as the sharding key
-func (hpp *HostPortPlugin) getShard(pod *corev1.Pod) *PortShard {
-	gssName := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]
-	if gssName == "" {
-		// Fallback to pod name if no GSS label
-		gssName = pod.GetName()
-	}
-	return hpp.getShardByKey(gssName)
+// getShard returns the shard index for a given pod using GS Name as the sharding key
+func (hpp *HostPortPlugin) getShard(pod *corev1.Pod) int {
+	gsName := pod.GetName()
+	return hpp.getShardByKey(gsName)
 }
 
-// getShardByKey returns the shard for a given sharding key using FNV-1a hash
-func (hpp *HostPortPlugin) getShardByKey(key string) *PortShard {
+// getShardByKey returns the shard index for a given key using FNV-1a hash
+func (hpp *HostPortPlugin) getShardByKey(key string) int {
 	hash := fnv32a(key)
-	shardIndex := int(hash & hpp.shardMask)
-	return hpp.shards[shardIndex]
+	return int(hash & hpp.shardMask)
 }
 
 // fnv32a implements FNV-1a 32-bit hash for even distribution
@@ -159,152 +148,87 @@ func clamp(value, min, max int) int {
 
 // determineShardCount calculates the optimal shard count based on configuration
 func determineShardCount(opts provideroptions.HostPortOptions) int {
-	// From config
 	if opts.ShardCount > 0 {
 		return clamp(opts.ShardCount, MinShardCount, MaxShardCount)
 	}
-	// Default to 1 for backward compatibility
 	return DefaultShardCount
 }
 
-// newPortShard creates a new PortShard with the given port range
-func newPortShard(id int, minPort, maxPort int32) *PortShard {
-	shard := &PortShard{
-		id:           id,
-		minPort:      minPort,
-		maxPort:      maxPort,
-		podAllocated: make(map[string]string),
-		portAmount:   make(map[int32]int),
+// allocatePorts allocates ports from the shared pool using lock-free operations
+func (hpp *HostPortPlugin) allocatePorts(num int, podKey string, shardID int) ([]int32, error) {
+	// Fast path: check if already allocated
+	hpp.shardMutexes[shardID].Lock()
+	if str, ok := hpp.podAllocated[shardID][podKey]; ok {
+		hpp.shardMutexes[shardID].Unlock()
+		return util.StringToInt32Slice(str, ","), nil
 	}
+	hpp.shardMutexes[shardID].Unlock()
 
-	// Initialize port amount map
-	for port := minPort; port <= maxPort; port++ {
-		shard.portAmount[port] = 0
-	}
-	shard.amountStat = make([]int, 1)
-	shard.amountStat[0] = int(maxPort - minPort + 1)
+	// Allocate ports from shared pool
+	hostPorts := make([]int32, 0, num)
+	count := 0
 
-	return shard
-}
-
-// allocate assigns ports from the shard
-func (s *PortShard) allocate(num int, podKey string) []int32 {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	hostPorts, index := selectPorts(s.amountStat, s.portAmount, num)
-	for _, hostPort := range hostPorts {
-		s.portAmount[hostPort]++
-		s.amountStat[index]--
-		if index+1 >= len(s.amountStat) {
-			s.amountStat = append(s.amountStat, 0)
+	// Iterate through available ports
+	hpp.availablePorts.Range(func(key, value interface{}) bool {
+		port := key.(int32)
+		// Try to use this port
+		if atomic.AddInt32(&hpp.portUsage[port-hpp.minPort], 1) == 1 {
+			// Successfully acquired (was 0, now 1)
+			hpp.availablePorts.Delete(port)
+			hostPorts = append(hostPorts, port)
+			count++
+		} else {
+			// Port already in use, decrement back
+			atomic.AddInt32(&hpp.portUsage[port-hpp.minPort], -1)
 		}
-		s.amountStat[index+1]++
+		return count < num
+	})
+
+	if count < num {
+		// Failed to allocate enough ports, release what we got
+		for _, port := range hostPorts {
+			atomic.AddInt32(&hpp.portUsage[port-hpp.minPort], -1)
+			hpp.availablePorts.Store(port, struct{}{})
+		}
+		return nil, fmt.Errorf("insufficient ports available")
 	}
 
-	s.podAllocated[podKey] = util.Int32SliceToString(hostPorts, ",")
-	return hostPorts
+	// Record allocation under shard lock
+	hpp.shardMutexes[shardID].Lock()
+	hpp.podAllocated[shardID][podKey] = util.Int32SliceToString(hostPorts, ",")
+	hpp.shardMutexes[shardID].Unlock()
+
+	return hostPorts, nil
 }
 
-// getAllocatedPorts returns previously allocated ports for a pod (read-only)
-func (s *PortShard) getAllocatedPorts(podKey string) ([]int32, bool) {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-
-	if str, ok := s.podAllocated[podKey]; ok {
-		return util.StringToInt32Slice(str, ","), true
-	}
-	return nil, false
-}
-
-// deallocate releases ports from the shard
-func (s *PortShard) deallocate(hostPorts []int32, podKey string) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	for _, hostPort := range hostPorts {
-		if hostPort < s.minPort || hostPort > s.maxPort {
+// deallocatePorts releases ports back to the shared pool
+func (hpp *HostPortPlugin) deallocatePorts(hostPorts []int32, podKey string, shardID int) {
+	// Release ports to shared pool
+	for _, port := range hostPorts {
+		if port < hpp.minPort || port > hpp.maxPort {
 			continue
 		}
-		amount := s.portAmount[hostPort]
-		s.portAmount[hostPort]--
-		if amount < len(s.amountStat) {
-			s.amountStat[amount]--
-		}
-		if amount > 0 && amount-1 < len(s.amountStat) {
-			s.amountStat[amount-1]++
+		if atomic.AddInt32(&hpp.portUsage[port-hpp.minPort], -1) == 0 {
+			// Port is now free, add back to available pool
+			hpp.availablePorts.Store(port, struct{}{})
 		}
 	}
 
-	delete(s.podAllocated, podKey)
-}
-
-// hasAllocation checks if the shard has an allocation for the given pod key
-func (s *PortShard) hasAllocation(podKey string) bool {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-	_, ok := s.podAllocated[podKey]
-	return ok
-}
-
-// getPortRange returns the port range for this shard
-func (s *PortShard) getPortRange() (int32, int32) {
-	return s.minPort, s.maxPort
-}
-
-// getAllocatedPodCount returns the number of pods with allocations in this shard
-func (s *PortShard) getAllocatedPodCount() int {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-	return len(s.podAllocated)
-}
-
-// recoverState recovers shard state from existing pods
-func (s *PortShard) recoverState(pods []corev1.Pod) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	for _, pod := range pods {
-		var hostPorts []int32
-		for _, container := range pod.Spec.Containers {
-			for _, port := range container.Ports {
-				if port.HostPort >= s.minPort && port.HostPort <= s.maxPort {
-					s.portAmount[port.HostPort]++
-					hostPorts = append(hostPorts, port.HostPort)
-				}
-			}
-		}
-		if len(hostPorts) != 0 {
-			podKey := pod.GetNamespace() + "/" + pod.GetName()
-			s.podAllocated[podKey] = util.Int32SliceToString(hostPorts, ",")
-		}
-	}
-
-	// Rebuild amountStat
-	maxAmount := 0
-	for _, amount := range s.portAmount {
-		if amount > maxAmount {
-			maxAmount = amount
-		}
-	}
-	s.amountStat = make([]int, maxAmount+1)
-	for _, amount := range s.portAmount {
-		s.amountStat[amount]++
-	}
+	// Remove allocation record under shard lock
+	hpp.shardMutexes[shardID].Lock()
+	delete(hpp.podAllocated[shardID], podKey)
+	hpp.shardMutexes[shardID].Unlock()
 }
 
 func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, errors.PluginError) {
-	// Create root span for HostPort OnPodAdded
 	tracer := otel.Tracer("okg-controller-manager")
 	ctx, span := startHostPortSpan(ctx, tracer, tracing.SpanPrepareHostPortPod, pod)
-	// track final network status and error to ensure a single final attribute is set on the parent span
 	finalNetworkStatus := telemetryfields.NetworkStatusWaiting
 	var finalErr error
 	var finalErrorType string
 	finalStatus := codes.Ok
 	finalMessage := "pod configured with host ports successfully"
 	defer func() {
-		// Handle panic first so the span records it before finalization.
 		if r := recover(); r != nil {
 			finalErr = fmt.Errorf("panic: %v", r)
 			finalNetworkStatus = telemetryfields.NetworkStatusError
@@ -327,17 +251,16 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 		span.End()
 	}()
 	podKey := pod.GetNamespace() + "/" + pod.GetName()
+	shardID := hpp.getShard(pod)
 
-	// Get the shard for this pod
-	shard := hpp.getShard(pod)
 	span.SetAttributes(
 		tracing.AttrNetworkStatus(telemetryfields.NetworkStatusWaiting),
 		hostPortAttrPodKey.String(podKey),
 		hostPortAttrPortsReusedKey.Bool(false),
-		hostPortAttrShardIDKey.Int(shard.id),
+		hostPortAttrShardIDKey.Int(shardID),
 	)
 
-	logger := hostPortLogger(ctx, pod).WithValues(telemetryfields.FieldOperation, "add", "shard_id", shard.id)
+	logger := hostPortLogger(ctx, pod).WithValues(telemetryfields.FieldOperation, "add", "shard_id", shardID)
 	logger.Info("Handling hostport pod ADD operation")
 	podNow := &corev1.Pod{}
 	err := c.Get(ctx, types.NamespacedName{
@@ -349,12 +272,9 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 		logger.Error(dupErr, "Pod already exists, skipping hostport allocation")
 		span.RecordError(dupErr)
 		span.SetStatus(codes.Error, "pod with same name already exists")
-		span.SetAttributes(
-			tracing.AttrErrorType(telemetryfields.ErrorTypeParameter),
-		)
+		span.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypeParameter))
 		finalErr = dupErr
 		finalErrorType = telemetryfields.ErrorTypeParameter
-		// parameter conflict (duplicate pod) is not an indication of network error -> keep parent neutral/waiting
 		return pod, errors.NewPluginError(errors.InternalError, "There is a pod with same ns/name exists in cluster")
 	}
 	if !k8serrors.IsNotFound(err) {
@@ -371,48 +291,59 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 	networkManager := utils.NewNetworkManager(pod, c)
 	conf := networkManager.GetNetworkConfig()
 	containerPortsMap, containerProtocolsMap, numToAlloc := parseConfig(conf, pod)
-	// add config parsed event
 	span.AddEvent(tracing.EventNetworkHostPortConfigParsed)
 	requestedPorts := numToAlloc
 
 	var hostPorts []int32
-	// Check for existing allocation in shard (idempotency)
-	if ports, ok := shard.getAllocatedPorts(podKey); ok {
-		hostPorts = ports
+	// Check for existing allocation (idempotency)
+	hpp.shardMutexes[shardID].Lock()
+	if str, ok := hpp.podAllocated[shardID][podKey]; ok {
+		hostPorts = util.StringToInt32Slice(str, ",")
+		hpp.shardMutexes[shardID].Unlock()
 		logger.Info("Reusing previously allocated hostPorts", telemetryfields.FieldHostPorts, hostPorts, telemetryfields.FieldRequestedPorts, requestedPorts)
 		span.SetAttributes(
 			hostPortAttrPortsReusedKey.Bool(true),
 			hostPortAttrAllocatedPortsKey.String(util.Int32SliceToString(hostPorts, ",")),
 			hostPortAttrAllocatedCountKey.Int64(int64(len(hostPorts))),
 		)
-		// mark reused event
 		span.AddEvent(tracing.EventNetworkHostPortPortsReused, trace.WithAttributes(hostPortAttrAllocatedPortsKey.String(util.Int32SliceToString(hostPorts, ",")), hostPortAttrAllocatedCountKey.Int64(int64(len(hostPorts)))))
 	} else {
-		// Create child span for port allocation
+		hpp.shardMutexes[shardID].Unlock()
+	}
+
+	if len(hostPorts) == 0 {
 		_, allocSpan := startHostPortSpan(ctx, tracer, tracing.SpanAllocateHostPort, pod,
 			hostPortAttrPortsRequestedKey.Int64(int64(requestedPorts)),
 			hostPortAttrPodKey.String(podKey),
-			hostPortAttrShardIDKey.Int(shard.id),
+			hostPortAttrShardIDKey.Int(shardID),
 		)
-		hostPorts = shard.allocate(numToAlloc, podKey)
+		var allocErr error
+		hostPorts, allocErr = hpp.allocatePorts(numToAlloc, podKey, shardID)
+		if allocErr != nil {
+			logger.Error(allocErr, "Failed to allocate hostPorts")
+			span.RecordError(allocErr)
+			span.SetAttributes(tracing.AttrErrorType(telemetryfields.ErrorTypePortExhausted))
+			span.SetStatus(codes.Error, "failed to allocate host ports")
+			finalErr = allocErr
+			finalErrorType = telemetryfields.ErrorTypePortExhausted
+			finalNetworkStatus = telemetryfields.NetworkStatusError
+			return pod, errors.NewPluginError(errors.InternalError, allocErr.Error())
+		}
 		logger.Info("Allocated hostPorts for pod", telemetryfields.FieldHostPorts, hostPorts, telemetryfields.FieldRequestedPorts, requestedPorts)
 		allocSpan.SetAttributes(
 			hostPortAttrAllocatedPortsKey.String(util.Int32SliceToString(hostPorts, ",")),
 			hostPortAttrAllocatedCountKey.Int64(int64(len(hostPorts))),
 		)
-		// add event on parent when allocation happened
 		span.AddEvent(tracing.EventNetworkHostPortPortsAllocated, trace.WithAttributes(hostPortAttrAllocatedPortsKey.String(util.Int32SliceToString(hostPorts, ",")), hostPortAttrAllocatedCountKey.Int64(int64(len(hostPorts)))))
 		allocSpan.SetStatus(codes.Ok, "ports allocated successfully")
 		allocSpan.End()
 	}
 
-	// patch pod container ports
 	containers := pod.Spec.Containers
 	for cIndex, container := range pod.Spec.Containers {
 		if ports, ok := containerPortsMap[container.Name]; ok {
 			containerPorts := container.Ports
 			for i, port := range ports {
-				// -1 means same as host
 				if port == -1 {
 					port = hostPorts[numToAlloc-1]
 				}
@@ -443,25 +374,20 @@ func (hpp *HostPortPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 	}
 	pod.Spec.Containers = containers
 
-	// Record success
 	span.SetAttributes(
 		hostPortAttrContainersPatchedKey.Int64(int64(len(containerPortsMap))),
 		hostPortAttrAllocatedPortsKey.String(util.Int32SliceToString(hostPorts, ",")),
 		hostPortAttrAllocatedCountKey.Int64(int64(len(hostPorts))),
 	)
-	// mark containers patched event
 	span.AddEvent(tracing.EventNetworkHostPortContainersPatched, trace.WithAttributes(hostPortAttrContainersPatchedKey.Int64(int64(len(containerPortsMap))), hostPortAttrAllocatedCountKey.Int64(int64(len(hostPorts)))))
-	// mark NotReady until OnPodUpdated verifies network; defer will set final attributes/status
 	finalNetworkStatus = telemetryfields.NetworkStatusNotReady
 
 	return pod, nil
 }
 
 func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, errors.PluginError) {
-	// Create root span for HostPort OnPodUpdated
 	tracer := otel.Tracer("okg-controller-manager")
 	ctx, span := startHostPortSpan(ctx, tracer, tracing.SpanProcessHostPortUpdate, pod)
-	// track final network status and error to ensure a single final attribute is set on the parent span
 	finalNetworkStatus := telemetryfields.NetworkStatusWaiting
 	var finalErr error
 	var finalErrorType string
@@ -501,7 +427,6 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 		if k8serrors.IsNotFound(err) {
 			logger.Error(err, "Node not found for hostport pod", telemetryfields.FieldK8sNodeName, pod.Spec.NodeName)
 			span.RecordError(err)
-			// mark final status as NotReady and record error type
 			finalNetworkStatus = telemetryfields.NetworkStatusNotReady
 			finalErrorType = telemetryfields.ErrorTypeResourceNotReady
 			finalErr = err
@@ -545,11 +470,9 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 		}
 	}
 
-	// network not ready
 	if len(iNetworkPorts) == 0 || len(eNetworkPorts) == 0 || pod.Status.PodIP == "" {
 		errNetworkNotReady := fmt.Errorf("pod ip or hostports missing")
 		logger.Error(errNetworkNotReady, "HostPort network not ready", telemetryfields.FieldInternalPorts, len(iNetworkPorts), telemetryfields.FieldExternalPorts, len(eNetworkPorts), telemetryfields.FieldPodIP, pod.Status.PodIP)
-		// update parent final status
 		finalNetworkStatus = telemetryfields.NetworkStatusNotReady
 		finalErr = errNetworkNotReady
 		finalErrorType = telemetryfields.ErrorTypeResourceNotReady
@@ -587,7 +510,6 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 		CurrentNetworkState: gamekruiseiov1alpha1.NetworkReady,
 	}
 
-	// Record success
 	span.SetAttributes(
 		tracing.AttrNetworkStatus(telemetryfields.NetworkStatusReady),
 		attribute.String(telemetryfields.FieldNodeIP, nodeIp),
@@ -597,11 +519,9 @@ func (hpp *HostPortPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 		hostPortAttrInternalPortCountKey.Int64(int64(len(iNetworkPorts))),
 		hostPortAttrExternalPortCountKey.Int64(int64(len(eNetworkPorts))),
 	)
-	// parent final network status set to Ready
 	finalNetworkStatus = telemetryfields.NetworkStatusReady
 	finalStatus = codes.Ok
 	finalMessage = "network ready"
-	// add a status published event
 	span.AddEvent(tracing.EventNetworkHostPortStatusPublished, trace.WithAttributes(hostPortAttrNodeIPKey.String(nodeIp), hostPortAttrInternalPortCountKey.Int64(int64(len(iNetworkPorts))), hostPortAttrExternalPortCountKey.Int64(int64(len(eNetworkPorts)))))
 	logger.Info("Updated hostport network status", telemetryfields.FieldNodeIP, nodeIp, telemetryfields.FieldInternalPorts, len(iNetworkPorts), telemetryfields.FieldExternalPorts, len(eNetworkPorts))
 
@@ -644,13 +564,16 @@ func (hpp *HostPortPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx co
 		span.End()
 	}()
 	podKey := pod.GetNamespace() + "/" + pod.GetName()
+	shardID := hpp.getShard(pod)
 	span.SetAttributes(hostPortAttrPodKey.String(podKey))
+	span.SetAttributes(hostPortAttrShardIDKey.Int(shardID))
 
-	// Get the shard for this pod
-	shard := hpp.getShard(pod)
-	span.SetAttributes(hostPortAttrShardIDKey.Int(shard.id))
+	// Check if this shard has allocation for this pod
+	hpp.shardMutexes[shardID].Lock()
+	_, hasAllocation := hpp.podAllocated[shardID][podKey]
+	hpp.shardMutexes[shardID].Unlock()
 
-	if !shard.hasAllocation(podKey) {
+	if !hasAllocation {
 		logger.V(4).Info("No hostport allocation found for pod")
 		finalStatus = codes.Ok
 		finalMessage = "no hostport allocation found"
@@ -666,14 +589,13 @@ func (hpp *HostPortPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx co
 		}
 	}
 
-	shard.deallocate(hostPorts, podKey)
+	hpp.deallocatePorts(hostPorts, podKey, shardID)
 	logger.Info("Released hostPorts for pod", telemetryfields.FieldHostPorts, hostPorts)
 	span.AddEvent(tracing.EventNetworkHostPortReleased, trace.WithAttributes(hostPortAttrReleasedCountKey.Int64(int64(len(hostPorts))), hostPortAttrReleasedPortsKey.String(util.Int32SliceToString(hostPorts, ","))))
 	span.SetAttributes(
 		hostPortAttrReleasedCountKey.Int64(int64(len(hostPorts))),
 		hostPortAttrReleasedPortsKey.String(util.Int32SliceToString(hostPorts, ",")),
 	)
-	// mark final status OK for deleted, keep network_status as NotReady/cleanup done
 	finalMessage = "hostport allocation cleaned up"
 	finalStatus = codes.Ok
 	return nil
@@ -686,21 +608,21 @@ func (hpp *HostPortPlugin) Init(c client.Client, options cloudprovider.CloudProv
 	hpp.shardCount = determineShardCount(hostPortOptions)
 	hpp.shardMask = int32(hpp.shardCount - 1)
 
-	// Initialize shards with partitioned port ranges
-	hpp.shards = make([]*PortShard, hpp.shardCount)
 	totalPorts := hpp.maxPort - hpp.minPort + 1
-	portsPerShard := totalPorts / int32(hpp.shardCount)
 
+	// Initialize port usage counters
+	hpp.portUsage = make([]int32, totalPorts)
+
+	// Initialize available ports pool
+	for port := hpp.minPort; port <= hpp.maxPort; port++ {
+		hpp.availablePorts.Store(port, struct{}{})
+	}
+
+	// Initialize sharded allocation records
+	hpp.shardMutexes = make([]sync.Mutex, hpp.shardCount)
+	hpp.podAllocated = make([]map[string]string, hpp.shardCount)
 	for i := 0; i < hpp.shardCount; i++ {
-		shardMinPort := hpp.minPort + int32(i)*portsPerShard
-		shardMaxPort := shardMinPort + portsPerShard - 1
-
-		// Last shard gets remaining ports
-		if i == hpp.shardCount-1 {
-			shardMaxPort = hpp.maxPort
-		}
-
-		hpp.shards[i] = newPortShard(i, shardMinPort, shardMaxPort)
+		hpp.podAllocated[i] = make(map[string]string)
 	}
 
 	// Recover state from existing pods
@@ -710,25 +632,39 @@ func (hpp *HostPortPlugin) Init(c client.Client, options cloudprovider.CloudProv
 		return err
 	}
 
-	// Group pods by shard for recovery
-	shardPods := make(map[int][]corev1.Pod)
 	for _, pod := range podList.Items {
 		if pod.GetAnnotations()[gamekruiseiov1alpha1.GameServerNetworkType] != HostPortNetwork {
 			continue
 		}
-		shard := hpp.getShard(&pod)
-		shardPods[shard.id] = append(shardPods[shard.id], pod)
-	}
-
-	// Recover each shard
-	for shardID, pods := range shardPods {
-		hpp.shards[shardID].recoverState(pods)
+		var hostPorts []int32
+		for _, container := range pod.Spec.Containers {
+			for _, port := range container.Ports {
+				if port.HostPort >= hpp.minPort && port.HostPort <= hpp.maxPort {
+					// Mark port as used
+					idx := port.HostPort - hpp.minPort
+					if idx >= 0 && idx < int32(len(hpp.portUsage)) {
+						atomic.AddInt32(&hpp.portUsage[idx], 1)
+						hpp.availablePorts.Delete(port.HostPort)
+					}
+					hostPorts = append(hostPorts, port.HostPort)
+				}
+			}
+		}
+		if len(hostPorts) != 0 {
+			podKey := pod.GetNamespace() + "/" + pod.GetName()
+			shardID := hpp.getShard(&pod)
+			hpp.shardMutexes[shardID].Lock()
+			hpp.podAllocated[shardID][podKey] = util.Int32SliceToString(hostPorts, ",")
+			hpp.shardMutexes[shardID].Unlock()
+		}
 	}
 
 	// Calculate total allocated pods for logging
 	totalAllocated := 0
-	for _, shard := range hpp.shards {
-		totalAllocated += shard.getAllocatedPodCount()
+	for i := 0; i < hpp.shardCount; i++ {
+		hpp.shardMutexes[i].Lock()
+		totalAllocated += len(hpp.podAllocated[i])
+		hpp.shardMutexes[i].Unlock()
 	}
 
 	logger := hostPortLogger(ctx, nil).WithValues(
@@ -737,7 +673,7 @@ func (hpp *HostPortPlugin) Init(c client.Client, options cloudprovider.CloudProv
 		telemetryfields.FieldPortMax, hpp.maxPort,
 		"shard_count", hpp.shardCount,
 	)
-	logger.Info("Initialized hostport allocation state with sharding", telemetryfields.FieldAllocatedPods, totalAllocated)
+	logger.Info("Initialized hostport allocation state with lock-free port pool", telemetryfields.FieldAllocatedPods, totalAllocated)
 	return nil
 }
 
@@ -838,7 +774,6 @@ func parseConfig(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.Pod)
 				protocols := make([]corev1.Protocol, 0)
 				for _, portString := range strings.Split(cpSlice[1], ",") {
 					ppSlice := strings.Split(portString, "/")
-					// handle port
 					var port int64
 					var err error
 					if ppSlice[0] == PortSameAsHost {
@@ -851,7 +786,6 @@ func parseConfig(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.Pod)
 					}
 					numToAlloc++
 					ports = append(ports, int32(port))
-					// handle protocol
 					if len(ppSlice) == 2 {
 						protocols = append(protocols, corev1.Protocol(ppSlice[1]))
 					} else {
@@ -864,26 +798,4 @@ func parseConfig(conf []gamekruiseiov1alpha1.NetworkConfParams, pod *corev1.Pod)
 		}
 	}
 	return containerPortsMap, containerProtocolsMap, numToAlloc
-}
-
-func selectPorts(amountStat []int, portAmount map[int32]int, num int) ([]int32, int) {
-	var index int
-	for i, total := range amountStat {
-		if total >= num {
-			index = i
-			break
-		}
-	}
-
-	hostPorts := make([]int32, 0)
-	for hostPort, amount := range portAmount {
-		if amount == index {
-			hostPorts = append(hostPorts, hostPort)
-			num--
-		}
-		if num == 0 {
-			break
-		}
-	}
-	return hostPorts, index
 }
