@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	noop "go.opentelemetry.io/otel/trace/noop"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -895,7 +896,14 @@ func TestNodePortOnPodUpdated_UnscheduledPod(t *testing.T) {
 				})
 			}
 
-			fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+			// Convert runtime.Object to client.Object for WithObjects
+			clientObjects := make([]client.Object, 0, len(objects))
+			for _, obj := range objects {
+				if clientObj, ok := obj.(client.Object); ok {
+					clientObjects = append(clientObjects, clientObj)
+				}
+			}
+			fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(clientObjects...).Build()
 
 			// Create plugin and call OnPodUpdated
 			plugin := &NodePortPlugin{}
