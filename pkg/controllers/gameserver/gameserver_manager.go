@@ -102,8 +102,9 @@ func (manager GameServerManager) SyncGsToPod(ctx context.Context, gss *gameKruis
 	podGsState := podLabels[gameKruiseV1alpha1.GameServerStateKey]
 	podNetworkDisabled := podLabels[gameKruiseV1alpha1.GameServerNetworkDisabled]
 
-	newLabels := make(map[string]interface{})
-	newAnnotations := make(map[string]interface{})
+	newLabels := make(map[string]string)
+	newAnnotations := make(map[string]string)
+	deleteAnnotations := make(map[string]struct{})
 	// tolerate nil pointers in spec priorities
 	var gsDpStr, gsUpStr string
 	if gs.Spec.DeletionPriority != nil {
@@ -232,7 +233,7 @@ func (manager GameServerManager) SyncGsToPod(ctx context.Context, gss *gameKruis
 		// keep the existing annotation unchanged so that hooks can read it
 	default:
 		if _, exists := pod.GetAnnotations()[gameKruiseV1alpha1.GameServerUpdatingContainersKey]; exists {
-			newAnnotations[gameKruiseV1alpha1.GameServerUpdatingContainersKey] = nil
+			deleteAnnotations[gameKruiseV1alpha1.GameServerUpdatingContainersKey] = struct{}{}
 		}
 	}
 
@@ -261,12 +262,12 @@ func (manager GameServerManager) SyncGsToPod(ctx context.Context, gss *gameKruis
 	// sync pod containers when the containers(images) in GameServer are different from that in pod.
 	containers := manager.syncPodContainers(gs.Spec.Containers, pod.DeepCopy().Spec.Containers)
 
-	if len(newLabels) != 0 || len(newAnnotations) != 0 || containers != nil {
+	if len(newLabels) != 0 || len(newAnnotations) != 0 || len(deleteAnnotations) != 0 || containers != nil {
 		addManagerSpanEvent(ctx, "gameserver.manager.patch_pod",
 			tracing.AttrGameServerName(gs.GetName()),
 			attribute.String(telemetryfields.FieldK8sPodName, pod.GetName()),
 			attribute.Int("labels", len(newLabels)),
-			attribute.Int("annotations", len(newAnnotations)),
+			attribute.Int("annotations", len(newAnnotations)+len(deleteAnnotations)),
 			attribute.Bool("containersUpdated", containers != nil),
 		)
 
@@ -276,15 +277,25 @@ func (manager GameServerManager) SyncGsToPod(ctx context.Context, gss *gameKruis
 			traceparent := tracing.GenerateTraceparent(spanContext)
 			if traceparent != "" {
 				if len(newAnnotations) == 0 {
-					newAnnotations = make(map[string]interface{})
+					newAnnotations = make(map[string]string)
 				}
 				newAnnotations[telemetryfields.AnnotationTraceparent] = traceparent
 			}
 		}
 
 		patchPod := make(map[string]interface{})
-		if len(newLabels) != 0 || len(newAnnotations) != 0 {
-			patchPod["metadata"] = map[string]map[string]interface{}{"labels": newLabels, "annotations": newAnnotations}
+		if len(newLabels) != 0 || len(newAnnotations) != 0 || len(deleteAnnotations) != 0 {
+			// merge newAnnotations and deleteAnnotations into a single map[string]interface{}
+			// so that nil values produce JSON null for strategic-merge-patch deletion.
+			mergedAnnotations := make(map[string]interface{}, len(newAnnotations)+len(deleteAnnotations))
+			for k, v := range newAnnotations {
+				mergedAnnotations[k] = v
+			}
+			for k := range deleteAnnotations {
+				mergedAnnotations[k] = nil
+			}
+
+			patchPod["metadata"] = map[string]interface{}{"labels": newLabels, "annotations": mergedAnnotations}
 		}
 		if containers != nil {
 			patchPod["spec"] = map[string]interface{}{"containers": containers}
