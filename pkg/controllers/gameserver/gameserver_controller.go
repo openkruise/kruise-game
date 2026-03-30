@@ -359,7 +359,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			tracing.AttrGameServerSetName(gss.GetName()),
 			tracing.AttrGameServerName(gs.GetName()),
 		))
-	err = gsm.SyncGsToPod(ctx)
+	err = gsm.SyncGsToPod(ctx, gss)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "SyncGsToPod failed")

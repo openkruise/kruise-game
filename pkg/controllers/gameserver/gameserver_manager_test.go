@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr/testr"
+	kruisePub "github.com/openkruise/kruise-api/apps/pub"
 	kruiseV1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
@@ -802,7 +803,7 @@ func TestSyncGsToPod(t *testing.T) {
 			logger:     testr.New(t),
 		}
 
-		if err := manager.SyncGsToPod(context.TODO()); err != nil {
+		if err := manager.SyncGsToPod(context.TODO(), nil); err != nil {
 			t.Error(err)
 		}
 
@@ -836,6 +837,210 @@ func TestSyncGsToPod(t *testing.T) {
 				t.Errorf("expect gs annotation %s is %s ,but actually is %s", gsKey, gsValue, pod.Annotations[gsKey])
 			}
 		}
+	}
+}
+
+func TestUpdatingContainersAnnotation(t *testing.T) {
+	tests := []struct {
+		name                     string
+		gs                       *gameKruiseV1alpha1.GameServer
+		pod                      *corev1.Pod
+		gss                      *gameKruiseV1alpha1.GameServerSet
+		expectPodAnnotation      string
+		expectPodAnnotationExist bool
+	}{
+		{
+			name: "PreUpdate state sets updating-containers on pod",
+			gs: &gameKruiseV1alpha1.GameServer{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "xxx-0",
+					Labels: map[string]string{
+						gameKruiseV1alpha1.GameServerOwnerGssKey: "xxx",
+					},
+				},
+				Spec: gameKruiseV1alpha1.GameServerSpec{},
+			},
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "xxx-0",
+					Labels: map[string]string{
+						kruisePub.LifecycleStateKey: string(kruisePub.LifecycleStatePreparingUpdate),
+					},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{
+						{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+					},
+					ContainerStatuses: []corev1.ContainerStatus{
+						{Name: "app", Image: "v1.0"},
+						{Name: "sidecar", Image: "v1.0"},
+					},
+				},
+			},
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "xxx",
+				},
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					GameServerTemplate: gameKruiseV1alpha1.GameServerTemplate{
+						PodTemplateSpec: corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{
+									{Name: "app", Image: "v2.0"},
+									{Name: "sidecar", Image: "v1.0"},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectPodAnnotation:      "app",
+			expectPodAnnotationExist: true,
+		},
+		{
+			name: "Updating state keeps existing annotation unchanged",
+			gs: &gameKruiseV1alpha1.GameServer{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "xxx-0",
+					Labels: map[string]string{
+						gameKruiseV1alpha1.GameServerOwnerGssKey: "xxx",
+					},
+				},
+				Spec: gameKruiseV1alpha1.GameServerSpec{},
+			},
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "xxx-0",
+					Labels: map[string]string{
+						kruisePub.LifecycleStateKey: string(kruisePub.LifecycleStateUpdating),
+					},
+					Annotations: map[string]string{
+						gameKruiseV1alpha1.GameServerUpdatingContainersKey: "app",
+					},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{
+						{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+					},
+					ContainerStatuses: []corev1.ContainerStatus{
+						{Name: "app", Image: "v2.0"},
+						{Name: "sidecar", Image: "v1.0"},
+					},
+				},
+			},
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "xxx",
+				},
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					GameServerTemplate: gameKruiseV1alpha1.GameServerTemplate{
+						PodTemplateSpec: corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{
+									{Name: "app", Image: "v2.0"},
+									{Name: "sidecar", Image: "v1.0"},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectPodAnnotation:      "app",
+			expectPodAnnotationExist: true,
+		},
+		{
+			name: "non-PreUpdate state removes updating-containers from pod",
+			gs: &gameKruiseV1alpha1.GameServer{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "xxx-0",
+					Labels: map[string]string{
+						gameKruiseV1alpha1.GameServerOwnerGssKey: "xxx",
+					},
+				},
+				Spec: gameKruiseV1alpha1.GameServerSpec{},
+			},
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "xxx-0",
+					Annotations: map[string]string{
+						gameKruiseV1alpha1.GameServerUpdatingContainersKey: "app",
+					},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{
+						{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+					},
+					ContainerStatuses: []corev1.ContainerStatus{
+						{Name: "app", Image: "v2.0"},
+						{Name: "sidecar", Image: "v1.0"},
+					},
+				},
+			},
+			gss: &gameKruiseV1alpha1.GameServerSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "xxx",
+					Name:      "xxx",
+				},
+				Spec: gameKruiseV1alpha1.GameServerSetSpec{
+					GameServerTemplate: gameKruiseV1alpha1.GameServerTemplate{
+						PodTemplateSpec: corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{
+									{Name: "app", Image: "v2.0"},
+									{Name: "sidecar", Image: "v1.0"},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectPodAnnotation:      "",
+			expectPodAnnotationExist: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			objs := []client.Object{test.gs, test.pod}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+			manager := &GameServerManager{
+				client:     c,
+				gameServer: test.gs,
+				pod:        test.pod,
+				logger:     testr.New(t),
+			}
+
+			if err := manager.SyncGsToPod(context.TODO(), test.gss); err != nil {
+				t.Fatal(err)
+			}
+
+			pod := &corev1.Pod{}
+			if err := c.Get(context.TODO(), types.NamespacedName{
+				Namespace: test.pod.Namespace,
+				Name:      test.pod.Name,
+			}, pod); err != nil {
+				t.Fatal(err)
+			}
+
+			val, exists := pod.Annotations[gameKruiseV1alpha1.GameServerUpdatingContainersKey]
+			if exists != test.expectPodAnnotationExist {
+				t.Errorf("expect annotation exists=%v, got exists=%v", test.expectPodAnnotationExist, exists)
+			}
+			if val != test.expectPodAnnotation {
+				t.Errorf("expect annotation value=%q, got %q", test.expectPodAnnotation, val)
+			}
+		})
 	}
 }
 

@@ -28,6 +28,7 @@ const (
 	GameServerUpdatePriorityKey       = "game.kruise.io/gs-update-priority"
 	GameServerDeletePriorityKey       = "game.kruise.io/gs-delete-priority"
 	GameServerDeletingKey             = "game.kruise.io/gs-deleting"
+	GameServerUpdatingContainersKey   = "game.kruise.io/gs-updating-containers"
 	GameServerNetworkType             = "game.kruise.io/network-type"
 	GameServerNetworkConf             = "game.kruise.io/network-conf"
 	GameServerNetworkDisabled         = "game.kruise.io/network-disabled"
