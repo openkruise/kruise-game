@@ -152,6 +152,22 @@ func (n *NodePortPlugin) OnPodUpdated(client client.Client, pod *corev1.Pod, ctx
 		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
 	}
 
+	// Check if pod has been scheduled before proceeding with network operations
+	// This prevents race conditions where the webhook is triggered before the scheduler
+	// has assigned the pod to a node (pod.Spec.NodeName is empty)
+	if pod.Spec.NodeName == "" {
+		logger.Info("Pod not yet scheduled, waiting for scheduler to assign node",
+			telemetryfields.FieldK8sNamespaceName, pod.Namespace,
+			telemetryfields.FieldK8sPodName, pod.Name)
+		if networkStatus != nil {
+			networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkWaiting
+			pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+			return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+		}
+		// If no network status exists yet, just return without error
+		return pod, nil
+	}
+
 	if networkStatus == nil {
 		logger.Info("Network status missing, marking pod as not_ready")
 		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{

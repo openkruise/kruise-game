@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -22,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	noop "go.opentelemetry.io/otel/trace/noop"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -752,6 +754,195 @@ func TestNodePortTracingNetworkReady(t *testing.T) {
 	}
 
 	t.Logf("Successfully verified %d span(s) for network ready test", len(spans))
+}
+
+// TestNodePortOnPodUpdated_UnscheduledPod tests that OnPodUpdated handles unscheduled pods correctly
+// This test verifies the fix for issue #319 where pods without assigned nodes would fail with
+// "Node \"\" not found" error
+func TestNodePortOnPodUpdated_UnscheduledPod(t *testing.T) {
+	// Setup in-memory span exporter
+	spanRecorder := tracetest.NewSpanRecorder()
+	tracerProvider := sdktrace.NewTracerProvider(
+		sdktrace.WithSpanProcessor(spanRecorder),
+	)
+	otel.SetTracerProvider(tracerProvider)
+	defer otel.SetTracerProvider(noop.NewTracerProvider())
+
+	tests := []struct {
+		name                string
+		pod                 *corev1.Pod
+		expectNetworkStatus string
+		expectError         bool
+	}{
+		{
+			name: "unscheduled pod without network status",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-unscheduled-no-status",
+					Namespace: "default",
+					Labels: map[string]string{
+						gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+					},
+					Annotations: map[string]string{
+						gamekruiseiov1alpha1.GameServerNetworkType: "Kubernetes-NodePort",
+						gamekruiseiov1alpha1.GameServerNetworkConf: `[{"name":"PortProtocols","value":"80"}]`,
+						// No network status annotation
+					},
+				},
+				Spec: corev1.PodSpec{
+					NodeName: "", // Not scheduled yet
+					Containers: []corev1.Container{
+						{
+							Name:  "game",
+							Image: "nginx:latest",
+						},
+					},
+				},
+				Status: corev1.PodStatus{
+					Phase:   corev1.PodPending,
+					PodIP:   "",
+					Reason:  "Unschedulable",
+					Message: "0/3 nodes are available: 3 Insufficient cpu.",
+				},
+			},
+			expectNetworkStatus: "", // No status update expected
+			expectError:         false,
+		},
+		{
+			name: "unscheduled pod with existing network status",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-unscheduled-with-status",
+					Namespace: "default",
+					Labels: map[string]string{
+						gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+					},
+					Annotations: map[string]string{
+						gamekruiseiov1alpha1.GameServerNetworkType:   "Kubernetes-NodePort",
+						gamekruiseiov1alpha1.GameServerNetworkConf:   `[{"name":"PortProtocols","value":"80"}]`,
+						gamekruiseiov1alpha1.GameServerNetworkStatus: `{"currentNetworkState":"NotReady"}`,
+					},
+				},
+				Spec: corev1.PodSpec{
+					NodeName: "", // Not scheduled yet
+					Containers: []corev1.Container{
+						{
+							Name:  "game",
+							Image: "nginx:latest",
+						},
+					},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodPending,
+					PodIP: "",
+				},
+			},
+			expectNetworkStatus: string(gamekruiseiov1alpha1.NetworkWaiting),
+			expectError:         false,
+		},
+		{
+			name: "scheduled pod should proceed normally",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-scheduled",
+					Namespace: "default",
+					Labels: map[string]string{
+						gamekruiseiov1alpha1.GameServerOwnerGssKey: "test-gss",
+					},
+					Annotations: map[string]string{
+						gamekruiseiov1alpha1.GameServerNetworkType:   "Kubernetes-NodePort",
+						gamekruiseiov1alpha1.GameServerNetworkConf:   `[{"name":"PortProtocols","value":"80"}]`,
+						gamekruiseiov1alpha1.GameServerNetworkStatus: `{"currentNetworkState":"NotReady"}`,
+					},
+				},
+				Spec: corev1.PodSpec{
+					NodeName: "test-node", // Scheduled
+					Containers: []corev1.Container{
+						{
+							Name:  "game",
+							Image: "nginx:latest",
+						},
+					},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					PodIP: "10.0.0.1",
+				},
+			},
+			expectNetworkStatus: string(gamekruiseiov1alpha1.NetworkNotReady), // Will try to get node
+			expectError:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create fake client
+			scheme := runtime.NewScheme()
+			_ = corev1.AddToScheme(scheme)
+			_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+
+			// Add node only for scheduled pod test
+			objects := []runtime.Object{tt.pod}
+			if tt.pod.Spec.NodeName != "" {
+				objects = append(objects, &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: tt.pod.Spec.NodeName,
+					},
+					Status: corev1.NodeStatus{
+						Addresses: []corev1.NodeAddress{
+							{Type: corev1.NodeInternalIP, Address: "10.0.0.100"},
+						},
+					},
+				})
+			}
+
+			// Convert runtime.Object to client.Object for WithObjects
+			clientObjects := make([]client.Object, 0, len(objects))
+			for _, obj := range objects {
+				if clientObj, ok := obj.(client.Object); ok {
+					clientObjects = append(clientObjects, clientObj)
+				}
+			}
+			fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(clientObjects...).Build()
+
+			// Create plugin and call OnPodUpdated
+			plugin := &NodePortPlugin{}
+			ctx := context.Background()
+			resultPod, err := plugin.OnPodUpdated(fakeClient, tt.pod, ctx)
+
+			// Verify no error for unscheduled pods
+			if tt.expectError && err == nil {
+				t.Errorf("Expected error but got none")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Expected no error but got: %v", err)
+			}
+
+			// Verify network status annotation
+			if tt.expectNetworkStatus != "" {
+				statusAnnotation := resultPod.Annotations[gamekruiseiov1alpha1.GameServerNetworkStatus]
+				if statusAnnotation == "" {
+					t.Errorf("Expected network status annotation to be set, but it's empty")
+				} else {
+					var status gamekruiseiov1alpha1.NetworkStatus
+					if parseErr := json.Unmarshal([]byte(statusAnnotation), &status); parseErr != nil {
+						t.Errorf("Failed to parse network status: %v", parseErr)
+					} else if string(status.CurrentNetworkState) != tt.expectNetworkStatus {
+						t.Errorf("Expected network status %s, got %s", tt.expectNetworkStatus, status.CurrentNetworkState)
+					}
+				}
+			}
+
+			// Verify span was created
+			spans := spanRecorder.Ended()
+			if len(spans) == 0 {
+				t.Error("Expected spans to be created")
+			}
+
+			// Clear span recorder for next test
+			spanRecorder.Reset()
+		})
+	}
 }
 
 // TestNodePortOnPodDeleted tests cleanup behavior and tracing when a NodePort pod is deleted
