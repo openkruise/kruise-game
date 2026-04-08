@@ -287,10 +287,14 @@ func main() {
 	externalScaler := externalscaler.NewExternalScaler(mgr.GetClient())
 	go func() {
 		grpcServer := grpc.NewServer()
-		lis, _ := net.Listen("tcp", scaleServerAddr)
+		lis, err := net.Listen("tcp", scaleServerAddr)
+		if err != nil {
+			setupLog.Error(err, "unable to listen for ExternalScalerServer", "address", scaleServerAddr)
+			os.Exit(1)
+		}
 		externalscaler.RegisterExternalScalerServer(grpcServer, externalScaler)
 		if err := grpcServer.Serve(lis); err != nil {
-			setupLog.Error(err, "unable to setup ExternalScalerServer")
+			setupLog.Error(err, "unable to serve ExternalScalerServer")
 			os.Exit(1)
 		}
 	}()
