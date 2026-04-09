@@ -606,15 +606,6 @@ func attrStringValue(attrs []attribute.KeyValue, key string) (string, bool) {
 	return "", false
 }
 
-func attrIntValue(attrs []attribute.KeyValue, key string) (int64, bool) {
-	for _, attr := range attrs {
-		if string(attr.Key) == key {
-			return attr.Value.AsInt64(), true
-		}
-	}
-	return 0, false
-}
-
 // TestNodePortTracingNetworkReady tests success attributes when network is ready
 func TestNodePortTracingNetworkReady(t *testing.T) {
 	// Setup in-memory span exporter

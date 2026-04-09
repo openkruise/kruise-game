@@ -6,9 +6,8 @@ type KubernetesOptions struct {
 }
 
 type HostPortOptions struct {
-	MaxPort    int32 `toml:"max_port"`
-	MinPort    int32 `toml:"min_port"`
-	ShardCount int   `toml:"shard_count"` // Number of shards for port allocation (0 = auto, default 1 for backward compatibility)
+	MaxPort int32 `toml:"max_port"`
+	MinPort int32 `toml:"min_port"`
 }
 
 func (o KubernetesOptions) Valid() bool {

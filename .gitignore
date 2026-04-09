@@ -25,6 +25,7 @@ testbin/*
 *.swo
 *~
 .vscode
+.qoder/
 
 # Temporary kustomize overlay for tracing
 config/.tracing-overlay-temp/
@@ -44,3 +45,6 @@ log_debug
 
 # Go cache
 .cache
+
+# Local issue tracking
+问题/

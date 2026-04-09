@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
@@ -37,85 +36,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-// newTestPlugin creates a HostPortPlugin for testing with lock-free port pool
-func newTestPlugin(minPort, maxPort int32, shardCount int) *HostPortPlugin {
+// newTestPlugin creates a HostPortPlugin for testing with port reuse support
+func newTestPlugin(minPort, maxPort int32) *HostPortPlugin {
 	plugin := &HostPortPlugin{
-		minPort:      minPort,
-		maxPort:      maxPort,
-		shardCount:   shardCount,
-		shardMask:    int32(shardCount - 1),
-		portUsage:    make([]int32, maxPort-minPort+1),
-		shardMutexes: make([]sync.Mutex, shardCount),
-		podAllocated: make([]map[string]string, shardCount),
+		minPort:   minPort,
+		maxPort:   maxPort,
+		portUsage: make([]int32, maxPort-minPort+1),
+		podPorts:  make(map[string][]int32),
 	}
-
-	// Initialize available ports
-	for port := minPort; port <= maxPort; port++ {
-		plugin.availablePorts.Store(port, struct{}{})
-	}
-
-	// Initialize pod allocation maps
-	for i := 0; i < shardCount; i++ {
-		plugin.podAllocated[i] = make(map[string]string)
-	}
-
 	return plugin
-}
-
-func TestFNV32a(t *testing.T) {
-	// Test hash distribution
-	hash1 := fnv32a("test-pod-1")
-	hash2 := fnv32a("test-pod-2")
-	hash3 := fnv32a("test-pod-1") // Same input should produce same hash
-
-	if hash1 == hash2 {
-		t.Error("Different inputs should produce different hashes")
-	}
-	if hash1 != hash3 {
-		t.Error("Same input should produce same hash")
-	}
-}
-
-func TestClamp(t *testing.T) {
-	tests := []struct {
-		value, min, max, expected int
-	}{
-		{5, 0, 10, 5},
-		{-5, 0, 10, 0},
-		{15, 0, 10, 10},
-		{0, 0, 10, 0},
-		{10, 0, 10, 10},
-	}
-
-	for _, test := range tests {
-		result := clamp(test.value, test.min, test.max)
-		if result != test.expected {
-			t.Errorf("clamp(%d, %d, %d) = %d, expected %d",
-				test.value, test.min, test.max, result, test.expected)
-		}
-	}
-}
-
-func TestDetermineShardCount(t *testing.T) {
-	tests := []struct {
-		input    int
-		expected int
-	}{
-		{0, 1},     // Default
-		{1, 1},     // Min
-		{10, 10},   // Normal
-		{256, 256}, // Max
-		{300, 256}, // Exceeds max
-		{-5, 1},    // Negative
-	}
-
-	for _, test := range tests {
-		result := clamp(test.input, MinShardCount, MaxShardCount)
-		if result != test.expected {
-			t.Errorf("clamp(%d, %d, %d) = %d, expected %d",
-				test.input, MinShardCount, MaxShardCount, result, test.expected)
-		}
-	}
 }
 
 // TestHostPortTracingOnPodAdded tests tracing span creation in OnPodAdded
@@ -165,7 +94,7 @@ func TestHostPortTracingOnPodAdded(t *testing.T) {
 	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
 
-	plugin := newTestPlugin(8000, 9000, 1)
+	plugin := newTestPlugin(8000, 9000)
 	ctx := context.Background()
 	_, err := plugin.OnPodAdded(fakeClient, pod, ctx)
 	_ = err
@@ -251,7 +180,7 @@ func TestHostPortTracingOnPodUpdated(t *testing.T) {
 	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, node).Build()
 
-	plugin := newTestPlugin(8000, 9000, 1)
+	plugin := newTestPlugin(8000, 9000)
 	ctx := context.Background()
 	_, err := plugin.OnPodUpdated(fakeClient, pod, ctx)
 	_ = err
@@ -308,7 +237,7 @@ func TestHostPortTracingErrorHandling(t *testing.T) {
 	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
 
-	plugin := newTestPlugin(8000, 9000, 1)
+	plugin := newTestPlugin(8000, 9000)
 	ctx := context.Background()
 	_, err := plugin.OnPodAdded(fakeClient, pod, ctx)
 	_ = err
@@ -370,11 +299,10 @@ func TestHostPortTracingOnPodDeleted(t *testing.T) {
 	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
 
-	plugin := newTestPlugin(8000, 9000, 1)
-	// Simulate existing allocation
-	shardID := plugin.getShard(pod)
-	plugin.podAllocated[shardID]["default/test-pod-del"] = "8080"
-	atomic.AddInt32(&plugin.portUsage[80], 1)
+	plugin := newTestPlugin(8000, 9000)
+	// Simulate existing allocation using new structure
+	plugin.podPorts["default/test-pod-del"] = []int32{8080}
+	plugin.portUsage[8080-8000] = 1
 
 	ctx := context.Background()
 	_ = plugin.OnPodDeleted(fakeClient, pod, ctx)
@@ -407,97 +335,105 @@ func TestHostPortTracingOnPodDeleted(t *testing.T) {
 	}
 }
 
-// TestShardedDistribution tests that pods are evenly distributed across shards
-func TestShardedDistribution(t *testing.T) {
-	shardCount := 16
-	plugin := newTestPlugin(20000, 60000, shardCount)
+// TestLeastUsedDistribution tests that ports are evenly distributed using least-used strategy
+func TestLeastUsedDistribution(t *testing.T) {
+	plugin := newTestPlugin(8000, 8009) // 10 ports
 
-	// Test distribution with 100 different GS names
-	distribution := make(map[int]int)
-	for i := 0; i < 100; i++ {
-		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-pod-" + string(rune(i)),
-			},
+	// Allocate 30 pods, each needing 1 port
+	for i := 0; i < 30; i++ {
+		podKey := fmt.Sprintf("default/pod-%d", i)
+		ports, err := plugin.allocatePorts(1, podKey)
+		if err != nil {
+			t.Fatalf("Failed to allocate port for pod %d: %v", i, err)
 		}
-		shardID := plugin.getShard(pod)
-		distribution[shardID]++
-	}
-
-	// Verify no shard has more than 3x average (allowing for some variance due to hash distribution)
-	avg := float64(100) / float64(shardCount)
-	for shardID, count := range distribution {
-		if float64(count) > avg*3 {
-			t.Errorf("Shard %d has %d allocations, expected around %f", shardID, count, avg)
+		if len(ports) != 1 {
+			t.Fatalf("Expected 1 port, got %d", len(ports))
 		}
 	}
-	t.Logf("Distribution across %d shards: %v", shardCount, distribution)
+
+	// Each port should be used exactly 3 times (30 pods / 10 ports)
+	for i := int32(0); i < 10; i++ {
+		usage := plugin.portUsage[i]
+		if usage != 3 {
+			t.Errorf("Port %d usage = %d, expected 3", 8000+i, usage)
+		}
+	}
 }
 
-// TestConcurrentAllocation tests concurrent port allocation
-func TestConcurrentAllocation(t *testing.T) {
-	shardCount := 4
-	plugin := newTestPlugin(8000, 8039, shardCount) // 40 ports
+// TestConcurrentSafety tests concurrent port allocation safety
+func TestConcurrentSafety(t *testing.T) {
+	plugin := newTestPlugin(8000, 8009) // 10 ports
 
-	// Allocate ports concurrently
-	done := make(chan bool, 10)
-	for i := 0; i < 10; i++ {
+	var wg sync.WaitGroup
+	errCh := make(chan error, 100)
+
+	// Concurrently allocate 100 pods
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
 		go func(idx int) {
-			podKey := "default/pod-" + string(rune('A'+idx))
-			shardID := plugin.getShardByKey("pod-" + string(rune('A'+idx)))
-			ports, err := plugin.allocatePorts(1, podKey, shardID)
+			defer wg.Done()
+			podKey := fmt.Sprintf("default/pod-%d", idx)
+			ports, err := plugin.allocatePorts(1, podKey)
 			if err != nil {
-				t.Errorf("Failed to allocate port: %v", err)
+				errCh <- fmt.Errorf("pod-%d: %v", idx, err)
+				return
 			}
 			if len(ports) != 1 {
-				t.Errorf("Expected 1 port, got %d", len(ports))
+				errCh <- fmt.Errorf("pod-%d: expected 1 port, got %d", idx, len(ports))
 			}
-			done <- true
 		}(i)
 	}
+	wg.Wait()
+	close(errCh)
 
-	// Wait for all goroutines
+	for err := range errCh {
+		t.Error(err)
+	}
+
+	// Verify total allocations
+	plugin.mu.Lock()
+	totalPods := len(plugin.podPorts)
+	plugin.mu.Unlock()
+	if totalPods != 100 {
+		t.Errorf("Expected 100 pod allocations, got %d", totalPods)
+	}
+
+	// Each port should be used ~10 times
+	var totalUsage int32
 	for i := 0; i < 10; i++ {
-		<-done
+		totalUsage += plugin.portUsage[i]
 	}
-
-	// Verify allocations
-	totalAllocated := 0
-	for i := 0; i < shardCount; i++ {
-		plugin.shardMutexes[i].Lock()
-		totalAllocated += len(plugin.podAllocated[i])
-		plugin.shardMutexes[i].Unlock()
-	}
-	if totalAllocated != 10 {
-		t.Errorf("Expected 10 total allocations, got %d", totalAllocated)
+	if totalUsage != 100 {
+		t.Errorf("Expected total usage 100, got %d", totalUsage)
 	}
 }
 
-// TestBackwardCompatibility tests that shardCount=1 behaves like the original implementation
-func TestBackwardCompatibility(t *testing.T) {
-	plugin := newTestPlugin(8000, 9000, 1)
+// TestBasicAllocation tests basic port allocation for multiple pods
+func TestBasicAllocation(t *testing.T) {
+	plugin := newTestPlugin(8000, 9000)
 
+	// Allocate ports for multiple pods
 	for i := 0; i < 10; i++ {
-		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-pod-" + string(rune(i)),
-			},
+		podKey := fmt.Sprintf("default/pod-%d", i)
+		ports, err := plugin.allocatePorts(1, podKey)
+		if err != nil {
+			t.Fatalf("Failed to allocate: %v", err)
 		}
-		shardID := plugin.getShard(pod)
-		if shardID != 0 {
-			t.Errorf("Expected shard 0, got shard %d", shardID)
+		if len(ports) != 1 {
+			t.Fatalf("Expected 1 port, got %d", len(ports))
+		}
+		if ports[0] < 8000 || ports[0] > 9000 {
+			t.Errorf("Port %d out of range", ports[0])
 		}
 	}
 }
 
 // TestPortAllocationAndRelease tests port allocation and release cycle
 func TestPortAllocationAndRelease(t *testing.T) {
-	plugin := newTestPlugin(8000, 8010, 1) // 11 ports
+	plugin := newTestPlugin(8000, 8010) // 11 ports
 
-	// Allocate a port
-	shardID := 0
 	podKey := "default/test-pod"
-	ports, err := plugin.allocatePorts(1, podKey, shardID)
+	ports, err := plugin.allocatePorts(1, podKey)
 	if err != nil {
 		t.Fatalf("Failed to allocate port: %v", err)
 	}
@@ -507,40 +443,140 @@ func TestPortAllocationAndRelease(t *testing.T) {
 	allocatedPort := ports[0]
 
 	// Verify port is marked as used
-	if atomic.LoadInt32(&plugin.portUsage[allocatedPort-8000]) != 1 {
-		t.Error("Port should be marked as used")
+	if plugin.portUsage[allocatedPort-8000] != 1 {
+		t.Error("Port should have usage count 1")
 	}
 
 	// Release the port
-	plugin.deallocatePorts(ports, podKey, shardID)
-
-	// Verify port is freed
-	if atomic.LoadInt32(&plugin.portUsage[allocatedPort-8000]) != 0 {
-		t.Error("Port should be freed")
+	released := plugin.deallocatePorts(podKey)
+	if len(released) != 1 || released[0] != allocatedPort {
+		t.Errorf("Expected released port %d, got %v", allocatedPort, released)
 	}
 
-	// Verify port is back in available pool
-	if _, ok := plugin.availablePorts.Load(allocatedPort); !ok {
-		t.Error("Port should be back in available pool")
+	// Verify port usage is back to 0
+	if plugin.portUsage[allocatedPort-8000] != 0 {
+		t.Error("Port should have usage count 0 after release")
+	}
+
+	// Verify pod is removed from podPorts
+	plugin.mu.Lock()
+	_, exists := plugin.podPorts[podKey]
+	plugin.mu.Unlock()
+	if exists {
+		t.Error("Pod should be removed from podPorts after deallocation")
 	}
 }
 
-// TestPortExhaustion tests behavior when ports are exhausted
-func TestPortExhaustion(t *testing.T) {
-	plugin := newTestPlugin(8000, 8002, 1) // Only 3 ports
+// TestPortReuse tests that ports can be reused across multiple pods
+func TestPortReuse(t *testing.T) {
+	plugin := newTestPlugin(8000, 8002) // Only 3 ports
 
-	// Allocate all ports
-	for i := 0; i < 3; i++ {
+	// Allocate 10 pods - should all succeed because ports can be reused
+	for i := 0; i < 10; i++ {
 		podKey := fmt.Sprintf("default/pod-%d", i)
-		_, err := plugin.allocatePorts(1, podKey, 0)
+		ports, err := plugin.allocatePorts(1, podKey)
 		if err != nil {
-			t.Fatalf("Failed to allocate port %d: %v", i, err)
+			t.Fatalf("Failed to allocate port for pod %d: %v", i, err)
+		}
+		if len(ports) != 1 {
+			t.Fatalf("Expected 1 port, got %d", len(ports))
 		}
 	}
 
-	// Try to allocate one more - should fail
-	_, err := plugin.allocatePorts(1, "default/pod-extra", 0)
-	if err == nil {
-		t.Error("Expected error when ports are exhausted")
+	// Verify distribution: 10 pods across 3 ports
+	// Expected: ports used 3, 3, 4 or 4, 3, 3 times
+	var totalUsage int32
+	for i := int32(0); i < 3; i++ {
+		usage := plugin.portUsage[i]
+		if usage < 3 || usage > 4 {
+			t.Errorf("Port %d: expected usage 3-4, got %d", 8000+i, usage)
+		}
+		totalUsage += usage
+	}
+	if totalUsage != 10 {
+		t.Errorf("Expected total usage 10, got %d", totalUsage)
+	}
+}
+
+// TestLargeScaleAllocation tests allocation with large number of pods
+func TestLargeScaleAllocation(t *testing.T) {
+	plugin := newTestPlugin(8000, 8500) // 501 ports, matching user's config
+
+	// Allocate 1000 pods - should all succeed
+	for i := 0; i < 1000; i++ {
+		podKey := fmt.Sprintf("default/pod-%d", i)
+		ports, err := plugin.allocatePorts(1, podKey)
+		if err != nil {
+			t.Fatalf("Failed to allocate port for pod %d: %v", i, err)
+		}
+		if len(ports) != 1 {
+			t.Fatalf("Expected 1 port, got %d for pod %d", len(ports), i)
+		}
+	}
+
+	// Verify: each port should be used 1 or 2 times (1000/501 ≈ 2)
+	for i := int32(0); i < 501; i++ {
+		usage := plugin.portUsage[i]
+		if usage < 1 || usage > 2 {
+			t.Errorf("Port %d: expected usage 1-2, got %d", 8000+i, usage)
+		}
+	}
+
+	// Verify total pods tracked
+	plugin.mu.Lock()
+	totalPods := len(plugin.podPorts)
+	plugin.mu.Unlock()
+	if totalPods != 1000 {
+		t.Errorf("Expected 1000 pods tracked, got %d", totalPods)
+	}
+}
+
+// TestIdempotentAllocation tests that repeated allocation for same pod returns same ports
+func TestIdempotentAllocation(t *testing.T) {
+	plugin := newTestPlugin(8000, 8010)
+
+	podKey := "default/test-pod"
+	ports1, err := plugin.allocatePorts(1, podKey)
+	if err != nil {
+		t.Fatalf("First allocation failed: %v", err)
+	}
+
+	// Second allocation for same pod should return same ports
+	ports2, err := plugin.allocatePorts(1, podKey)
+	if err != nil {
+		t.Fatalf("Second allocation failed: %v", err)
+	}
+
+	if len(ports1) != len(ports2) || ports1[0] != ports2[0] {
+		t.Errorf("Idempotency violated: first=%v, second=%v", ports1, ports2)
+	}
+
+	// Verify port usage is still 1 (not 2)
+	if plugin.portUsage[ports1[0]-8000] != 1 {
+		t.Errorf("Expected usage 1 for idempotent allocation, got %d", plugin.portUsage[ports1[0]-8000])
+	}
+}
+
+// TestMultiPortAllocation tests allocating multiple ports for a single pod
+func TestMultiPortAllocation(t *testing.T) {
+	plugin := newTestPlugin(8000, 8010) // 11 ports
+
+	// Allocate 3 ports for a single pod
+	podKey := "default/multi-port-pod"
+	ports, err := plugin.allocatePorts(3, podKey)
+	if err != nil {
+		t.Fatalf("Failed to allocate: %v", err)
+	}
+	if len(ports) != 3 {
+		t.Fatalf("Expected 3 ports, got %d", len(ports))
+	}
+
+	// All three ports should be different
+	portSet := make(map[int32]bool)
+	for _, p := range ports {
+		if portSet[p] {
+			t.Errorf("Duplicate port %d in allocation", p)
+		}
+		portSet[p] = true
 	}
 }
