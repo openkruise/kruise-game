@@ -340,6 +340,18 @@ func (manager GameServerManager) SyncPodToGs(ctx context.Context, gss *gameKruis
 		gs.SetAnnotations(util.MergeMapString(gs.GetAnnotations(), gsMetadata.GetAnnotations()))
 	}
 
+	// sync nodeName from pod to gs label
+	if pod.Spec.NodeName != "" {
+		gsLabels := gs.GetLabels()
+		if gsLabels == nil {
+			gsLabels = make(map[string]string)
+		}
+		if gsLabels[gameKruiseV1alpha1.GameServerNodeNameKey] != pod.Spec.NodeName {
+			gsLabels[gameKruiseV1alpha1.GameServerNodeNameKey] = pod.Spec.NodeName
+			gs.SetLabels(gsLabels)
+		}
+	}
+
 	if !reflect.DeepEqual(oldGsSpec, gs.Spec) || !reflect.DeepEqual(oldGsLabels, gs.GetLabels()) || !reflect.DeepEqual(oldGsAnnotations, gs.GetAnnotations()) {
 		// Build a minimal patch to avoid clobbering fields updated concurrently by users/tests.
 		// Only include fields we actually changed and that the controller owns.
