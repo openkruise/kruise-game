@@ -320,8 +320,14 @@ func (manager GameServerManager) SyncPodToGs(ctx context.Context, gss *gameKruis
 	gs := manager.gameServer
 	pod := manager.pod
 	oldGsSpec := gs.Spec.DeepCopy()
-	oldGsLabels := gs.GetLabels()
-	oldGsAnnotations := gs.GetAnnotations()
+	oldGsLabels := make(map[string]string)
+	for k, v := range gs.GetLabels() {
+		oldGsLabels[k] = v
+	}
+	oldGsAnnotations := make(map[string]string)
+	for k, v := range gs.GetAnnotations() {
+		oldGsAnnotations[k] = v
+	}
 	oldGsStatus := *gs.Status.DeepCopy()
 
 	// sync DeletePriority/UpdatePriority/State
