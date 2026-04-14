@@ -970,8 +970,10 @@ func (a *AutoNLBsV2Plugin) consServiceForPod(namespace, svcName, podName, gssNam
 func (a *AutoNLBsV2Plugin) createNLBInstanceCR(ctx context.Context, c client.Client, namespace, gssName, eipIspType string, index int, config *autoNLBsConfig, gss *gamekruiseiov1alpha1.GameServerSet) error {
 	// 将 eipIspType 转换为小写以符合 Kubernetes 资源命名规范
 	nlbName := gssName + "-" + strings.ToLower(eipIspType) + "-" + strconv.Itoa(index)
-	log.Infof("createNLBInstanceCR: nlbName=%s, namespace=%s, eipIspType=%s, index=%d",
-		nlbName, namespace, eipIspType, index)
+	// 阿里云控制台显示的 NLB 实例名称，包含 namespace 以区分不同命名空间的同名 GSS
+	nlbLoadBalancerName := namespace + "-" + nlbName
+	log.Infof("createNLBInstanceCR: nlbName=%s, nlbLoadBalancerName=%s, namespace=%s, eipIspType=%s, index=%d",
+		nlbName, nlbLoadBalancerName, namespace, eipIspType, index)
 
 	// 解析 ZoneMaps，获取 VPC ID 和 ZoneMappings
 	log.Infof("parsing zoneMaps: %s", config.zoneMaps)
@@ -1084,7 +1086,7 @@ func (a *AutoNLBsV2Plugin) createNLBInstanceCR(ctx context.Context, c client.Cli
 			},
 		},
 		Spec: nlbv1.NLBSpec{
-			LoadBalancerName: nlbName,
+			LoadBalancerName: nlbLoadBalancerName,
 			AddressType:      addressType,
 			AddressIpVersion: "ipv4",
 			VpcId:            vpcId,
