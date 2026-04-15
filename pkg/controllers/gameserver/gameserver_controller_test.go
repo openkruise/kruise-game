@@ -229,19 +229,20 @@ func TestGameServerReconcile(t *testing.T) {
 //     event storm that originally caused the 139 s OpsState sync gap
 func TestWatchGameServerWithPredicateUpdateFunc(t *testing.T) {
 	// updatePredicate is a local copy of the UpdateFunc logic so the test
-	// stays fast and self-contained without needing a live informer cache.
-	updatePredicate := func(oldGS, newGS *gameKruiseV1alpha1.GameServer) bool {
-		if oldGS.Spec.OpsState != newGS.Spec.OpsState {
-			return true
-		}
-		if !ptr.Equal(oldGS.Spec.NetworkDisabled, newGS.Spec.NetworkDisabled) {
-			return true
-		}
-		if oldGS.DeletionTimestamp == nil && newGS.DeletionTimestamp != nil {
-			return true
-		}
-		return false
-	}
+// stays fast and self-contained without needing a live informer cache.
+    updatePredicate := func(oldGS, newGS *gameKruiseV1alpha1.GameServer) bool {
+	// Check if any spec field changed (matches actual controller logic)
+	    if !reflect.DeepEqual(oldGS.Spec, newGS.Spec) {
+		return true
+	    }
+	
+	// Check if object is being deleted
+	    if oldGS.DeletionTimestamp == nil && newGS.DeletionTimestamp != nil {
+		return true
+	    }
+	
+	return false
+}
 
 	deletionTime := metav1.Now()
 
