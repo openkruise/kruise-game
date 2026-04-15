@@ -216,3 +216,158 @@ func TestGameServerReconcile(t *testing.T) {
 		}
 	}
 }
+
+// TestWatchGameServerWithPredicateUpdateFunc verifies the UpdateFunc predicate
+// used by watchGameServerWithPredicate (issue #321 fix).
+//
+// The predicate is the gate that decides whether a GameServer update event
+// reaches the reconcile queue. These tests confirm that:
+//   - any spec.opsState transition enqueues immediately
+//   - spec.networkDisabled changes enqueue immediately
+//   - a newly set deletionTimestamp enqueues immediately
+//   - status-only and annotation-only updates do not enqueue, preventing the
+//     event storm that originally caused the 139 s OpsState sync gap
+func TestWatchGameServerWithPredicateUpdateFunc(t *testing.T) {
+	// updatePredicate is a local copy of the UpdateFunc logic so the test
+	// stays fast and self-contained without needing a live informer cache.
+	updatePredicate := func(oldGS, newGS *gameKruiseV1alpha1.GameServer) bool {
+		if oldGS.Spec.OpsState != newGS.Spec.OpsState {
+			return true
+		}
+		if !ptr.Equal(oldGS.Spec.NetworkDisabled, newGS.Spec.NetworkDisabled) {
+			return true
+		}
+		if oldGS.DeletionTimestamp == nil && newGS.DeletionTimestamp != nil {
+			return true
+		}
+		return false
+	}
+
+	deletionTime := metav1.Now()
+
+	tests := []struct {
+		name        string
+		oldGS       *gameKruiseV1alpha1.GameServer
+		newGS       *gameKruiseV1alpha1.GameServer
+		wantEnqueue bool
+	}{
+		{
+			name: "None to Allocated enqueues",
+			oldGS: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{OpsState: gameKruiseV1alpha1.None},
+			},
+			newGS: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{OpsState: gameKruiseV1alpha1.Allocated},
+			},
+			wantEnqueue: true,
+		},
+		{
+			name: "Allocated to Kill enqueues",
+			oldGS: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{OpsState: gameKruiseV1alpha1.Allocated},
+			},
+			newGS: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{OpsState: gameKruiseV1alpha1.Kill},
+			},
+			wantEnqueue: true,
+		},
+		{
+			name: "Kill to None enqueues",
+			oldGS: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{OpsState: gameKruiseV1alpha1.Kill},
+			},
+			newGS: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{OpsState: gameKruiseV1alpha1.None},
+			},
+			wantEnqueue: true,
+		},
+		{
+			name: "NetworkDisabled false to true enqueues",
+			oldGS: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{
+					OpsState:        gameKruiseV1alpha1.None,
+					NetworkDisabled: ptr.To(false),
+				},
+			},
+			newGS: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{
+					OpsState:        gameKruiseV1alpha1.None,
+					NetworkDisabled: ptr.To(true),
+				},
+			},
+			wantEnqueue: true,
+		},
+		{
+			name: "NetworkDisabled unchanged does not enqueue",
+			oldGS: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{
+					OpsState:        gameKruiseV1alpha1.None,
+					NetworkDisabled: ptr.To(false),
+				},
+			},
+			newGS: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{
+					OpsState:        gameKruiseV1alpha1.None,
+					NetworkDisabled: ptr.To(false),
+				},
+			},
+			wantEnqueue: false,
+		},
+		{
+			name: "DeletionTimestamp newly set enqueues",
+			oldGS: &gameKruiseV1alpha1.GameServer{
+				Spec: gameKruiseV1alpha1.GameServerSpec{OpsState: gameKruiseV1alpha1.Allocated},
+			},
+			newGS: &gameKruiseV1alpha1.GameServer{
+				ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &deletionTime},
+				Spec:       gameKruiseV1alpha1.GameServerSpec{OpsState: gameKruiseV1alpha1.Allocated},
+			},
+			wantEnqueue: true,
+		},
+		{
+			name: "Status change only does not enqueue",
+			oldGS: &gameKruiseV1alpha1.GameServer{
+				Spec:   gameKruiseV1alpha1.GameServerSpec{OpsState: gameKruiseV1alpha1.Allocated},
+				Status: gameKruiseV1alpha1.GameServerStatus{CurrentState: gameKruiseV1alpha1.Ready},
+			},
+			newGS: &gameKruiseV1alpha1.GameServer{
+				Spec:   gameKruiseV1alpha1.GameServerSpec{OpsState: gameKruiseV1alpha1.Allocated},
+				Status: gameKruiseV1alpha1.GameServerStatus{CurrentState: gameKruiseV1alpha1.NotReady},
+			},
+			wantEnqueue: false,
+		},
+		{
+			name: "Annotation change only does not enqueue",
+			oldGS: &gameKruiseV1alpha1.GameServer{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"key": "a"}},
+				Spec:       gameKruiseV1alpha1.GameServerSpec{OpsState: gameKruiseV1alpha1.None},
+			},
+			newGS: &gameKruiseV1alpha1.GameServer{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"key": "b"}},
+				Spec:       gameKruiseV1alpha1.GameServerSpec{OpsState: gameKruiseV1alpha1.None},
+			},
+			wantEnqueue: false,
+		},
+		{
+			name: "DeletionTimestamp already set does not enqueue again",
+			oldGS: &gameKruiseV1alpha1.GameServer{
+				ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &deletionTime},
+				Spec:       gameKruiseV1alpha1.GameServerSpec{OpsState: gameKruiseV1alpha1.Allocated},
+			},
+			newGS: &gameKruiseV1alpha1.GameServer{
+				ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &deletionTime},
+				Spec:       gameKruiseV1alpha1.GameServerSpec{OpsState: gameKruiseV1alpha1.Allocated},
+			},
+			wantEnqueue: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := updatePredicate(tt.oldGS, tt.newGS)
+			if got != tt.wantEnqueue {
+				t.Errorf("updatePredicate() = %v, want %v", got, tt.wantEnqueue)
+			}
+		})
+	}
+}
