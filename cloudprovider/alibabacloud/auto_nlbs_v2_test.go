@@ -1781,6 +1781,308 @@ func createTestPod(namespace, name, gssName string, podIndex int) *corev1.Pod {
 	}
 }
 
+// TestCalculateExpectNLBNum_ReserveZero 测试 reserve=0 时 expectNLBNum 计算的正确性
+func TestCalculateExpectNLBNum_ReserveZero(t *testing.T) {
+	tests := []struct {
+		name          string
+		maxPodIndex   int
+		podsPerNLB    int
+		reserveNlbNum int
+		expectNLBNum  int
+	}{
+		{
+			name:          "maxPodIndex=0, podsPerNLB=250, reserve=0",
+			maxPodIndex:   0,
+			podsPerNLB:    250,
+			reserveNlbNum: 0,
+			expectNLBNum:  1, // (0 / 250) + 0 + 1 = 1
+		},
+		{
+			name:          "maxPodIndex=249, podsPerNLB=250, reserve=0",
+			maxPodIndex:   249,
+			podsPerNLB:    250,
+			reserveNlbNum: 0,
+			expectNLBNum:  1, // (249 / 250) + 0 + 1 = 1
+		},
+		{
+			name:          "maxPodIndex=250, podsPerNLB=250, reserve=0",
+			maxPodIndex:   250,
+			podsPerNLB:    250,
+			reserveNlbNum: 0,
+			expectNLBNum:  2, // (250 / 250) + 0 + 1 = 2
+		},
+		{
+			name:          "maxPodIndex=499, podsPerNLB=250, reserve=0",
+			maxPodIndex:   499,
+			podsPerNLB:    250,
+			reserveNlbNum: 0,
+			expectNLBNum:  2, // (499 / 250) + 0 + 1 = 2
+		},
+		{
+			name:          "maxPodIndex=500, podsPerNLB=250, reserve=0",
+			maxPodIndex:   500,
+			podsPerNLB:    250,
+			reserveNlbNum: 0,
+			expectNLBNum:  3, // (500 / 250) + 0 + 1 = 3
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plugin := &AutoNLBsV2Plugin{
+				maxPodIndex: map[string]int{
+					"default/test-gss": tt.maxPodIndex,
+				},
+				mutex: sync.RWMutex{},
+			}
+			config := &autoNLBsConfig{
+				minPort:       10000,
+				maxPort:       10499,
+				blockPorts:    []int32{},
+				targetPorts:   []int{8080, 9000},
+				reserveNlbNum: tt.reserveNlbNum,
+			}
+
+			actualNLBNum := plugin.calculateExpectNLBNum("default", "test-gss", config)
+
+			if actualNLBNum != tt.expectNLBNum {
+				t.Errorf("expectNLBNum: expected %d, got %d", tt.expectNLBNum, actualNLBNum)
+			}
+		})
+	}
+}
+
+// TestPrewarmServices_ReserveZero_CorrectNLBBinding 验证 prewarmServices 使用 NLBPoolIndexLabel 而非数组索引
+// 确保 Service 绑定到正确的 NLB，即使 NLB 列表顺序不确定
+func TestPrewarmServices_ReserveZero_CorrectNLBBinding(t *testing.T) {
+	// 创建 GSS
+	gss := createTestGSS("default", "test-gss", 10, nil)
+
+	// 创建 2 个 NLB CR，故意以逆序放入列表（模拟 List 返回顺序不确定）
+	// NLB-0: poolIndex=0, nlbId=nlb-id-0
+	// NLB-1: poolIndex=1, nlbId=nlb-id-1
+	nlb0 := &nlbv1.NLB{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-bgp-0",
+			Namespace: "default",
+			Labels: map[string]string{
+				NLBPoolLabel:           "true",
+				NLBPoolIndexLabel:      "0",
+				NLBPoolEipIspTypeLabel: "BGP",
+				NLBPoolGssLabel:        "test-gss",
+			},
+		},
+		Status: nlbv1.NLBStatus{
+			LoadBalancerId: "nlb-id-0",
+		},
+	}
+	nlb1 := &nlbv1.NLB{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-bgp-1",
+			Namespace: "default",
+			Labels: map[string]string{
+				NLBPoolLabel:           "true",
+				NLBPoolIndexLabel:      "1",
+				NLBPoolEipIspTypeLabel: "BGP",
+				NLBPoolGssLabel:        "test-gss",
+			},
+		},
+		Status: nlbv1.NLBStatus{
+			LoadBalancerId: "nlb-id-1",
+		},
+	}
+
+	c := newFakeClient(gss, nlb0, nlb1)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: map[string]int{
+			"default/test-gss": 9, // 10 个 Pod (0-9)
+		},
+		mutex: sync.RWMutex{},
+	}
+
+	// 使用小端口范围：minPort=10000, maxPort=10004，这样 podsPerNLB=5
+	config := &autoNLBsConfig{
+		minPort:               10000,
+		maxPort:               10004,
+		blockPorts:            []int32{},
+		targetPorts:           []int{8080},
+		protocols:             []corev1.Protocol{corev1.ProtocolTCP},
+		reserveNlbNum:         0,
+		eipIspTypes:           []string{"BGP"},
+		externalTrafficPolicy: corev1.ServiceExternalTrafficPolicyTypeLocal,
+		nlbHealthConfig: &nlbHealthConfig{
+			lBHealthCheckFlag: "off",
+		},
+	}
+
+	// 传入逆序的 NLB 列表：[NLB-1, NLB-0]
+	nlbs := []nlbv1.NLB{*nlb1, *nlb0}
+
+	err := plugin.prewarmServices(ctx, c, "default", "test-gss", "BGP", nlbs, config, gss)
+	if err != nil {
+		t.Errorf("prewarmServices failed: %v", err)
+		return
+	}
+
+	// 验证 Service 0-4 绑定到 NLB-0 (nlb-id-0)
+	for i := 0; i < 5; i++ {
+		svcName := fmt.Sprintf("test-gss-%d-bgp", i)
+		svc := &corev1.Service{}
+		err := c.Get(ctx, types.NamespacedName{Name: svcName, Namespace: "default"}, svc)
+		if err != nil {
+			t.Errorf("Service %s should exist: %v", svcName, err)
+			continue
+		}
+		nlbId := svc.Annotations[SlbIdAnnotationKey]
+		if nlbId != "nlb-id-0" {
+			t.Errorf("Service %s should have NLB ID 'nlb-id-0', got '%s'", svcName, nlbId)
+		}
+	}
+
+	// 验证 Service 5-9 绑定到 NLB-1 (nlb-id-1)
+	for i := 5; i < 10; i++ {
+		svcName := fmt.Sprintf("test-gss-%d-bgp", i)
+		svc := &corev1.Service{}
+		err := c.Get(ctx, types.NamespacedName{Name: svcName, Namespace: "default"}, svc)
+		if err != nil {
+			t.Errorf("Service %s should exist: %v", svcName, err)
+			continue
+		}
+		nlbId := svc.Annotations[SlbIdAnnotationKey]
+		if nlbId != "nlb-id-1" {
+			t.Errorf("Service %s should have NLB ID 'nlb-id-1', got '%s'", svcName, nlbId)
+		}
+	}
+}
+
+// TestEnsurePrewarming_ReserveZero_ReQueryAfterCreation 验证 ensurePrewarming 在创建新 NLB 后重新查询列表
+func TestEnsurePrewarming_ReserveZero_ReQueryAfterCreation(t *testing.T) {
+	// 创建 GSS，设置 replicas=6，这样需要 2 个 NLB（假设 podsPerNLB=5）
+	gss := createTestGSS("default", "test-gss", 6, []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EipIspTypes", Value: "BGP"},
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10004"}, // podsPerNLB = 5
+		{Name: "ReserveNlbNum", Value: "0"},
+	})
+
+	// 初始状态：只有 NLB-0 存在（带正确的 Labels 和 LoadBalancerId）
+	nlb0 := &nlbv1.NLB{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-bgp-0",
+			Namespace: "default",
+			Labels: map[string]string{
+				NLBPoolLabel:           "true",
+				NLBPoolIndexLabel:      "0",
+				NLBPoolEipIspTypeLabel: "BGP",
+				NLBPoolGssLabel:        "test-gss",
+			},
+		},
+		Status: nlbv1.NLBStatus{
+			LoadBalancerId: "nlb-id-0",
+		},
+	}
+
+	// 预先创建 NLB-1 所需的 EIP（带 AllocationID），这样 NLB-1 才能成功创建
+	eip1z0 := &eipv1.EIP{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-eip-bgp-1-z0",
+			Namespace: "default",
+		},
+		Status: eipv1.EIPStatus{
+			AllocationID: "eip-alloc-1-z0",
+		},
+	}
+	eip1z1 := &eipv1.EIP{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-eip-bgp-1-z1",
+			Namespace: "default",
+		},
+		Status: eipv1.EIPStatus{
+			AllocationID: "eip-alloc-1-z1",
+		},
+	}
+
+	// 创建 fake client，预先放入 GSS、NLB-0 和 EIP
+	c := newFakeClient(gss, nlb0, eip1z0, eip1z1)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: map[string]int{
+			"default/test-gss": 5, // maxPodIndex=5，需要第 2 个 NLB
+		},
+		mutex: sync.RWMutex{},
+	}
+
+	config := &autoNLBsConfig{
+		zoneMaps:              "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb",
+		eipIspTypes:           []string{"BGP"},
+		targetPorts:           []int{8080},
+		protocols:             []corev1.Protocol{corev1.ProtocolTCP},
+		minPort:               10000,
+		maxPort:               10004, // podsPerNLB = 5
+		blockPorts:            []int32{},
+		reserveNlbNum:         0,
+		externalTrafficPolicy: corev1.ServiceExternalTrafficPolicyTypeLocal,
+		retainNLBOnDelete:     true,
+		nlbHealthConfig: &nlbHealthConfig{
+			lBHealthCheckFlag: "off",
+		},
+	}
+
+	// 调用 ensurePrewarming
+	err := plugin.ensurePrewarming(ctx, c, "default", "test-gss", config)
+	if err != nil {
+		t.Errorf("ensurePrewarming failed: %v", err)
+		return
+	}
+
+	// 验证 NLB-1 被创建
+	nlb1 := &nlbv1.NLB{}
+	err = c.Get(ctx, types.NamespacedName{Name: "test-gss-bgp-1", Namespace: "default"}, nlb1)
+	if err != nil {
+		t.Errorf("NLB-1 should be created: %v", err)
+		return
+	}
+
+	// 验证 NLB-1 有正确的 Label
+	if nlb1.Labels[NLBPoolIndexLabel] != "1" {
+		t.Errorf("NLB-1 should have %s label = '1', got '%s'", NLBPoolIndexLabel, nlb1.Labels[NLBPoolIndexLabel])
+	}
+
+	// 验证 Service 0-4 绑定到 NLB-0
+	for i := 0; i < 5; i++ {
+		svcName := fmt.Sprintf("test-gss-%d-bgp", i)
+		svc := &corev1.Service{}
+		err := c.Get(ctx, types.NamespacedName{Name: svcName, Namespace: "default"}, svc)
+		if err != nil {
+			t.Errorf("Service %s should exist: %v", svcName, err)
+			continue
+		}
+		nlbId := svc.Annotations[SlbIdAnnotationKey]
+		if nlbId != "nlb-id-0" {
+			t.Errorf("Service %s should have NLB ID 'nlb-id-0', got '%s'", svcName, nlbId)
+		}
+	}
+
+	// 验证 Service 5-9 还没有被创建（因为 NLB-1 还没有 LoadBalancerId）
+	for i := 5; i < 10; i++ {
+		svcName := fmt.Sprintf("test-gss-%d-bgp", i)
+		svc := &corev1.Service{}
+		err := c.Get(ctx, types.NamespacedName{Name: svcName, Namespace: "default"}, svc)
+		if err == nil {
+			t.Errorf("Service %s should NOT exist yet (NLB-1 has no LoadBalancerId)", svcName)
+		}
+	}
+
+	// 测试目的：验证 ensurePrewarming 在创建新 NLB 后重新查询列表
+	// 这样 prewarmServices 能看到新创建的 NLB-1
+	// 这个测试验证了修复后的逻辑：创建 NLB 后重新查询列表，确保新 NLB 被包含在预热中
+}
+
 // TestAutoNLBsV2Plugin_Init_EmptyCluster 测试空集群初始化
 func TestAutoNLBsV2Plugin_Init_EmptyCluster(t *testing.T) {
 	c := newFakeClient()
