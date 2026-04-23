@@ -40,6 +40,20 @@ const (
 	InplaceUpdateNotReadyBlocker = "game.kruise.io/inplace-update-not-ready-blocker"
 )
 
+type TopologyDeletionPriorityConfig struct {
+	// +optional
+	// +kubebuilder:default=100
+	BasePriority int `json:"basePriority,omitempty"`
+
+	// +optional
+	// +kubebuilder:default=10
+	PodCountWeight int `json:"podCountWeight,omitempty"`
+
+	// +optional
+	// +kubebuilder:default=5
+	OwnerCountWeight int `json:"ownerCountWeight,omitempty"`
+}
+
 // GameServerSetSpec defines the desired state of GameServerSet
 type GameServerSetSpec struct {
 	// replicas is the desired number of replicas of the given Template.
@@ -54,6 +68,9 @@ type GameServerSetSpec struct {
 	ServiceName          string               `json:"serviceName,omitempty"`
 	ReserveGameServerIds []intstr.IntOrString `json:"reserveGameServerIds,omitempty"`
 	ServiceQualities     []ServiceQuality     `json:"serviceQualities,omitempty"`
+	// +optional
+	TopologyDeletionPriority *TopologyDeletionPriorityConfig `json:"topologyDeletionPriority,omitempty"`
+
 	UpdateStrategy       UpdateStrategy       `json:"updateStrategy,omitempty"`
 	ScaleStrategy        ScaleStrategy        `json:"scaleStrategy,omitempty"`
 	Network              *Network             `json:"network,omitempty"`

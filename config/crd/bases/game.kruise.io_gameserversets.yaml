@@ -947,6 +947,18 @@ spec:
                   - permanent
                   type: object
                 type: array
+              topologyDeletionPriority:
+                properties:
+                  basePriority:
+                    default: 100
+                    type: integer
+                  ownerCountWeight:
+                    default: 5
+                    type: integer
+                  podCountWeight:
+                    default: 10
+                    type: integer
+                type: object
               updateStrategy:
                 properties:
                   rollingUpdate:
