@@ -45,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
@@ -83,16 +84,18 @@ func newReconciler(mgr manager.Manager) reconcile.Reconciler {
 }
 
 func add(mgr manager.Manager, r reconcile.Reconciler) error {
-	// Create a new controller
 	klog.InfoS("Starting controller", "event", "controller.start", "controller", "gameserver", "workers", concurrentReconciles)
 	c, err := controller.New("gameserver-controller", mgr, controller.Options{Reconciler: r, MaxConcurrentReconciles: concurrentReconciles})
 	if err != nil {
 		klog.Error(err)
 		return err
 	}
-	if err = c.Watch(source.Kind(mgr.GetCache(),
-		&gamekruiseiov1alpha1.GameServer{},
-		&handler.TypedEnqueueRequestForObject[*gamekruiseiov1alpha1.GameServer]{})); err != nil {
+	// Watch GameServer with a predicate that enqueues immediately on spec.opsState
+	// changes. This fixes the sync gap reported in issue #321 where reconcile was
+	// driven only by Node condition events (up to 139s delay). The predicate filters
+	// out status-only and metadata-only updates to prevent event storms while ensuring
+	// all spec changes reach the reconcile queue within milliseconds.
+	if err = watchGameServerWithPredicate(mgr, c); err != nil {
 		klog.Error(err)
 		return err
 	}
@@ -104,8 +107,77 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		klog.Error(err)
 		return err
 	}
-
 	return nil
+}
+
+// watchGameServerWithPredicate sets up the GameServer informer with a field-level
+// predicate so that only changes affecting Pod labels or object lifecycle enqueue
+// a reconcile request. Without this predicate the controller relied on Node
+// condition events as its primary reconcile trigger, introducing gaps of up to
+// 139 s between a spec.opsState patch and the corresponding Pod label update
+// (issue #321).
+func watchGameServerWithPredicate(mgr manager.Manager, c controller.Controller) error {
+	return c.Watch(source.Kind(mgr.GetCache(),
+		&gamekruiseiov1alpha1.GameServer{},
+		&handler.TypedEnqueueRequestForObject[*gamekruiseiov1alpha1.GameServer]{},
+		predicate.TypedFuncs[*gamekruiseiov1alpha1.GameServer]{
+			// Enqueue every newly created GameServer so the controller can
+			// initialise its Pod label set on first sight.
+			CreateFunc: func(e event.TypedCreateEvent[*gamekruiseiov1alpha1.GameServer]) bool {
+				return true
+			},
+
+			// Enqueue only when a field that SyncGsToPod mirrors to the Pod
+			// label set has changed, or when the object enters deletion.
+			// Status-only and metadata-only updates are intentionally skipped:
+			// those paths are already covered by the Pod and Node watches and
+			// re-enqueuing them here would re-introduce the event storm that
+			// originally masked OpsState changes in the work queue.
+			UpdateFunc: func(e event.TypedUpdateEvent[*gamekruiseiov1alpha1.GameServer]) bool {
+				oldGS := e.ObjectOld
+				newGS := e.ObjectNew
+
+				// Log OpsState changes specifically (most common and critical for allocation)
+				if oldGS.Spec.OpsState != newGS.Spec.OpsState {
+					klog.V(4).InfoS("GameServer OpsState changed",
+						"namespace", newGS.Namespace,
+						"name", newGS.Name,
+						"old", oldGS.Spec.OpsState,
+						"new", newGS.Spec.OpsState,
+					)
+				}
+
+				// Enqueue on any spec change (covers OpsState, NetworkDisabled, priorities, etc.)
+				if !reflect.DeepEqual(oldGS.Spec, newGS.Spec) {
+					return true
+				}
+
+				// Enqueue when object enters deletion
+				if oldGS.DeletionTimestamp == nil && newGS.DeletionTimestamp != nil {
+					return true
+				}
+
+				// Skip status-only and metadata-only updates
+				return false
+			},
+
+			// Enqueue on hard deletion so the controller can perform any
+			// remaining cleanup before the object is removed from the cache.
+			DeleteFunc: func(e event.TypedDeleteEvent[*gamekruiseiov1alpha1.GameServer]) bool {
+				klog.V(4).InfoS("GameServer deleted",
+					"namespace", e.Object.Namespace,
+					"name", e.Object.Name,
+				)
+				return true
+			},
+
+			// Enqueue on generic events produced by the informer's periodic
+			// resync so the full cache is reconciled at the configured sync period.
+			GenericFunc: func(e event.TypedGenericEvent[*gamekruiseiov1alpha1.GameServer]) bool {
+				return true
+			},
+		},
+	))
 }
 
 // GameServerReconciler reconciles a GameServer object
@@ -401,11 +473,11 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return ctrl.Result{}, nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
-func (r *GameServerReconciler) SetupWithManager(mgr ctrl.Manager) (c controller.Controller, err error) {
-	c, err = ctrl.NewControllerManagedBy(mgr).
-		For(&gamekruiseiov1alpha1.GameServer{}).Build(r)
-	return c, err
+// SetupWithManager delegates to add so that both the production main entrypoint
+// and any integration test scaffolding that calls SetupWithManager go through
+// the same watch configuration.
+func (r *GameServerReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return add(mgr, r)
 }
 
 func (r *GameServerReconciler) getGameServerSet(ctx context.Context, pod *corev1.Pod) (*gamekruiseiov1alpha1.GameServerSet, error) {
