@@ -676,6 +676,23 @@ func (a *AutoNLBsV2Plugin) ensurePrewarming(ctx context.Context, c client.Client
 			}
 		}
 
+		// 如果有新创建的 NLB，重新查询列表以包含新创建的 NLB
+		if existingCount < expectNLBNum {
+			nlbList = &nlbv1.NLBList{}
+			err = c.List(ctx, nlbList, &client.ListOptions{
+				Namespace: namespace,
+				LabelSelector: labels.SelectorFromSet(map[string]string{
+					NLBPoolGssLabel:        gssName,
+					NLBPoolEipIspTypeLabel: eipIspType,
+				}),
+			})
+			if err != nil {
+				log.Errorf("[%s] Failed to re-list NLB CRs after creation: %v", AutoNLBsV2Network, err)
+				return err
+			}
+			log.Infof("[%s] Re-listed NLBs after creation: %d NLBs found", AutoNLBsV2Network, len(nlbList.Items))
+		}
+
 		// 预热 Service（为每个 NLB 预创建所有可能的 Service）
 		if err := a.prewarmServices(ctx, c, namespace, gssName, eipIspType, nlbList.Items, config, gss); err != nil {
 			log.Errorf("[%s] Failed to prewarm services: %v", AutoNLBsV2Network, err)
@@ -725,22 +742,35 @@ func (a *AutoNLBsV2Plugin) prewarmServices(ctx context.Context, c client.Client,
 	skippedCount := 0
 	skippedNLBCount := 0
 
-	for nlbIdx, nlb := range nlbs {
+	for _, nlb := range nlbs {
 		// 如果 NLB 还没有 LoadBalancerId，跳过（等待 NLB Operator 创建完成）
 		if nlb.Status.LoadBalancerId == "" {
-			log.Infof("[%s] NLB %s (index=%d) not ready yet, skip prewarming services",
-				AutoNLBsV2Network, nlb.Name, nlbIdx)
+			log.Infof("[%s] NLB %s not ready yet, skip prewarming services",
+				AutoNLBsV2Network, nlb.Name)
 			skippedNLBCount++
 			continue
 		}
 
 		nlbId := nlb.Status.LoadBalancerId
-		log.Infof("[%s] Prewarming services for NLB %s (nlbId=%s)", AutoNLBsV2Network, nlb.Name, nlbId)
+
+		// 从 Label 获取真实的 NLB pool index
+		nlbPoolIndexStr, ok := nlb.Labels[NLBPoolIndexLabel]
+		if !ok {
+			log.Errorf("[%s] NLB %s missing %s label, skip prewarming", AutoNLBsV2Network, nlb.Name, NLBPoolIndexLabel)
+			continue
+		}
+		nlbPoolIndex, err := strconv.Atoi(nlbPoolIndexStr)
+		if err != nil {
+			log.Errorf("[%s] NLB %s has invalid %s label: %s", AutoNLBsV2Network, nlb.Name, NLBPoolIndexLabel, nlbPoolIndexStr)
+			continue
+		}
+
+		log.Infof("[%s] Prewarming services for NLB %s (nlbId=%s, poolIndex=%d)", AutoNLBsV2Network, nlb.Name, nlbId, nlbPoolIndex)
 
 		// 为这个 NLB 预创建所有可能的 Service
 		for podIdx := 0; podIdx < podsPerNLB; podIdx++ {
-			// 计算全局 Service 索引（对应未来可能的 Pod 索引）
-			globalServiceIndex := nlbIdx*podsPerNLB + podIdx
+			// 使用真实的 pool index 计算全局 Service 索引
+			globalServiceIndex := nlbPoolIndex*podsPerNLB + podIdx
 
 			// Service 命名：podName-eipIspType（如：gss-0-bgp, gss-0-bgp-pro）
 			basePodName := gssName + "-" + strconv.Itoa(globalServiceIndex)
