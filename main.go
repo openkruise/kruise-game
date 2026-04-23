@@ -278,8 +278,8 @@ func main() {
 	}
 	kruisegameInformerFactory.Start(signal.Done())
 	go func() {
-		if metricsController.Run(signal) != nil {
-			setupLog.Error(err, "unable to setup metrics controller")
+		if runErr := metricsController.Run(signal); runErr != nil {
+			setupLog.Error(runErr, "unable to setup metrics controller")
 			os.Exit(1)
 		}
 	}()
