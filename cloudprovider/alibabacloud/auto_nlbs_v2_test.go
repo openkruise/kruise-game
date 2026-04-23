@@ -38,6 +38,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 // scheme 用于测试中注册 CRD 类型
@@ -3393,5 +3394,239 @@ func TestNLBCreationNoOwnerRef(t *testing.T) {
 				t.Errorf("NLB should NOT have OwnerReference, but got: %v", nlb.OwnerReferences)
 			}
 		})
+	}
+}
+
+// TestPrewarmServices_MissingPoolIndexLabel 验证 prewarmServices 跳过缺少 NLBPoolIndexLabel 的 NLB
+func TestPrewarmServices_MissingPoolIndexLabel(t *testing.T) {
+	gss := createTestGSS("default", "test-gss", 5, nil)
+
+	// 创建一个 NLB，有 LoadBalancerId 但没有 NLBPoolIndexLabel
+	nlb := &nlbv1.NLB{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-bgp-0",
+			Namespace: "default",
+			Labels: map[string]string{
+				NLBPoolLabel:           "true",
+				NLBPoolEipIspTypeLabel: "BGP",
+				NLBPoolGssLabel:        "test-gss",
+				// 故意不设置 NLBPoolIndexLabel
+			},
+		},
+		Status: nlbv1.NLBStatus{
+			LoadBalancerId: "nlb-id-0",
+		},
+	}
+
+	c := newFakeClient(gss, nlb)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: map[string]int{
+			"default/test-gss": 4,
+		},
+		mutex: sync.RWMutex{},
+	}
+
+	config := &autoNLBsConfig{
+		minPort:               10000,
+		maxPort:               10004,
+		blockPorts:            []int32{},
+		targetPorts:           []int{8080},
+		protocols:             []corev1.Protocol{corev1.ProtocolTCP},
+		reserveNlbNum:         0,
+		eipIspTypes:           []string{"BGP"},
+		externalTrafficPolicy: corev1.ServiceExternalTrafficPolicyTypeLocal,
+		nlbHealthConfig: &nlbHealthConfig{
+			lBHealthCheckFlag: "off",
+		},
+	}
+
+	nlbs := []nlbv1.NLB{*nlb}
+
+	err := plugin.prewarmServices(ctx, c, "default", "test-gss", "BGP", nlbs, config, gss)
+	if err != nil {
+		t.Errorf("prewarmServices should not return error for missing label, got: %v", err)
+		return
+	}
+
+	// 验证没有 Service 被创建（因为 NLB 缺少 NLBPoolIndexLabel 被跳过）
+	svcList := &corev1.ServiceList{}
+	err = c.List(ctx, svcList, client.InNamespace("default"))
+	if err != nil {
+		t.Errorf("Failed to list Services: %v", err)
+		return
+	}
+	if len(svcList.Items) != 0 {
+		t.Errorf("Expected 0 Services created (NLB missing pool index label), got %d", len(svcList.Items))
+	}
+}
+
+// TestPrewarmServices_InvalidPoolIndexLabel 验证 prewarmServices 跳过 NLBPoolIndexLabel 值无效的 NLB
+func TestPrewarmServices_InvalidPoolIndexLabel(t *testing.T) {
+	gss := createTestGSS("default", "test-gss", 5, nil)
+
+	// 创建一个 NLB，NLBPoolIndexLabel 值为非数字
+	nlb := &nlbv1.NLB{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-bgp-0",
+			Namespace: "default",
+			Labels: map[string]string{
+				NLBPoolLabel:           "true",
+				NLBPoolIndexLabel:      "abc", // 无效值
+				NLBPoolEipIspTypeLabel: "BGP",
+				NLBPoolGssLabel:        "test-gss",
+			},
+		},
+		Status: nlbv1.NLBStatus{
+			LoadBalancerId: "nlb-id-0",
+		},
+	}
+
+	c := newFakeClient(gss, nlb)
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: map[string]int{
+			"default/test-gss": 4,
+		},
+		mutex: sync.RWMutex{},
+	}
+
+	config := &autoNLBsConfig{
+		minPort:               10000,
+		maxPort:               10004,
+		blockPorts:            []int32{},
+		targetPorts:           []int{8080},
+		protocols:             []corev1.Protocol{corev1.ProtocolTCP},
+		reserveNlbNum:         0,
+		eipIspTypes:           []string{"BGP"},
+		externalTrafficPolicy: corev1.ServiceExternalTrafficPolicyTypeLocal,
+		nlbHealthConfig: &nlbHealthConfig{
+			lBHealthCheckFlag: "off",
+		},
+	}
+
+	nlbs := []nlbv1.NLB{*nlb}
+
+	err := plugin.prewarmServices(ctx, c, "default", "test-gss", "BGP", nlbs, config, gss)
+	if err != nil {
+		t.Errorf("prewarmServices should not return error for invalid label, got: %v", err)
+		return
+	}
+
+	// 验证没有 Service 被创建（因为 NLB 的 pool index label 值无效被跳过）
+	svcList := &corev1.ServiceList{}
+	err = c.List(ctx, svcList, client.InNamespace("default"))
+	if err != nil {
+		t.Errorf("Failed to list Services: %v", err)
+		return
+	}
+	if len(svcList.Items) != 0 {
+		t.Errorf("Expected 0 Services created (NLB has invalid pool index label), got %d", len(svcList.Items))
+	}
+}
+
+// TestEnsurePrewarming_ReQueryFails 验证 ensurePrewarming 在创建新 NLB 后重新查询列表失败时返回错误
+func TestEnsurePrewarming_ReQueryFails(t *testing.T) {
+	gss := createTestGSS("default", "test-gss", 6, []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: "ZoneMaps", Value: "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb"},
+		{Name: "PortProtocols", Value: "8080/TCP"},
+		{Name: "EipIspTypes", Value: "BGP"},
+		{Name: "MinPort", Value: "10000"},
+		{Name: "MaxPort", Value: "10004"}, // podsPerNLB = 5
+		{Name: "ReserveNlbNum", Value: "0"},
+	})
+
+	// 初始状态：只有 NLB-0 存在
+	nlb0 := &nlbv1.NLB{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-bgp-0",
+			Namespace: "default",
+			Labels: map[string]string{
+				NLBPoolLabel:           "true",
+				NLBPoolIndexLabel:      "0",
+				NLBPoolEipIspTypeLabel: "BGP",
+				NLBPoolGssLabel:        "test-gss",
+			},
+		},
+		Status: nlbv1.NLBStatus{
+			LoadBalancerId: "nlb-id-0",
+		},
+	}
+
+	// 预先创建 NLB-1 所需的 EIP（带 AllocationID），这样 NLB-1 才能成功创建
+	eip1z0 := &eipv1.EIP{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-eip-bgp-1-z0",
+			Namespace: "default",
+		},
+		Status: eipv1.EIPStatus{
+			AllocationID: "eip-alloc-1-z0",
+		},
+	}
+	eip1z1 := &eipv1.EIP{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-gss-eip-bgp-1-z1",
+			Namespace: "default",
+		},
+		Status: eipv1.EIPStatus{
+			AllocationID: "eip-alloc-1-z1",
+		},
+	}
+
+	listCallCount := 0
+
+	// 使用 WithInterceptorFuncs 让第二次 List NLB 时返回错误
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(gss, nlb0, eip1z0, eip1z1).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, clnt client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				listCallCount++
+				// 第一次 List 返回正常结果（ensurePrewarming 查询已有 NLB）
+				// 第二次 List 是创建 NLB 后的重新查询，返回错误
+				if listCallCount == 2 {
+					return fmt.Errorf("simulated re-list failure")
+				}
+				// 其他 List 调用正常执行
+				return clnt.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+
+	ctx := context.Background()
+
+	plugin := &AutoNLBsV2Plugin{
+		maxPodIndex: map[string]int{
+			"default/test-gss": 5, // maxPodIndex=5，需要第 2 个 NLB
+		},
+		mutex: sync.RWMutex{},
+	}
+
+	config := &autoNLBsConfig{
+		zoneMaps:              "vpc-test@cn-hangzhou-h:vsw-aaa,cn-hangzhou-i:vsw-bbb",
+		eipIspTypes:           []string{"BGP"},
+		targetPorts:           []int{8080},
+		protocols:             []corev1.Protocol{corev1.ProtocolTCP},
+		minPort:               10000,
+		maxPort:               10004, // podsPerNLB = 5
+		blockPorts:            []int32{},
+		reserveNlbNum:         0,
+		externalTrafficPolicy: corev1.ServiceExternalTrafficPolicyTypeLocal,
+		retainNLBOnDelete:     true,
+		nlbHealthConfig: &nlbHealthConfig{
+			lBHealthCheckFlag: "off",
+		},
+	}
+
+	// 调用 ensurePrewarming，应该返回 re-list 失败的错误
+	err := plugin.ensurePrewarming(ctx, c, "default", "test-gss", config)
+	if err == nil {
+		t.Errorf("ensurePrewarming should return error when re-list fails, got nil")
+		return
+	}
+	if !strings.Contains(err.Error(), "simulated re-list failure") {
+		t.Errorf("expected error to contain 'simulated re-list failure', got: %v", err)
 	}
 }
