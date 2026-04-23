@@ -97,6 +97,9 @@ OpenKruiseGame has the following core features:
         <td style="border: none;"><center><img src="../images/gale-logo.png" width="100" alt="Gale Logo" /></center></td>
         <td style="border: none;"><center><img src="../images/dhf-logo.png" width="100" alt="DHF Logo" /></center></td>
     </tr>
+    <tr style="border: none;">
+        <td style="border: none;"><center><img src="../images/q1-logo.png" width="100" alt="Glacier Logo" /></center></td>
+    </tr>
 </table>
 
 ### What to do next
