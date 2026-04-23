@@ -41,14 +41,18 @@ type Framework struct {
 	artifactCollector *diagnostics.ArtifactCollector
 	currentTestName   string
 	gssName           string
+	// RestConfig is required to create SPDY executors for remote command execution (exec)
+	// This is specifically needed for tests that trigger ServiceQualities via file existence checks
+	RestConfig *restclient.Config
 }
 
 func NewFrameWork(config *restclient.Config) *Framework {
 	kruisegameClient := kruisegameclientset.NewForConfigOrDie(config)
 	kubeClient := clientset.NewForConfigOrDie(config)
 	return &Framework{
-		client:  client.NewKubeClient(kruisegameClient, kubeClient),
-		gssName: client.DefaultGameServerSetName,
+		client:     client.NewKubeClient(kruisegameClient, kubeClient),
+		gssName:    client.DefaultGameServerSetName,
+		RestConfig: config,
 	}
 }
 
