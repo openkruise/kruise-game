@@ -84,28 +84,6 @@ func createTestPodV3(namespace, name, gssName string, podIndex int, networkConf 
 	}
 }
 
-// createTestGSSV3 创建 V3 测试用的 GameServerSet
-func createTestGSSV3(namespace, name string, replicas int32, networkConf []gamekruiseiov1alpha1.NetworkConfParams) *gamekruiseiov1alpha1.GameServerSet {
-	return &gamekruiseiov1alpha1.GameServerSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-			UID:       types.UID("test-gss-uid-" + name),
-		},
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "game.kruise.io/v1alpha1",
-			Kind:       "GameServerSet",
-		},
-		Spec: gamekruiseiov1alpha1.GameServerSetSpec{
-			Replicas: &replicas,
-			Network: &gamekruiseiov1alpha1.Network{
-				NetworkType: AutoNLBsV3Network,
-				NetworkConf: networkConf,
-			},
-		},
-	}
-}
-
 // createAvailableService 创建 available 状态的 Service（模拟 NLBPool Controller 预热好的 Service）
 func createAvailableService(namespace, name, nlbPoolName string, portsPerPod int, servicePorts []corev1.ServicePort) *corev1.Service {
 	return &corev1.Service{
