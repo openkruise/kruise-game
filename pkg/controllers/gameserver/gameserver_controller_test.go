@@ -30,6 +30,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
@@ -214,5 +215,89 @@ func TestGameServerReconcile(t *testing.T) {
 		if !reflect.DeepEqual(expectGsSpec, actualGsSpec) {
 			t.Errorf("case %d: expect Spec %v, but actually got %v", i, expectGsSpec, actualGsSpec)
 		}
+	}
+}
+
+func TestGameServerUpdatePredicate(t *testing.T) {
+	base := &gameKruiseV1alpha1.GameServer{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "xxx",
+			Name:      "xxx-0",
+			Annotations: map[string]string{
+				"plain": "old",
+			},
+		},
+		Spec: gameKruiseV1alpha1.GameServerSpec{
+			OpsState: gameKruiseV1alpha1.None,
+		},
+		Status: gameKruiseV1alpha1.GameServerStatus{
+			CurrentState: gameKruiseV1alpha1.Ready,
+		},
+	}
+	deletionTime := metav1.Now()
+
+	tests := []struct {
+		name string
+		new  func() *gameKruiseV1alpha1.GameServer
+		want bool
+	}{
+		{
+			name: "spec opsState change enqueues",
+			new: func() *gameKruiseV1alpha1.GameServer {
+				gs := base.DeepCopy()
+				gs.Spec.OpsState = gameKruiseV1alpha1.Allocated
+				return gs
+			},
+			want: true,
+		},
+		{
+			name: "gs-sync annotation change enqueues",
+			new: func() *gameKruiseV1alpha1.GameServer {
+				gs := base.DeepCopy()
+				gs.Annotations["gs-sync/match-id"] = "match-1"
+				return gs
+			},
+			want: true,
+		},
+		{
+			name: "plain annotation change does not enqueue",
+			new: func() *gameKruiseV1alpha1.GameServer {
+				gs := base.DeepCopy()
+				gs.Annotations["plain"] = "new"
+				return gs
+			},
+			want: false,
+		},
+		{
+			name: "status-only change does not enqueue",
+			new: func() *gameKruiseV1alpha1.GameServer {
+				gs := base.DeepCopy()
+				gs.Status.CurrentState = gameKruiseV1alpha1.NotReady
+				return gs
+			},
+			want: false,
+		},
+		{
+			name: "deletion timestamp enqueues",
+			new: func() *gameKruiseV1alpha1.GameServer {
+				gs := base.DeepCopy()
+				gs.DeletionTimestamp = &deletionTime
+				return gs
+			},
+			want: true,
+		},
+	}
+
+	pred := newGameServerPredicate()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pred.Update(event.TypedUpdateEvent[*gameKruiseV1alpha1.GameServer]{
+				ObjectOld: base.DeepCopy(),
+				ObjectNew: tt.new(),
+			})
+			if got != tt.want {
+				t.Fatalf("expect enqueue=%v, got %v", tt.want, got)
+			}
+		})
 	}
 }

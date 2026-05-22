@@ -45,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
@@ -90,9 +91,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		klog.Error(err)
 		return err
 	}
-	if err = c.Watch(source.Kind(mgr.GetCache(),
-		&gamekruiseiov1alpha1.GameServer{},
-		&handler.TypedEnqueueRequestForObject[*gamekruiseiov1alpha1.GameServer]{})); err != nil {
+	if err = watchGameServer(mgr, c); err != nil {
 		klog.Error(err)
 		return err
 	}
@@ -106,6 +105,67 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	}
 
 	return nil
+}
+
+func watchGameServer(mgr manager.Manager, c controller.Controller) error {
+	return c.Watch(source.Kind(mgr.GetCache(),
+		&gamekruiseiov1alpha1.GameServer{},
+		&handler.TypedEnqueueRequestForObject[*gamekruiseiov1alpha1.GameServer]{},
+		newGameServerPredicate(),
+	))
+}
+
+func newGameServerPredicate() predicate.TypedFuncs[*gamekruiseiov1alpha1.GameServer] {
+	return predicate.TypedFuncs[*gamekruiseiov1alpha1.GameServer]{
+		CreateFunc: func(event.TypedCreateEvent[*gamekruiseiov1alpha1.GameServer]) bool {
+			return true
+		},
+		UpdateFunc: func(updateEvent event.TypedUpdateEvent[*gamekruiseiov1alpha1.GameServer]) bool {
+			return shouldEnqueueGameServerUpdate(updateEvent.ObjectOld, updateEvent.ObjectNew)
+		},
+		DeleteFunc: func(event.TypedDeleteEvent[*gamekruiseiov1alpha1.GameServer]) bool {
+			return true
+		},
+		GenericFunc: func(event.TypedGenericEvent[*gamekruiseiov1alpha1.GameServer]) bool {
+			return true
+		},
+	}
+}
+
+func shouldEnqueueGameServerUpdate(oldGS, newGS *gamekruiseiov1alpha1.GameServer) bool {
+	if oldGS == nil || newGS == nil {
+		return true
+	}
+	if !reflect.DeepEqual(oldGS.Spec, newGS.Spec) {
+		return true
+	}
+	if oldGS.DeletionTimestamp == nil && newGS.DeletionTimestamp != nil {
+		return true
+	}
+	if hasGsSyncMetadataChange(oldGS.GetLabels(), newGS.GetLabels()) {
+		return true
+	}
+	return hasGsSyncMetadataChange(oldGS.GetAnnotations(), newGS.GetAnnotations())
+}
+
+func hasGsSyncMetadataChange(oldMetadata, newMetadata map[string]string) bool {
+	for key, oldValue := range oldMetadata {
+		if !util.IsHasPrefixGsSyncToPod(key) {
+			continue
+		}
+		if newValue, exists := newMetadata[key]; !exists || newValue != oldValue {
+			return true
+		}
+	}
+	for key, newValue := range newMetadata {
+		if !util.IsHasPrefixGsSyncToPod(key) {
+			continue
+		}
+		if oldValue, exists := oldMetadata[key]; !exists || oldValue != newValue {
+			return true
+		}
+	}
+	return false
 }
 
 // GameServerReconciler reconciles a GameServer object
