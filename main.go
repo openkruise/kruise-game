@@ -50,6 +50,7 @@ import (
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	aliv1beta1 "github.com/openkruise/kruise-game/cloudprovider/alibabacloud/apis/v1beta1"
+	gcpv1beta1 "github.com/openkruise/kruise-game/cloudprovider/googlecloud/apis/compute/v1beta1"
 	cpmanager "github.com/openkruise/kruise-game/cloudprovider/manager"
 	kruisegameclientset "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
 	kruisegamevisions "github.com/openkruise/kruise-game/pkg/client/informers/externalversions"
@@ -88,6 +89,10 @@ func init() {
 	// Register NLB and EIP CRD schemes for AutoNLBs-V2
 	utilruntime.Must(nlbv1.SchemeBuilder.AddToScheme(scheme))
 	utilruntime.Must(eipv1.AddToScheme(scheme))
+
+	// Register Google Cloud Config Connector compute v1beta1 CRD scheme for the
+	// GoogleCloud-PassthroughNLB and GoogleCloud-GlobalProxyNLB plugins.
+	utilruntime.Must(gcpv1beta1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 

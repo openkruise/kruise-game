@@ -1,0 +1,64 @@
+# Sample: GameServerSet using the GoogleCloud-GlobalProxyNLB plugin.
+#
+# Best for TCP-only games with globally distributed players (MMO, SLG, card,
+# casual). The pod gets an anycast IPv4 IP fronted by Google Front Ends, with
+# automatic cross-region failover and Cloud Armor compatibility. Real client
+# IP is delivered via PROXY-protocol v1 when ProxyHeader=PROXY_V1.
+#
+# Prerequisites (one-time, cluster-admin):
+#   1. VPC-native GKE cluster (alias IPs).
+#   2. Config Connector add-on enabled and healthy.
+#   3. cnrm-system SA bound (Workload Identity) to a GCP SA with
+#      roles/compute.networkAdmin.
+#   4. A default VPC network exists; the plugin authors a per-pod
+#      ComputeFirewall opening 35.191.0.0/16 + 130.211.0.0/22 to the game port.
+#   5. (Production) Request GCP quota increases for ForwardingRules / BackendServices
+#      / NetworkEndpointGroups / Addresses ahead of scaling.
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: mmo-global
+  namespace: default
+spec:
+  replicas: 3
+  gameServerTemplate:
+    spec:
+      containers:
+      - name: server
+        image: example.com/mmo-server:latest
+        ports:
+        - containerPort: 7777
+          protocol: TCP
+  network:
+    networkType: GoogleCloud-GlobalProxyNLB
+    networkConf:
+    # Required: single TCP port 1-65535. Global Proxy NLB is one port per pod.
+    - name: Port
+      value: "7777"
+    # Optional: NONE (default) gives the backend no client IP. PROXY_V1 prepends
+    # one PROXY-protocol line; the game container MUST be PROXY-aware.
+    - name: ProxyHeader
+      value: PROXY_V1
+    # Optional: balancing mode for the backend service. CONNECTION is the
+    # default; RATE or UTILIZATION are also valid.
+    - name: BalancingMode
+      value: CONNECTION
+    - name: MaxConnectionsPerEndpoint
+      value: "1000"
+    # Optional health-check tuning.
+    - name: HealthCheckIntervalSec
+      value: "5"
+    - name: HealthCheckTimeoutSec
+      value: "5"
+    - name: HealthyThreshold
+      value: "2"
+    - name: UnhealthyThreshold
+      value: "3"
+    # Optional: VPC network for the per-pod ComputeFirewall. Defaults to the
+    # googlecloud.firewall_network_ref (then default_network) from the operator
+    # TOML.
+    - name: Network
+      value: default
+    # Optional: false (default) drops the GCP stack when the pod is removed.
+    - name: RetainOnDelete
+      value: "false"

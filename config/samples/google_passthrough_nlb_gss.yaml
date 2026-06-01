@@ -1,0 +1,56 @@
+# Sample: GameServerSet using the GoogleCloud-PassthroughNLB plugin.
+#
+# Best for UDP-heavy realtime games (FPS, MOBA, action) or TCP workloads that
+# need lowest possible latency and native client-IP preservation. Each pod gets
+# a per-pod static external IP (KCC ComputeAddress) and a per-pod LoadBalancer
+# Service backed by GKE's container-native L4 RBS pipeline.
+#
+# Prerequisites (one-time, cluster-admin):
+#   1. VPC-native GKE cluster (alias IPs).
+#   2. Config Connector add-on enabled and healthy:
+#        gcloud container clusters update <CLUSTER> --update-addons=ConfigConnector=ENABLED --region <REGION>
+#        kubectl wait --for=condition=Available deploy -n cnrm-system --all --timeout=300s
+#   3. The cnrm-system service account bound (via Workload Identity) to a GCP
+#      service account that holds roles/compute.networkAdmin (or a narrower
+#      custom role over forwardingRules/backendServices/healthChecks/addresses/firewalls).
+#   4. A firewall rule that admits Google health-check probe ranges
+#      (35.191.0.0/16 + 130.211.0.0/22) to your game-server container ports.
+#
+# Minimum GKE version for the cloud.google.com/l4-rbs annotation path: 1.32.2-gke.1652000.
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: minecraft-passthrough
+  namespace: default
+spec:
+  replicas: 3
+  gameServerTemplate:
+    spec:
+      containers:
+      - name: server
+        image: itzg/minecraft-server:latest
+        env:
+        - name: EULA
+          value: "TRUE"
+        ports:
+        - containerPort: 25565
+          protocol: TCP
+  network:
+    networkType: GoogleCloud-PassthroughNLB
+    networkConf:
+    # Required: at least one port (max 5 per pod).
+    - name: PortProtocols
+      value: "25565/TCP"
+    # Optional. External (default) for public traffic; Internal for VPC-only.
+    - name: Scheme
+      value: External
+    # Required when Scheme=Internal; defaults to googlecloud.default_region.
+    - name: Region
+      value: us-central1
+    # Optional: PREMIUM (default) or STANDARD.
+    - name: NetworkTier
+      value: PREMIUM
+    # Optional: false (default per plugin) keeps the per-pod IP on pod tear-down.
+    #          true retains the ComputeAddress + Service across pod restarts.
+    - name: RetainOnDelete
+      value: "false"

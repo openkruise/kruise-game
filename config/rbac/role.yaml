@@ -134,6 +134,34 @@ rules:
   - update
   - watch
 - apiGroups:
+  - compute.cnrm.cloud.google.com
+  resources:
+  - computeaddresses
+  - computebackendservices
+  - computefirewalls
+  - computeforwardingrules
+  - computehealthchecks
+  - computetargettcpproxies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - compute.cnrm.cloud.google.com
+  resources:
+  - computeaddresses/status
+  - computebackendservices/status
+  - computefirewalls/status
+  - computeforwardingrules/status
+  - computehealthchecks/status
+  - computetargettcpproxies/status
+  verbs:
+  - get
+- apiGroups:
   - game.kruise.io
   resources:
   - gameservers

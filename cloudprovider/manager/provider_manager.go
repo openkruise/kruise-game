@@ -26,6 +26,7 @@ import (
 	"github.com/openkruise/kruise-game/cloudprovider"
 	"github.com/openkruise/kruise-game/cloudprovider/alibabacloud"
 	aws "github.com/openkruise/kruise-game/cloudprovider/amazonswebservices"
+	"github.com/openkruise/kruise-game/cloudprovider/googlecloud"
 	"github.com/openkruise/kruise-game/cloudprovider/kubernetes"
 	"github.com/openkruise/kruise-game/cloudprovider/tencentcloud"
 	volcengine "github.com/openkruise/kruise-game/cloudprovider/volcengine"
@@ -173,6 +174,16 @@ func NewProviderManager() (*ProviderManager, error) {
 		}
 	} else {
 		log.Warningf("HwCloudProvider is not enabled, enable flag is %v, config valid flag is %v", configs.HwCloudOptions.Enabled(), configs.HwCloudOptions.Valid())
+	}
+
+	if configs.GoogleCloudOptions.Valid() && configs.GoogleCloudOptions.Enabled() {
+		// build and register google cloud provider
+		gp, err := googlecloud.NewGoogleCloudProvider()
+		if err != nil {
+			log.Errorf("Failed to initialize googlecloud provider, because of %s", err.Error())
+		} else {
+			pm.RegisterCloudProvider(gp, configs.GoogleCloudOptions)
+		}
 	}
 
 	return pm, nil
