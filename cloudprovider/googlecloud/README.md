@@ -123,6 +123,57 @@ ComputeForwardingRule (global, EXTERNAL_MANAGED, one TCP port, target+address re
 ComputeFirewall (allow 35.191.0.0/16 + 130.211.0.0/22 → backend port)
 ```
 
+## IP stability across Pod recreate
+
+The GCP resources for a replica are keyed on the owning **GameServerSet UID +
+replica ordinal**, not the Pod UID. A Pod that is deleted and recreated at the
+same ordinal (rolling update, eviction, manual `kubectl delete pod`, node drain)
+re-adopts the identical `ComputeAddress`, so:
+
+- the external/anycast IP does **not** change, and
+- the load balancer is **not** rebuilt (no multi-minute GCP propagation).
+
+Resources are released only on a genuine **scale-down** (the ordinal moves out
+of `spec.replicas` range) or **GameServerSet deletion**. The Passthrough Service
+and KCC CRs are owner-referenced to the GameServerSet (so Kubernetes GC reaps
+them when the GSS is deleted); the per-replica scale-down case is handled
+explicitly in the plugin's `OnPodDeleted`.
+
+With `RetainOnDelete=true` the owner reference is dropped entirely, so the
+reserved IP and load balancer survive even GameServerSet deletion (you then
+manage their lifecycle yourself).
+
+## Disabling a single GameServer's network
+
+To drain external traffic from one replica without deleting it, set
+`spec.networkDisabled: true` on the **GameServer** object (not a Pod label — the
+GameServer controller continuously reconciles the Pod label from the GameServer
+spec, so a direct Pod-label edit is reverted):
+
+```bash
+kubectl patch gameserver <gs-name> --type=merge -p '{"spec":{"networkDisabled":true}}'
+```
+
+The plugin flips the Service to `ClusterIP` (tearing down the LB) while keeping
+the reserved IP; set it back to `false` to re-attach the LB to the same IP.
+
+## Health-check latency tuning (GlobalProxyNLB)
+
+Backend health-check timing is exposed via `NetworkConf`. Defaults
+(`HealthCheckIntervalSec=5`, `UnhealthyThreshold=2`) detect a dead backend in
+~30-40s including GFE state propagation. For faster failure detection:
+
+```yaml
+networkConf:
+- {name: HealthCheckIntervalSec, value: "2"}
+- {name: HealthCheckTimeoutSec, value: "2"}
+- {name: UnhealthyThreshold, value: "1"}
+- {name: HealthyThreshold, value: "1"}
+```
+
+This brings detection down to ~15s. GCP's minimum check interval is 1s, but
+global GFE propagation sets a practical floor around 10-15s.
+
 ## Limitations
 
 - **Global Proxy NLB is TCP-only**; UDP must use the Passthrough plugin.

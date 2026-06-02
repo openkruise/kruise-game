@@ -294,26 +294,31 @@ func (p *GlobalProxyNlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ct
 		return out, cperrors.ToPluginError(err, cperrors.InternalError)
 	}
 
-	// Mark GSS deletion on the pod so OnPodDeleted has a non-racy signal.
+	// Resolve the owning GameServerSet — the stable anchor for resourceID
+	// (so the anycast IP + KCC graph survive Pod recreate) and OwnerReference.
 	gssName := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]
-	if gssName != "" {
-		gss := &gamekruiseiov1alpha1.GameServerSet{}
-		gerr := c.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: gssName}, gss)
-		if gerr == nil && gss.DeletionTimestamp != nil {
-			if pod.Labels == nil {
-				pod.Labels = map[string]string{}
-			}
-			if _, ok := pod.Labels[GssDeletingLabelKey]; !ok {
-				pod.Labels[GssDeletingLabelKey] = "true"
-				return pod, nil
-			}
+	gss := &gamekruiseiov1alpha1.GameServerSet{}
+	gssErr := c.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: gssName}, gss)
+	if gssErr == nil && gss.DeletionTimestamp != nil {
+		if pod.Labels == nil {
+			pod.Labels = map[string]string{}
 		}
+		if _, ok := pod.Labels[GssDeletingLabelKey]; !ok {
+			pod.Labels[GssDeletingLabelKey] = "true"
+			return pod, nil
+		}
+	}
+	ordinal := util.GetIndexFromGsName(pod.Name)
+	var gssRef *metav1.OwnerReference
+	if !cfg.RetainOnDelete && gssErr == nil {
+		o := gssOwnerRef(gss)
+		gssRef = &o
 	}
 
 	// (1) Ensure the per-pod Service + NEG annotation. The GKE NEG controller
 	// reads the annotation and creates per-zone NEGs targeting Pod IP:port.
 	svcName := DeriveServiceName(pod.Name, proxySuffix)
-	svc, serr := p.ensureService(ctx, c, pod, cfg, svcName)
+	svc, serr := p.ensureService(ctx, c, pod, cfg, svcName, gss.GetUID(), ordinal, gssRef)
 	if serr != nil {
 		return pod, cperrors.ToPluginError(serr, cperrors.ApiCallError)
 	}
@@ -330,23 +335,27 @@ func (p *GlobalProxyNlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ct
 		return out, cperrors.ToPluginError(uerr, cperrors.InternalError)
 	}
 
-	// (2) Reconcile KCC graph in dependency order.
-	hcName := DeriveResourceID(pod.UID, "gpnlb-hc")
-	besName := DeriveResourceID(pod.UID, "gpnlb-bes")
-	tcpProxyName := DeriveResourceID(pod.UID, "gpnlb-tp")
-	addrName := DeriveResourceID(pod.UID, "gpnlb-addr")
-	frName := DeriveResourceID(pod.UID, "gpnlb-fr")
-	fwName := DeriveResourceID(pod.UID, "gpnlb-fw")
+	// (2) Reconcile KCC graph in dependency order. Names anchored on GSS+ordinal.
+	hcName := DeriveStableResourceID(gss.GetUID(), ordinal, "gpnlb-hc")
+	besName := DeriveStableResourceID(gss.GetUID(), ordinal, "gpnlb-bes")
+	tcpProxyName := DeriveStableResourceID(gss.GetUID(), ordinal, "gpnlb-tp")
+	addrName := DeriveStableResourceID(gss.GetUID(), ordinal, "gpnlb-addr")
+	frName := DeriveStableResourceID(gss.GetUID(), ordinal, "gpnlb-fr")
+	fwName := DeriveStableResourceID(gss.GetUID(), ordinal, "gpnlb-fw")
 
 	kccClient := p.kccClient(c)
-	if perr := p.ensureHealthCheck(ctx, kccClient, pod, cfg, hcName); perr != nil {
+	if perr := p.ensureHealthCheck(ctx, kccClient, pod, cfg, hcName, gssRef); perr != nil {
 		return pod, cperrors.ToPluginError(perr, cperrors.ApiCallError)
 	}
-	if perr := p.ensureBackendService(ctx, kccClient, pod, cfg, besName, hcName, thisPortNEGs); perr != nil {
+	if perr := p.ensureBackendService(ctx, kccClient, pod, cfg, besName, hcName, thisPortNEGs, gssRef); perr != nil {
 		return pod, cperrors.ToPluginError(perr, cperrors.ApiCallError)
 	}
-	if perr := p.ensureTargetTCPProxy(ctx, kccClient, pod, cfg, tcpProxyName, besName); perr != nil {
+	if perr := p.ensureTargetTCPProxy(ctx, kccClient, pod, cfg, tcpProxyName, besName, gssRef); perr != nil {
 		return pod, cperrors.ToPluginError(perr, cperrors.ApiCallError)
+	}
+	var addrOwners []metav1.OwnerReference
+	if gssRef != nil {
+		addrOwners = []metav1.OwnerReference{*gssRef}
 	}
 	if _, aerr := EnsureComputeAddress(ctx, kccClient, AddressSpec{
 		Name:        addrName,
@@ -356,14 +365,14 @@ func (p *GlobalProxyNlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ct
 		NetworkTier: "PREMIUM",
 		ProjectID:   cfg.ProjectID,
 		ResourceID:  addrName,
-		OwnerRefs:   []metav1.OwnerReference{podOwnerRef(pod)},
+		OwnerRefs:   addrOwners,
 	}); aerr != nil {
 		return pod, cperrors.ToPluginError(aerr, cperrors.ApiCallError)
 	}
-	if perr := p.ensureForwardingRule(ctx, kccClient, pod, cfg, frName, tcpProxyName, addrName); perr != nil {
+	if perr := p.ensureForwardingRule(ctx, kccClient, pod, cfg, frName, tcpProxyName, addrName, gssRef); perr != nil {
 		return pod, cperrors.ToPluginError(perr, cperrors.ApiCallError)
 	}
-	if perr := p.ensureFirewall(ctx, kccClient, pod, cfg, fwName); perr != nil {
+	if perr := p.ensureFirewall(ctx, kccClient, pod, cfg, fwName, gssRef); perr != nil {
 		return pod, cperrors.ToPluginError(perr, cperrors.ApiCallError)
 	}
 
@@ -410,13 +419,29 @@ func (p *GlobalProxyNlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ct
 		return RemovePodFinalizerPlugin(ctx, c, pod)
 	}
 
+	gssName := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]
+	gssDeleting := pod.Labels[GssDeletingLabelKey] == "true"
+	if !gssDeleting && !shouldReleaseSlot(ctx, c, pod.Namespace, gssName, pod.Name) {
+		// Transient recreate at an in-range ordinal — keep the anycast IP + KCC
+		// graph so the new Pod re-adopts them; just release the Pod.
+		log.Infof("[%s] pod %s/%s recreating at in-range ordinal; preserving anycast IP + KCC graph",
+			GlobalProxyNlbNetwork, pod.Namespace, pod.Name)
+		return RemovePodFinalizerPlugin(ctx, c, pod)
+	}
+
+	// Resolve the GSS UID to rebuild the stable resource names. If the GSS is
+	// already gone we fall back to a zero UID — the names won't match live CRs,
+	// but the owner-reference GC will reap them when the GSS was deleted.
+	gss := &gamekruiseiov1alpha1.GameServerSet{}
+	_ = c.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: gssName}, gss)
+	ordinal := util.GetIndexFromGsName(pod.Name)
 	svcName := DeriveServiceName(pod.Name, proxySuffix)
-	hcName := DeriveResourceID(pod.UID, "gpnlb-hc")
-	besName := DeriveResourceID(pod.UID, "gpnlb-bes")
-	tcpProxyName := DeriveResourceID(pod.UID, "gpnlb-tp")
-	addrName := DeriveResourceID(pod.UID, "gpnlb-addr")
-	frName := DeriveResourceID(pod.UID, "gpnlb-fr")
-	fwName := DeriveResourceID(pod.UID, "gpnlb-fw")
+	hcName := DeriveStableResourceID(gss.GetUID(), ordinal, "gpnlb-hc")
+	besName := DeriveStableResourceID(gss.GetUID(), ordinal, "gpnlb-bes")
+	tcpProxyName := DeriveStableResourceID(gss.GetUID(), ordinal, "gpnlb-tp")
+	addrName := DeriveStableResourceID(gss.GetUID(), ordinal, "gpnlb-addr")
+	frName := DeriveStableResourceID(gss.GetUID(), ordinal, "gpnlb-fr")
+	fwName := DeriveStableResourceID(gss.GetUID(), ordinal, "gpnlb-fw")
 
 	// Delete in reverse dependency order. Errors other than NotFound surface
 	// as RetryError so the controller revisits.
@@ -445,8 +470,8 @@ func (p *GlobalProxyNlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ct
 
 // ensureService creates the ClusterIP Service that carries the cloud.google.com/neg
 // annotation. The GKE NEG controller reacts and publishes zonal NEGs.
-func (p *GlobalProxyNlbPlugin) ensureService(ctx context.Context, c client.Client, pod *corev1.Pod, cfg *proxyConfig, svcName string) (*corev1.Service, error) {
-	negName := DeriveResourceID(pod.UID, fmt.Sprintf("neg-%d", cfg.Port))
+func (p *GlobalProxyNlbPlugin) ensureService(ctx context.Context, c client.Client, pod *corev1.Pod, cfg *proxyConfig, svcName string, gssUID types.UID, ordinal int, owner *metav1.OwnerReference) (*corev1.Service, error) {
+	negName := DeriveStableResourceID(gssUID, ordinal, fmt.Sprintf("neg-%d", cfg.Port))
 	annValue, _ := json.Marshal(map[string]any{
 		"exposed_ports": map[string]any{
 			strconv.Itoa(cfg.Port): map[string]string{"name": negName},
@@ -478,8 +503,8 @@ func (p *GlobalProxyNlbPlugin) ensureService(ctx context.Context, c client.Clien
 			TargetPort: intstr.FromInt(cfg.Port),
 			Protocol:   corev1.ProtocolTCP,
 		}}
-		if !cfg.RetainOnDelete {
-			svc.OwnerReferences = []metav1.OwnerReference{podOwnerRef(pod)}
+		if owner != nil {
+			svc.OwnerReferences = []metav1.OwnerReference{*owner}
 		}
 		return nil
 	}
@@ -489,10 +514,10 @@ func (p *GlobalProxyNlbPlugin) ensureService(ctx context.Context, c client.Clien
 	return svc, nil
 }
 
-func (p *GlobalProxyNlbPlugin) ensureHealthCheck(ctx context.Context, c client.Client, pod *corev1.Pod, cfg *proxyConfig, name string) error {
+func (p *GlobalProxyNlbPlugin) ensureHealthCheck(ctx context.Context, c client.Client, pod *corev1.Pod, cfg *proxyConfig, name string, owner *metav1.OwnerReference) error {
 	hc := &gcpv1beta1.ComputeHealthCheck{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: pod.Namespace}}
 	mutate := func() error {
-		applyProjectAndOwner(hc, cfg.ProjectID, pod, cfg.RetainOnDelete)
+		applyProjectAndOwner(hc, cfg.ProjectID, pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey], owner)
 		hc.Spec.Location = "global"
 		hc.Spec.ResourceID = ptr.To(name)
 		hc.Spec.CheckIntervalSec = ptr.To(cfg.HealthCheckIntervalSec)
@@ -509,10 +534,10 @@ func (p *GlobalProxyNlbPlugin) ensureHealthCheck(ctx context.Context, c client.C
 	return err
 }
 
-func (p *GlobalProxyNlbPlugin) ensureBackendService(ctx context.Context, c client.Client, pod *corev1.Pod, cfg *proxyConfig, name, hcName string, negs []NEGRef) error {
+func (p *GlobalProxyNlbPlugin) ensureBackendService(ctx context.Context, c client.Client, pod *corev1.Pod, cfg *proxyConfig, name, hcName string, negs []NEGRef, owner *metav1.OwnerReference) error {
 	bes := &gcpv1beta1.ComputeBackendService{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: pod.Namespace}}
 	mutate := func() error {
-		applyProjectAndOwner(bes, cfg.ProjectID, pod, cfg.RetainOnDelete)
+		applyProjectAndOwner(bes, cfg.ProjectID, pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey], owner)
 		bes.Spec.Location = "global"
 		bes.Spec.ResourceID = ptr.To(name)
 		bes.Spec.Protocol = ptr.To("TCP")
@@ -544,10 +569,10 @@ func (p *GlobalProxyNlbPlugin) ensureBackendService(ctx context.Context, c clien
 	return err
 }
 
-func (p *GlobalProxyNlbPlugin) ensureTargetTCPProxy(ctx context.Context, c client.Client, pod *corev1.Pod, cfg *proxyConfig, name, besName string) error {
+func (p *GlobalProxyNlbPlugin) ensureTargetTCPProxy(ctx context.Context, c client.Client, pod *corev1.Pod, cfg *proxyConfig, name, besName string, owner *metav1.OwnerReference) error {
 	tp := &gcpv1beta1.ComputeTargetTCPProxy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: pod.Namespace}}
 	mutate := func() error {
-		applyProjectAndOwner(tp, cfg.ProjectID, pod, cfg.RetainOnDelete)
+		applyProjectAndOwner(tp, cfg.ProjectID, pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey], owner)
 		tp.Spec.ResourceID = ptr.To(name)
 		tp.Spec.BackendServiceRef = gcpv1beta1.ResourceRef{Name: besName}
 		tp.Spec.ProxyHeader = ptr.To(cfg.ProxyHeader)
@@ -557,10 +582,10 @@ func (p *GlobalProxyNlbPlugin) ensureTargetTCPProxy(ctx context.Context, c clien
 	return err
 }
 
-func (p *GlobalProxyNlbPlugin) ensureForwardingRule(ctx context.Context, c client.Client, pod *corev1.Pod, cfg *proxyConfig, name, tpName, addrName string) error {
+func (p *GlobalProxyNlbPlugin) ensureForwardingRule(ctx context.Context, c client.Client, pod *corev1.Pod, cfg *proxyConfig, name, tpName, addrName string, owner *metav1.OwnerReference) error {
 	fr := &gcpv1beta1.ComputeForwardingRule{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: pod.Namespace}}
 	mutate := func() error {
-		applyProjectAndOwner(fr, cfg.ProjectID, pod, cfg.RetainOnDelete)
+		applyProjectAndOwner(fr, cfg.ProjectID, pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey], owner)
 		fr.Spec.Location = "global"
 		fr.Spec.ResourceID = ptr.To(name)
 		fr.Spec.LoadBalancingScheme = ptr.To("EXTERNAL_MANAGED")
@@ -582,10 +607,10 @@ func (p *GlobalProxyNlbPlugin) ensureForwardingRule(ctx context.Context, c clien
 	return err
 }
 
-func (p *GlobalProxyNlbPlugin) ensureFirewall(ctx context.Context, c client.Client, pod *corev1.Pod, cfg *proxyConfig, name string) error {
+func (p *GlobalProxyNlbPlugin) ensureFirewall(ctx context.Context, c client.Client, pod *corev1.Pod, cfg *proxyConfig, name string, owner *metav1.OwnerReference) error {
 	fw := &gcpv1beta1.ComputeFirewall{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: pod.Namespace}}
 	mutate := func() error {
-		applyProjectAndOwner(fw, cfg.ProjectID, pod, cfg.RetainOnDelete)
+		applyProjectAndOwner(fw, cfg.ProjectID, pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey], owner)
 		fw.Spec.ResourceID = ptr.To(name)
 		fw.Spec.Direction = ptr.To("INGRESS")
 		fw.Spec.Priority = ptr.To(int64(1000))
@@ -659,15 +684,16 @@ func (p *GlobalProxyNlbPlugin) checkReady(ctx context.Context, c client.Client, 
 }
 
 // applyProjectAndOwner stamps the project-id annotation, managed-by label, and
-// optionally a Pod OwnerReference on a KCC CR.
-func applyProjectAndOwner(obj client.Object, projectID string, pod *corev1.Pod, retain bool) {
+// (when owner != nil) the GameServerSet OwnerReference on a KCC CR. Anchoring
+// on the GSS keeps the resource alive across Pod recreate; owner is nil when
+// RetainOnDelete=true so the resource outlives even the GSS.
+func applyProjectAndOwner(obj client.Object, projectID, gssName string, owner *metav1.OwnerReference) {
 	labels := obj.GetLabels()
 	if labels == nil {
 		labels = map[string]string{}
 	}
 	labels[ResourceTagKey] = ResourceTagValue
-	labels[gamekruiseiov1alpha1.GameServerOwnerGssKey] =
-		pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]
+	labels[gamekruiseiov1alpha1.GameServerOwnerGssKey] = gssName
 	obj.SetLabels(labels)
 	if projectID != "" {
 		anns := obj.GetAnnotations()
@@ -677,8 +703,8 @@ func applyProjectAndOwner(obj client.Object, projectID string, pod *corev1.Pod, 
 		anns[ProjectIDAnnotation] = projectID
 		obj.SetAnnotations(anns)
 	}
-	if !retain {
-		obj.SetOwnerReferences([]metav1.OwnerReference{podOwnerRef(pod)})
+	if owner != nil {
+		obj.SetOwnerReferences([]metav1.OwnerReference{*owner})
 	}
 }
 

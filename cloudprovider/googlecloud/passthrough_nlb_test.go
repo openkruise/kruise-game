@@ -310,7 +310,7 @@ func TestEnsureService_ExternalAnnotations(t *testing.T) {
 		t.Fatalf("parseConfig: %v", err)
 	}
 	pod := newGamePod("gs-0", "ns1", nil)
-	svc, err := plugin.ensureService(context.Background(), cli, pod, cfg, "gs-0-svc", "gs-0-addr", "", false)
+	svc, err := plugin.ensureService(context.Background(), cli, pod, cfg, "gs-0-svc", "gs-0-addr", "", false, nil)
 	if err != nil {
 		t.Fatalf("ensureService: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestEnsureService_InternalAnnotations(t *testing.T) {
 		t.Fatalf("parseConfig: %v", err)
 	}
 	pod := newGamePod("gs-0", "ns1", nil)
-	svc, err := plugin.ensureService(context.Background(), cli, pod, cfg, "gs-0-svc", "gs-0-addr", "", false)
+	svc, err := plugin.ensureService(context.Background(), cli, pod, cfg, "gs-0-svc", "gs-0-addr", "", false, nil)
 	if err != nil {
 		t.Fatalf("ensureService: %v", err)
 	}

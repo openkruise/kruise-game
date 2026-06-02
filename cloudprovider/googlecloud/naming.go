@@ -42,6 +42,28 @@ func DeriveResourceID(uid types.UID, suffix string) string {
 	return strings.TrimRight(out, "-")
 }
 
+// DeriveStableResourceID returns a deterministic GCP resource name that is
+// STABLE across Pod recreation. It is keyed on the owning GameServerSet UID
+// plus the replica ordinal rather than the Pod UID, so a Pod that is deleted
+// and recreated at the same ordinal (rolling update, eviction, manual delete)
+// re-adopts the identical GCP resource — keeping its reserved IP and avoiding
+// a multi-minute LB rebuild.
+//
+// GSS UID + ordinal is robust regardless of GameServerTemplate.ReclaimPolicy:
+// under Cascade the GameServer object is owner-ref'd to the Pod and churns on
+// recreate, so anchoring on it would not be stable; the GSS UID never changes
+// for the life of the workload.
+func DeriveStableResourceID(gssUID types.UID, ordinal int, suffix string) string {
+	sum := sha1.Sum([]byte(fmt.Sprintf("%s-%d", gssUID, ordinal)))
+	hash := hex.EncodeToString(sum[:5]) // 10 hex chars
+	suffix = sanitizeSuffix(suffix)
+	out := fmt.Sprintf("gs-%s-%s", suffix, hash)
+	if len(out) > 63 {
+		out = out[:63]
+	}
+	return strings.TrimRight(out, "-")
+}
+
 // DeriveServiceName returns the K8s Service name a plugin uses for a given pod.
 // Single Service per pod, suffixed by the plugin nickname so passthrough and
 // proxy plugins on the same pod do not collide.

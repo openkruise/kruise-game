@@ -284,35 +284,39 @@ func (p *PassthroughNlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ct
 		return out, cperrors.ToPluginError(err, cperrors.InternalError)
 	}
 
-	// Track GSS-deleting on the Pod so OnPodDeleted has a non-racy signal.
+	// Resolve the owning GameServerSet once. It is the stable anchor for both
+	// the resourceID (so the reserved IP survives Pod recreate) and the
+	// OwnerReference (so cleanup is tied to the workload, not the Pod).
 	gssName := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]
-	if gssName != "" {
-		gss := &gamekruiseiov1alpha1.GameServerSet{}
-		gerr := c.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: gssName}, gss)
-		if gerr == nil && gss.DeletionTimestamp != nil {
-			if pod.Labels == nil {
-				pod.Labels = map[string]string{}
-			}
-			if _, ok := pod.Labels[GssDeletingLabelKey]; !ok {
-				pod.Labels[GssDeletingLabelKey] = "true"
-				return pod, nil
-			}
+	gss := &gamekruiseiov1alpha1.GameServerSet{}
+	gssErr := c.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: gssName}, gss)
+	if gssErr == nil && gss.DeletionTimestamp != nil {
+		// GSS being deleted — flag the Pod so OnPodDeleted has a non-racy signal.
+		if pod.Labels == nil {
+			pod.Labels = map[string]string{}
+		}
+		if _, ok := pod.Labels[GssDeletingLabelKey]; !ok {
+			pod.Labels[GssDeletingLabelKey] = "true"
+			return pod, nil
 		}
 	}
 
-	addrName := DeriveServiceName(pod.Name, passthroughSuffix) // reuse short pod-anchored name
-	addrResourceID := DeriveResourceID(pod.UID, "pnlb-addr")
+	ordinal := util.GetIndexFromGsName(pod.Name)
+	addrName := DeriveServiceName(pod.Name, passthroughSuffix) // K8s metadata.name, stable per ordinal
+	// GCP-side resourceID is anchored on GSS UID + ordinal so a Pod recreate
+	// re-adopts the same reserved IP instead of allocating a fresh one.
+	addrResourceID := DeriveStableResourceID(gss.GetUID(), ordinal, "pnlb-addr")
 	addrType := "EXTERNAL"
 	if cfg.Scheme == SchemeInternal {
 		addrType = "INTERNAL"
 	}
 	// Use non-caching client for KCC CRs (cached client would block on missing informer).
 	kccClient := p.kccClient(c)
-	addrOwners := []metav1.OwnerReference{podOwnerRef(pod)}
-	if cfg.RetainOnDelete {
-		// With Retain semantics, drop the Pod ownerRef so the reserved IP
-		// survives Pod tear-down and can be re-bound on re-create.
-		addrOwners = nil
+	// Anchor ownership on the GSS (survives Pod recreate). With RetainOnDelete
+	// drop the owner entirely so the IP outlives even GSS deletion.
+	var addrOwners []metav1.OwnerReference
+	if !cfg.RetainOnDelete && gssErr == nil {
+		addrOwners = []metav1.OwnerReference{gssOwnerRef(gss)}
 	}
 	if _, aerr := EnsureComputeAddress(ctx, kccClient, AddressSpec{
 		Name:          addrName,
@@ -348,7 +352,12 @@ func (p *PassthroughNlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ct
 	// Pass the disable state in so ensureService doesn't re-assert
 	// Type=LoadBalancer on every reconcile and clobber a deliberate disable.
 	disabled := nm.GetNetworkDisabled()
-	svc, serr := p.ensureService(ctx, c, pod, cfg, svcName, addrResourceID, addrIP, disabled)
+	var svcOwner *metav1.OwnerReference
+	if gssErr == nil {
+		o := gssOwnerRef(gss)
+		svcOwner = &o
+	}
+	svc, serr := p.ensureService(ctx, c, pod, cfg, svcName, addrResourceID, addrIP, disabled, svcOwner)
 	if serr != nil {
 		return pod, cperrors.ToPluginError(serr, cperrors.ApiCallError)
 	}
@@ -412,8 +421,9 @@ func (p *PassthroughNlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ct
 	return out, cperrors.ToPluginError(uerr, cperrors.InternalError)
 }
 
-// OnPodDeleted runs when the pod is being torn down. With RetainOnDelete=false
-// we remove the per-pod ComputeAddress and our Finalizer.
+// OnPodDeleted runs when the pod is being torn down. Resources are released
+// only on a genuine scale-down or GSS deletion; a transient Pod recreate at an
+// in-range ordinal keeps the reserved IP + LB so the new Pod re-adopts them.
 func (p *PassthroughNlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx context.Context) cperrors.PluginError {
 	nm := utils.NewNetworkManager(pod, c)
 	if nm == nil {
@@ -429,8 +439,20 @@ func (p *PassthroughNlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ct
 		return RemovePodFinalizerPlugin(ctx, c, pod)
 	}
 
-	// Delete the per-pod Service first (the GKE LB controller deletes the FR
-	// chain when the Service goes away), then the ComputeAddress.
+	gssName := pod.GetLabels()[gamekruiseiov1alpha1.GameServerOwnerGssKey]
+	// GssDeletingLabelKey is set by OnPodUpdated when the GSS entered deletion;
+	// treat it as an immediate release signal (avoids a GSS-get race here).
+	gssDeleting := pod.Labels[GssDeletingLabelKey] == "true"
+	if !gssDeleting && !shouldReleaseSlot(ctx, c, pod.Namespace, gssName, pod.Name) {
+		// Transient recreate at an in-range ordinal — keep resources, just let
+		// the Pod finish deleting.
+		log.Infof("[%s] pod %s/%s recreating at in-range ordinal; preserving reserved IP + LB",
+			PassthroughNlbNetwork, pod.Namespace, pod.Name)
+		return RemovePodFinalizerPlugin(ctx, c, pod)
+	}
+
+	// Genuine release: delete the per-pod Service first (the GKE LB controller
+	// tears down the FR chain when the Service goes away), then the ComputeAddress.
 	svcName := DeriveServiceName(pod.Name, passthroughSuffix)
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: svcName, Namespace: pod.Namespace}}
 	if derr := c.Delete(ctx, svc); derr != nil && !apierrors.IsNotFound(derr) {
@@ -443,6 +465,8 @@ func (p *PassthroughNlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ct
 		log.Errorf("[%s] delete ComputeAddress %s/%s: %v", PassthroughNlbNetwork, pod.Namespace, addrName, derr)
 		return cperrors.ToPluginError(derr, cperrors.ApiCallError)
 	}
+	log.Infof("[%s] released GCP resources for pod %s/%s (scale-down or GSS deletion)",
+		PassthroughNlbNetwork, pod.Namespace, pod.Name)
 	return RemovePodFinalizerPlugin(ctx, c, pod)
 }
 
@@ -457,7 +481,7 @@ func (p *PassthroughNlbPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ct
 //
 // disabled=true sets the Service to ClusterIP (no LB), giving operators a way
 // to drain a pod's external traffic without deleting the GameServer.
-func (p *PassthroughNlbPlugin) ensureService(ctx context.Context, c client.Client, pod *corev1.Pod, cfg *passthroughConfig, svcName, addrGCPName, addrIPValue string, disabled bool) (*corev1.Service, error) {
+func (p *PassthroughNlbPlugin) ensureService(ctx context.Context, c client.Client, pod *corev1.Pod, cfg *passthroughConfig, svcName, addrGCPName, addrIPValue string, disabled bool, svcOwner *metav1.OwnerReference) (*corev1.Service, error) {
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: svcName, Namespace: pod.Namespace}}
 	mutate := func() error {
 		if svc.Labels == nil {
@@ -525,11 +549,12 @@ func (p *PassthroughNlbPlugin) ensureService(ctx context.Context, c client.Clien
 		}
 		svc.Spec.Ports = ports
 
-		// OwnerReference cascades the Service delete with the Pod when
-		// RetainOnDelete=false (typical case). For RetainOnDelete=true we drop
-		// the owner so the Service survives the Pod and the user manages it.
-		if !cfg.RetainOnDelete {
-			svc.OwnerReferences = []metav1.OwnerReference{podOwnerRef(pod)}
+		// OwnerReference is anchored on the GameServerSet (not the Pod) so the
+		// Service — and the GKE-managed LB behind it — survives a Pod recreate.
+		// Cleanup on scale-down / GSS deletion is explicit (OnPodDeleted).
+		// RetainOnDelete=true drops the owner so the Service outlives even the GSS.
+		if !cfg.RetainOnDelete && svcOwner != nil {
+			svc.OwnerReferences = []metav1.OwnerReference{*svcOwner}
 		}
 		return nil
 	}
@@ -547,16 +572,6 @@ func RemovePodFinalizerPlugin(ctx context.Context, c client.Client, pod *corev1.
 		return cperrors.ToPluginError(err, cperrors.ApiCallError)
 	}
 	return nil
-}
-
-func podOwnerRef(pod *corev1.Pod) metav1.OwnerReference {
-	return metav1.OwnerReference{
-		APIVersion:         pod.APIVersion,
-		Kind:               pod.Kind,
-		Name:               pod.Name,
-		UID:                pod.UID,
-		BlockOwnerDeletion: ptr.To(true),
-	}
 }
 
 // kccClient returns the non-caching API client when Init has populated it,

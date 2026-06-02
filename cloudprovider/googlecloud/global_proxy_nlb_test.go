@@ -102,7 +102,7 @@ func TestEnsureService_NEGAnnotationShape(t *testing.T) {
 		t.Fatalf("parseConfig: %v", err)
 	}
 	pod := newGamePod("gs-0", "ns1", nil)
-	svc, err := p.ensureService(context.Background(), cli, pod, cfg, "gs-0-svc")
+	svc, err := p.ensureService(context.Background(), cli, pod, cfg, "gs-0-svc", pod.UID, 0, nil)
 	if err != nil {
 		t.Fatalf("ensureService: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestEnsureHealthCheck_GlobalUSEServingPort(t *testing.T) {
 	p := newProxyPlugin(t)
 	cfg, _ := p.parseConfig([]gamekruiseiov1alpha1.NetworkConfParams{confEntry("Port", "7777")})
 	pod := newGamePod("gs-0", "ns1", nil)
-	if err := p.ensureHealthCheck(context.Background(), cli, pod, cfg, "hc-0"); err != nil {
+	if err := p.ensureHealthCheck(context.Background(), cli, pod, cfg, "hc-0", nil); err != nil {
 		t.Fatalf("ensureHealthCheck: %v", err)
 	}
 	hc := &gcpv1beta1.ComputeHealthCheck{}
@@ -163,7 +163,7 @@ func TestEnsureBackendService_NEGSorted(t *testing.T) {
 		{Name: "neg-x", Zone: "us-central1-a"},
 		{Name: "neg-x", Zone: "us-central1-b"},
 	}
-	if err := p.ensureBackendService(context.Background(), cli, pod, cfg, "bes-0", "hc-0", negs); err != nil {
+	if err := p.ensureBackendService(context.Background(), cli, pod, cfg, "bes-0", "hc-0", negs, nil); err != nil {
 		t.Fatalf("ensureBackendService: %v", err)
 	}
 	bes := &gcpv1beta1.ComputeBackendService{}
@@ -197,7 +197,7 @@ func TestEnsureTargetTCPProxy_ProxyHeader(t *testing.T) {
 		confEntry("ProxyHeader", "PROXY_V1"),
 	})
 	pod := newGamePod("gs-0", "ns1", nil)
-	if err := p.ensureTargetTCPProxy(context.Background(), cli, pod, cfg, "tp-0", "bes-0"); err != nil {
+	if err := p.ensureTargetTCPProxy(context.Background(), cli, pod, cfg, "tp-0", "bes-0", nil); err != nil {
 		t.Fatalf("ensureTargetTCPProxy: %v", err)
 	}
 	tp := &gcpv1beta1.ComputeTargetTCPProxy{}
@@ -218,7 +218,7 @@ func TestEnsureForwardingRule_SinglePortPremium(t *testing.T) {
 	p := newProxyPlugin(t)
 	cfg, _ := p.parseConfig([]gamekruiseiov1alpha1.NetworkConfParams{confEntry("Port", "7777")})
 	pod := newGamePod("gs-0", "ns1", nil)
-	if err := p.ensureForwardingRule(context.Background(), cli, pod, cfg, "fr-0", "tp-0", "addr-0"); err != nil {
+	if err := p.ensureForwardingRule(context.Background(), cli, pod, cfg, "fr-0", "tp-0", "addr-0", nil); err != nil {
 		t.Fatalf("ensureForwardingRule: %v", err)
 	}
 	fr := &gcpv1beta1.ComputeForwardingRule{}
@@ -246,7 +246,7 @@ func TestEnsureFirewall_HCRangesAndPort(t *testing.T) {
 	p := newProxyPlugin(t)
 	cfg, _ := p.parseConfig([]gamekruiseiov1alpha1.NetworkConfParams{confEntry("Port", "7777")})
 	pod := newGamePod("gs-0", "ns1", nil)
-	if err := p.ensureFirewall(context.Background(), cli, pod, cfg, "fw-0"); err != nil {
+	if err := p.ensureFirewall(context.Background(), cli, pod, cfg, "fw-0", nil); err != nil {
 		t.Fatalf("ensureFirewall: %v", err)
 	}
 	fw := &gcpv1beta1.ComputeFirewall{}
