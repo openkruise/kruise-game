@@ -48,3 +48,8 @@ log_debug
 
 # Local issue tracking
 问题/
+
+# controller-gen emits a degenerate empty-group CRD (_.yaml) for the hand-written
+# external Config Connector bindings under cloudprovider/googlecloud/apis; it is
+# never shipped (config/crd/kustomization.yaml lists resources explicitly).
+config/crd/bases/_.yaml

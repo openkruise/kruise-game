@@ -17,6 +17,10 @@ You may obtain a copy of the License at
 // schema needs to match what KCC's installed CRDs expect; field selection here
 // covers exactly what the Passthrough and GlobalProxy NLB plugins read/write.
 //
-// +kubebuilder:object:generate=true
-// +groupName=compute.cnrm.cloud.google.com
+// These are bindings for CRDs OWNED by Config Connector — kruise-game must never
+// generate or install them. The package is therefore deliberately kept out of
+// controller-gen: no +kubebuilder:object:generate / +groupName / +object:root
+// markers, and the runtime.Object plumbing (DeepCopy/DeepCopyObject) is
+// hand-written in zz_generated.deepcopy.go. Scheme registration is manual in
+// register.go.
 package v1beta1

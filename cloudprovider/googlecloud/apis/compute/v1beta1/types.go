@@ -43,7 +43,6 @@ type Condition struct {
 // -----------------------------------------------------------------------------
 
 // ComputeAddress represents a Compute Engine reserved IP address.
-// +kubebuilder:object:root=true
 type ComputeAddress struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -53,7 +52,6 @@ type ComputeAddress struct {
 }
 
 // ComputeAddressList is a list of ComputeAddress.
-// +kubebuilder:object:root=true
 type ComputeAddressList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
@@ -104,7 +102,6 @@ type ComputeAddressObservedState struct {
 // -----------------------------------------------------------------------------
 
 // ComputeForwardingRule represents a regional or global compute forwarding rule.
-// +kubebuilder:object:root=true
 type ComputeForwardingRule struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -114,7 +111,6 @@ type ComputeForwardingRule struct {
 }
 
 // ComputeForwardingRuleList is a list of ComputeForwardingRule.
-// +kubebuilder:object:root=true
 type ComputeForwardingRuleList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
@@ -171,7 +167,6 @@ type ComputeForwardingRuleStatus struct {
 // -----------------------------------------------------------------------------
 
 // ComputeBackendService represents a regional or global compute backend service.
-// +kubebuilder:object:root=true
 type ComputeBackendService struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -181,7 +176,6 @@ type ComputeBackendService struct {
 }
 
 // ComputeBackendServiceList is a list of ComputeBackendService.
-// +kubebuilder:object:root=true
 type ComputeBackendServiceList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
@@ -241,7 +235,6 @@ type ComputeBackendServiceStatus struct {
 // -----------------------------------------------------------------------------
 
 // ComputeHealthCheck represents a regional or global compute health check.
-// +kubebuilder:object:root=true
 type ComputeHealthCheck struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -251,7 +244,6 @@ type ComputeHealthCheck struct {
 }
 
 // ComputeHealthCheckList is a list of ComputeHealthCheck.
-// +kubebuilder:object:root=true
 type ComputeHealthCheckList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
@@ -304,7 +296,6 @@ type ComputeHealthCheckStatus struct {
 // -----------------------------------------------------------------------------
 
 // ComputeTargetTCPProxy represents a (global by default) compute target TCP proxy.
-// +kubebuilder:object:root=true
 type ComputeTargetTCPProxy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -314,7 +305,6 @@ type ComputeTargetTCPProxy struct {
 }
 
 // ComputeTargetTCPProxyList is a list of ComputeTargetTCPProxy.
-// +kubebuilder:object:root=true
 type ComputeTargetTCPProxyList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
@@ -345,7 +335,6 @@ type ComputeTargetTCPProxyStatus struct {
 // -----------------------------------------------------------------------------
 
 // ComputeFirewall represents a VPC firewall rule.
-// +kubebuilder:object:root=true
 type ComputeFirewall struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -355,7 +344,6 @@ type ComputeFirewall struct {
 }
 
 // ComputeFirewallList is a list of ComputeFirewall.
-// +kubebuilder:object:root=true
 type ComputeFirewallList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

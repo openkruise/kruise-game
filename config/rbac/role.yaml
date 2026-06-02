@@ -111,29 +111,6 @@ rules:
   - patch
   - update
 - apiGroups:
-  - elbv2.k8s.aws
-  resources:
-  - targetgroupbindings
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - elbv2.services.k8s.aws
-  resources:
-  - listeners
-  - targetgroups
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - compute.cnrm.cloud.google.com
   resources:
   - computeaddresses
@@ -161,6 +138,29 @@ rules:
   - computetargettcpproxies/status
   verbs:
   - get
+- apiGroups:
+  - elbv2.k8s.aws
+  resources:
+  - targetgroupbindings
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - elbv2.services.k8s.aws
+  resources:
+  - listeners
+  - targetgroups
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - game.kruise.io
   resources:
