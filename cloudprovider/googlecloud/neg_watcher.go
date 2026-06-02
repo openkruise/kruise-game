@@ -33,10 +33,11 @@ func (n NEGRef) SelfLink(projectID string) string {
 
 // negStatusAnnotation matches the JSON written into Service annotations by the
 // GKE NEG controller. Shape:
-//   {
-//     "network_endpoint_groups": {"<port>":"<neg-name>"},
-//     "zones": ["us-central1-a","us-central1-b"]
-//   }
+//
+//	{
+//	  "network_endpoint_groups": {"<port>":"<neg-name>"},
+//	  "zones": ["us-central1-a","us-central1-b"]
+//	}
 type negStatusAnnotation struct {
 	NetworkEndpointGroups map[string]string `json:"network_endpoint_groups"`
 	Zones                 []string          `json:"zones"`
@@ -75,4 +76,3 @@ func ParseNEGStatusAnnotation(svc *corev1.Service) (map[int32][]NEGRef, error) {
 	}
 	return out, nil
 }
-

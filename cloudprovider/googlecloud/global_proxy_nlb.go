@@ -271,9 +271,9 @@ func (p *GlobalProxyNlbPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx 
 }
 
 // OnPodUpdated reconciles the full KCC stack. Three-stage gate:
-//   1. Service+NEG annotation present, neg-status published by GKE
-//   2. KCC HC + BES + TargetTCPProxy + Address all Ready
-//   3. ComputeForwardingRule Ready + IP assigned
+//  1. Service+NEG annotation present, neg-status published by GKE
+//  2. KCC HC + BES + TargetTCPProxy + Address all Ready
+//  3. ComputeForwardingRule Ready + IP assigned
 func (p *GlobalProxyNlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
 	nm := utils.NewNetworkManager(pod, c)
 	if nm == nil {

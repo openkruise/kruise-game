@@ -21,27 +21,27 @@ var gcpRegionRegex = regexp.MustCompile(`^[a-z][a-z0-9-]*[a-z0-9]$`)
 //   - GoogleCloud-PassthroughNLB
 //   - GoogleCloud-GlobalProxyNLB
 type GoogleCloudOptions struct {
-	Enable            bool                     `toml:"enable"`
-	ProjectID         string                   `toml:"project_id"`
-	DefaultRegion     string                   `toml:"default_region"`
-	DefaultNetwork    string                   `toml:"default_network"`
-	DefaultSubnetwork string                   `toml:"default_subnetwork"`
-	PassthroughNLB    PassthroughNLBOptions    `toml:"passthrough_nlb"`
-	GlobalProxyNLB    GlobalProxyNLBOptions    `toml:"global_proxy_nlb"`
+	Enable            bool                  `toml:"enable"`
+	ProjectID         string                `toml:"project_id"`
+	DefaultRegion     string                `toml:"default_region"`
+	DefaultNetwork    string                `toml:"default_network"`
+	DefaultSubnetwork string                `toml:"default_subnetwork"`
+	PassthroughNLB    PassthroughNLBOptions `toml:"passthrough_nlb"`
+	GlobalProxyNLB    GlobalProxyNLBOptions `toml:"global_proxy_nlb"`
 }
 
 // PassthroughNLBOptions configures the GoogleCloud-PassthroughNLB plugin.
 type PassthroughNLBOptions struct {
-	Enable                bool   `toml:"enable"`
-	RetainOnDeleteDefault bool   `toml:"retain_on_delete_default"`
+	Enable                bool `toml:"enable"`
+	RetainOnDeleteDefault bool `toml:"retain_on_delete_default"`
 	// NetworkTier is PREMIUM (default) or STANDARD.
 	NetworkTier string `toml:"network_tier"`
 }
 
 // GlobalProxyNLBOptions configures the GoogleCloud-GlobalProxyNLB plugin.
 type GlobalProxyNLBOptions struct {
-	Enable                bool   `toml:"enable"`
-	RetainOnDeleteDefault bool   `toml:"retain_on_delete_default"`
+	Enable                bool `toml:"enable"`
+	RetainOnDeleteDefault bool `toml:"retain_on_delete_default"`
 	// FirewallNetworkRef is the KCC ComputeNetwork name used as networkRef on
 	// the per-pod ComputeFirewall opening up GFE/HC ranges to backend ports.
 	// Empty falls back to DefaultNetwork on the parent struct.

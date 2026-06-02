@@ -73,12 +73,12 @@ const (
 // share these so users can mix-and-match on the same GameServerSet template.
 const (
 	// Shared.
-	ConfRetainOnDelete  = "RetainOnDelete"
-	ConfProjectID       = "ProjectId"
-	ConfNetwork         = "Network"
-	ConfSubnetwork      = "Subnetwork"
-	ConfAnnotations     = "Annotations"
-	ConfAllowNotReady   = "AllowNotReadyContainers"
+	ConfRetainOnDelete = "RetainOnDelete"
+	ConfProjectID      = "ProjectId"
+	ConfNetwork        = "Network"
+	ConfSubnetwork     = "Subnetwork"
+	ConfAnnotations    = "Annotations"
+	ConfAllowNotReady  = "AllowNotReadyContainers"
 
 	// Passthrough-only.
 	ConfRegion            = "Region"
@@ -88,13 +88,13 @@ const (
 	ConfPortProtocols     = "PortProtocols"
 
 	// Proxy-only.
-	ConfPort                  = "Port" // single 1-65535
-	ConfProxyHeader           = "ProxyHeader" // NONE | PROXY_V1
-	ConfHealthCheckIntervalSec = "HealthCheckIntervalSec"
-	ConfHealthCheckTimeoutSec  = "HealthCheckTimeoutSec"
-	ConfHealthyThreshold       = "HealthyThreshold"
-	ConfUnhealthyThreshold     = "UnhealthyThreshold"
-	ConfBalancingMode          = "BalancingMode"
+	ConfPort                      = "Port"        // single 1-65535
+	ConfProxyHeader               = "ProxyHeader" // NONE | PROXY_V1
+	ConfHealthCheckIntervalSec    = "HealthCheckIntervalSec"
+	ConfHealthCheckTimeoutSec     = "HealthCheckTimeoutSec"
+	ConfHealthyThreshold          = "HealthyThreshold"
+	ConfUnhealthyThreshold        = "UnhealthyThreshold"
+	ConfBalancingMode             = "BalancingMode"
 	ConfMaxConnectionsPerEndpoint = "MaxConnectionsPerEndpoint"
 )
 

@@ -470,7 +470,7 @@ func containsFinalizer(list []string, name string) bool {
 	return false
 }
 
-func strPtr(s string) *string { return &s }
+func strPtr(s string) *string  { return &s }
 func int64Ptr2(v int64) *int64 { return &v }
 
 // silence "unused import" if test file is the only consumer of ctrlclient.

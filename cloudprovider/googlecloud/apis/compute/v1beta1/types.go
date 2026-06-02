@@ -86,13 +86,13 @@ type ComputeAddressSpec struct {
 }
 
 type ComputeAddressStatus struct {
-	Conditions         []Condition                 `json:"conditions,omitempty"`
-	CreationTimestamp  *string                     `json:"creationTimestamp,omitempty"`
-	LabelFingerprint   *string                     `json:"labelFingerprint,omitempty"`
-	ObservedGeneration *int64                      `json:"observedGeneration,omitempty"`
+	Conditions         []Condition                  `json:"conditions,omitempty"`
+	CreationTimestamp  *string                      `json:"creationTimestamp,omitempty"`
+	LabelFingerprint   *string                      `json:"labelFingerprint,omitempty"`
+	ObservedGeneration *int64                       `json:"observedGeneration,omitempty"`
 	ObservedState      *ComputeAddressObservedState `json:"observedState,omitempty"`
-	SelfLink           *string                     `json:"selfLink,omitempty"`
-	Users              []string                    `json:"users,omitempty"`
+	SelfLink           *string                      `json:"selfLink,omitempty"`
+	Users              []string                     `json:"users,omitempty"`
 }
 
 type ComputeAddressObservedState struct {
@@ -122,31 +122,31 @@ type ComputeForwardingRuleList struct {
 }
 
 type ComputeForwardingRuleSpec struct {
-	Location          string             `json:"location"`
-	ResourceID        *string            `json:"resourceID,omitempty"`
-	Description       *string            `json:"description,omitempty"`
-	IPProtocol        *string            `json:"ipProtocol,omitempty"`
-	IPVersion         *string            `json:"ipVersion,omitempty"`
-	LoadBalancingScheme *string          `json:"loadBalancingScheme,omitempty"`
-	NetworkTier       *string            `json:"networkTier,omitempty"`
-	PortRange         *string            `json:"portRange,omitempty"`
-	Ports             []string           `json:"ports,omitempty"`
-	AllPorts          *bool              `json:"allPorts,omitempty"`
-	AllowGlobalAccess *bool              `json:"allowGlobalAccess,omitempty"`
-	Target            *ForwardingRuleTarget   `json:"target,omitempty"`
-	BackendServiceRef *ResourceRef       `json:"backendServiceRef,omitempty"`
-	IPAddress         *ForwardingRuleIPAddress `json:"ipAddress,omitempty"`
-	NetworkRef        *ResourceRef       `json:"networkRef,omitempty"`
-	SubnetworkRef     *ResourceRef       `json:"subnetworkRef,omitempty"`
-	ServiceLabel      *string            `json:"serviceLabel,omitempty"`
+	Location            string                   `json:"location"`
+	ResourceID          *string                  `json:"resourceID,omitempty"`
+	Description         *string                  `json:"description,omitempty"`
+	IPProtocol          *string                  `json:"ipProtocol,omitempty"`
+	IPVersion           *string                  `json:"ipVersion,omitempty"`
+	LoadBalancingScheme *string                  `json:"loadBalancingScheme,omitempty"`
+	NetworkTier         *string                  `json:"networkTier,omitempty"`
+	PortRange           *string                  `json:"portRange,omitempty"`
+	Ports               []string                 `json:"ports,omitempty"`
+	AllPorts            *bool                    `json:"allPorts,omitempty"`
+	AllowGlobalAccess   *bool                    `json:"allowGlobalAccess,omitempty"`
+	Target              *ForwardingRuleTarget    `json:"target,omitempty"`
+	BackendServiceRef   *ResourceRef             `json:"backendServiceRef,omitempty"`
+	IPAddress           *ForwardingRuleIPAddress `json:"ipAddress,omitempty"`
+	NetworkRef          *ResourceRef             `json:"networkRef,omitempty"`
+	SubnetworkRef       *ResourceRef             `json:"subnetworkRef,omitempty"`
+	ServiceLabel        *string                  `json:"serviceLabel,omitempty"`
 }
 
 type ForwardingRuleTarget struct {
-	TargetTCPProxyRef *ResourceRef `json:"targetTCPProxyRef,omitempty"`
-	TargetSSLProxyRef *ResourceRef `json:"targetSSLProxyRef,omitempty"`
-	TargetHTTPProxyRef *ResourceRef `json:"targetHTTPProxyRef,omitempty"`
-	TargetHTTPSProxyRef *ResourceRef `json:"targetHTTPSProxyRef,omitempty"`
-	GoogleAPIsBundle  *string      `json:"googleAPIsBundle,omitempty"`
+	TargetTCPProxyRef    *ResourceRef `json:"targetTCPProxyRef,omitempty"`
+	TargetSSLProxyRef    *ResourceRef `json:"targetSSLProxyRef,omitempty"`
+	TargetHTTPProxyRef   *ResourceRef `json:"targetHTTPProxyRef,omitempty"`
+	TargetHTTPSProxyRef  *ResourceRef `json:"targetHTTPSProxyRef,omitempty"`
+	GoogleAPIsBundle     *string      `json:"googleAPIsBundle,omitempty"`
 	ServiceAttachmentRef *ResourceRef `json:"serviceAttachmentRef,omitempty"`
 }
 
@@ -189,18 +189,18 @@ type ComputeBackendServiceList struct {
 }
 
 type ComputeBackendServiceSpec struct {
-	Location                     string                          `json:"location"`
-	ResourceID                   *string                         `json:"resourceID,omitempty"`
-	Description                  *string                         `json:"description,omitempty"`
-	Protocol                     *string                         `json:"protocol,omitempty"`
-	LoadBalancingScheme          *string                         `json:"loadBalancingScheme,omitempty"`
-	PortName                     *string                         `json:"portName,omitempty"`
-	TimeoutSec                   *int64                          `json:"timeoutSec,omitempty"`
-	ConnectionDrainingTimeoutSec *int64                          `json:"connectionDrainingTimeoutSec,omitempty"`
-	SessionAffinity              *string                         `json:"sessionAffinity,omitempty"`
-	HealthChecks                 []BackendServiceHealthCheckRef  `json:"healthChecks,omitempty"`
-	Backend                      []BackendServiceBackend         `json:"backend,omitempty"`
-	EnableCDN                    *bool                           `json:"enableCDN,omitempty"`
+	Location                     string                         `json:"location"`
+	ResourceID                   *string                        `json:"resourceID,omitempty"`
+	Description                  *string                        `json:"description,omitempty"`
+	Protocol                     *string                        `json:"protocol,omitempty"`
+	LoadBalancingScheme          *string                        `json:"loadBalancingScheme,omitempty"`
+	PortName                     *string                        `json:"portName,omitempty"`
+	TimeoutSec                   *int64                         `json:"timeoutSec,omitempty"`
+	ConnectionDrainingTimeoutSec *int64                         `json:"connectionDrainingTimeoutSec,omitempty"`
+	SessionAffinity              *string                        `json:"sessionAffinity,omitempty"`
+	HealthChecks                 []BackendServiceHealthCheckRef `json:"healthChecks,omitempty"`
+	Backend                      []BackendServiceBackend        `json:"backend,omitempty"`
+	EnableCDN                    *bool                          `json:"enableCDN,omitempty"`
 }
 
 type BackendServiceHealthCheckRef struct {
@@ -209,17 +209,17 @@ type BackendServiceHealthCheckRef struct {
 }
 
 type BackendServiceBackend struct {
-	Description               *string             `json:"description,omitempty"`
-	Group                     BackendGroup        `json:"group"`
-	BalancingMode             *string             `json:"balancingMode,omitempty"`
-	CapacityScaler            *float64            `json:"capacityScaler,omitempty"`
-	MaxConnections            *int64              `json:"maxConnections,omitempty"`
-	MaxConnectionsPerEndpoint *int64              `json:"maxConnectionsPerEndpoint,omitempty"`
-	MaxConnectionsPerInstance *int64              `json:"maxConnectionsPerInstance,omitempty"`
-	MaxRate                   *int64              `json:"maxRate,omitempty"`
-	MaxRatePerEndpoint        *float64            `json:"maxRatePerEndpoint,omitempty"`
-	MaxRatePerInstance        *float64            `json:"maxRatePerInstance,omitempty"`
-	MaxUtilization            *float64            `json:"maxUtilization,omitempty"`
+	Description               *string      `json:"description,omitempty"`
+	Group                     BackendGroup `json:"group"`
+	BalancingMode             *string      `json:"balancingMode,omitempty"`
+	CapacityScaler            *float64     `json:"capacityScaler,omitempty"`
+	MaxConnections            *int64       `json:"maxConnections,omitempty"`
+	MaxConnectionsPerEndpoint *int64       `json:"maxConnectionsPerEndpoint,omitempty"`
+	MaxConnectionsPerInstance *int64       `json:"maxConnectionsPerInstance,omitempty"`
+	MaxRate                   *int64       `json:"maxRate,omitempty"`
+	MaxRatePerEndpoint        *float64     `json:"maxRatePerEndpoint,omitempty"`
+	MaxRatePerInstance        *float64     `json:"maxRatePerInstance,omitempty"`
+	MaxUtilization            *float64     `json:"maxUtilization,omitempty"`
 }
 
 type BackendGroup struct {
@@ -259,17 +259,17 @@ type ComputeHealthCheckList struct {
 }
 
 type ComputeHealthCheckSpec struct {
-	Location           string              `json:"location"`
-	ResourceID         *string             `json:"resourceID,omitempty"`
-	Description        *string             `json:"description,omitempty"`
-	CheckIntervalSec   *int64              `json:"checkIntervalSec,omitempty"`
-	TimeoutSec         *int64              `json:"timeoutSec,omitempty"`
-	HealthyThreshold   *int64              `json:"healthyThreshold,omitempty"`
-	UnhealthyThreshold *int64              `json:"unhealthyThreshold,omitempty"`
-	TCPHealthCheck     *HealthCheckTCP     `json:"tcpHealthCheck,omitempty"`
-	HTTPHealthCheck    *HealthCheckHTTP    `json:"httpHealthCheck,omitempty"`
-	HTTPSHealthCheck   *HealthCheckHTTP    `json:"httpsHealthCheck,omitempty"`
-	SSLHealthCheck     *HealthCheckTCP     `json:"sslHealthCheck,omitempty"`
+	Location           string           `json:"location"`
+	ResourceID         *string          `json:"resourceID,omitempty"`
+	Description        *string          `json:"description,omitempty"`
+	CheckIntervalSec   *int64           `json:"checkIntervalSec,omitempty"`
+	TimeoutSec         *int64           `json:"timeoutSec,omitempty"`
+	HealthyThreshold   *int64           `json:"healthyThreshold,omitempty"`
+	UnhealthyThreshold *int64           `json:"unhealthyThreshold,omitempty"`
+	TCPHealthCheck     *HealthCheckTCP  `json:"tcpHealthCheck,omitempty"`
+	HTTPHealthCheck    *HealthCheckHTTP `json:"httpHealthCheck,omitempty"`
+	HTTPSHealthCheck   *HealthCheckHTTP `json:"httpsHealthCheck,omitempty"`
+	SSLHealthCheck     *HealthCheckTCP  `json:"sslHealthCheck,omitempty"`
 }
 
 type HealthCheckTCP struct {
