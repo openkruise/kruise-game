@@ -7,7 +7,10 @@
 *.dylib
 *.DS_Store
 bin
+bin/
+manager
 testbin/*
+test/e2e/e2e-artifacts/
 
 # Test binary, build with `go test -c`
 *.test

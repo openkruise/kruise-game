@@ -1,5 +1,5 @@
 # Build the manager binary
-FROM golang:1.23.4 AS builder
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/golang:1.23.4 AS builder
 ARG LDFLAGS=" -s -w"
 
 WORKDIR /workspace
@@ -20,8 +20,7 @@ COPY cloudprovider/ cloudprovider/
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -ldflags "${LDFLAGS}" -o manager main.go
 
 # Use distroless as minimal base images to package the manager binary
-# Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM alpine:3.14
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/alpine:3.20
 WORKDIR /
 COPY --from=builder /workspace/manager .
 

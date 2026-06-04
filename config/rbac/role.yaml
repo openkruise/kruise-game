@@ -200,3 +200,19 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - nlbpool.kruise.io
+  resources:
+  - portallocations
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - nlbpool.kruise.io
+  resources:
+  - portallocations/status
+  verbs:
+  - get
+  - list
+  - watch

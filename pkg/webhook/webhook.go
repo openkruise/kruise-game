@@ -88,6 +88,8 @@ func init() {
 // +kubebuilder:rbac:groups=elbv2.services.k8s.aws,resources=targetgroups,verbs=create;get;list;patch;update;watch
 // +kubebuilder:rbac:groups=networking.cloud.tencent.com,resources=dedicatedclblisteners,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.cloud.tencent.com,resources=dedicatedclblisteners/status,verbs=get
+// +kubebuilder:rbac:groups=nlbpool.kruise.io,resources=portallocations,verbs=get;list;watch
+// +kubebuilder:rbac:groups=nlbpool.kruise.io,resources=portallocations/status,verbs=get;list;watch
 
 type Webhook struct {
 	mgr manager.Manager
