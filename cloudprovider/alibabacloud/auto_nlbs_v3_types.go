@@ -20,8 +20,6 @@ import (
 // 这些类型与 NLB-Pool-Operator 仓库中的 CRD 定义保持一致
 // 在 kruise-game 中本地定义，仅用于 Plugin 侧读写
 const (
-	AutoNLBsV3Network = "AlibabaCloud-AutoNLBs-V3"
-
 	// 配置参数名（GameServerSet.spec.network.networkConf）
 	NLBPoolNameConfigV4      = "NLBPoolName"
 	NLBPoolNamespaceConfigV4 = "NLBPoolNamespace"
