@@ -561,10 +561,24 @@ func parsePortProtocols(value string) ([]int, []corev1.Protocol) {
 }
 
 func consNodePortSvc(npc *nodePortConfig, pod *corev1.Pod, c client.Client, ctx context.Context) *corev1.Service {
+	// Detect duplicate port numbers (e.g. the same port exposed for both TCP and
+	// UDP). Kubernetes requires every ServicePort in a multi-port Service to have
+	// a unique Name, so when a port number repeats we disambiguate the Name by
+	// appending the protocol. For unique port numbers we keep the legacy
+	// numeric-only name to stay backward compatible.
+	portCount := make(map[int]int)
+	for i := 0; i < len(npc.ports); i++ {
+		portCount[npc.ports[i]]++
+	}
+
 	svcPorts := make([]corev1.ServicePort, 0)
 	for i := 0; i < len(npc.ports); i++ {
+		name := strconv.Itoa(npc.ports[i])
+		if portCount[npc.ports[i]] > 1 {
+			name = name + "-" + strings.ToLower(string(npc.protocols[i]))
+		}
 		svcPorts = append(svcPorts, corev1.ServicePort{
-			Name:       strconv.Itoa(npc.ports[i]),
+			Name:       name,
 			Port:       int32(npc.ports[i]),
 			Protocol:   npc.protocols[i],
 			TargetPort: intstr.FromInt(npc.ports[i]),
