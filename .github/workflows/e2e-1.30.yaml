@@ -42,6 +42,13 @@ jobs:
           echo "::group::Prepare audit policy"
           bash ./scripts/ci/prepare-kind-audit.sh
           echo "::endgroup::"
+      - name: Pre-install kind binary
+        run: |
+          CACHE_DIR="${RUNNER_TOOL_CACHE}/kind/${{ env.KIND_VERSION }}/amd64/kind/bin"
+          mkdir -p "${CACHE_DIR}"
+          curl -fSLo "${CACHE_DIR}/kind" "https://github.com/kubernetes-sigs/kind/releases/download/${{ env.KIND_VERSION }}/kind-linux-amd64"
+          chmod +x "${CACHE_DIR}/kind"
+          "${CACHE_DIR}/kind" version
       - name: Setup Kind Cluster
         uses: helm/kind-action@v1.14.0
         with:
