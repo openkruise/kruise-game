@@ -33,6 +33,9 @@ test/e2e/e2e-artifacts/
 # Temporary kustomize overlay for tracing
 config/.tracing-overlay-temp/
 
+# controller-gen generated empty CRD placeholder
+config/crd/bases/_.yaml
+
 # Coverage and test artifacts
 coverage.out
 cover.out
