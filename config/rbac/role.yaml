@@ -201,15 +201,17 @@ rules:
   - patch
   - update
 - apiGroups:
-  - nlbpool.kruise.io
+  - nlbpool.alibabacloud.com
   resources:
   - portallocations
   verbs:
   - get
   - list
   - watch
+  - update
+  - patch
 - apiGroups:
-  - nlbpool.kruise.io
+  - nlbpool.alibabacloud.com
   resources:
   - portallocations/status
   verbs:
