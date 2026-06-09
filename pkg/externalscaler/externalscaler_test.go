@@ -7,6 +7,112 @@ import (
 	"testing"
 )
 
+func TestParseWTBDThreshold(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantThresh float64
+		wantPct    bool
+		wantErr    bool
+	}{
+		{
+			name:       "valid absolute integer",
+			input:      "10",
+			wantThresh: 10,
+			wantPct:    false,
+			wantErr:    false,
+		},
+		{
+			name:       "valid absolute integer 1",
+			input:      "1",
+			wantThresh: 1,
+			wantPct:    false,
+			wantErr:    false,
+		},
+		{
+			name:       "valid percentage 0.1",
+			input:      "0.1",
+			wantThresh: 0.1,
+			wantPct:    true,
+			wantErr:    false,
+		},
+		{
+			name:       "valid percentage 0.5",
+			input:      "0.5",
+			wantThresh: 0.5,
+			wantPct:    true,
+			wantErr:    false,
+		},
+		{
+			name:       "valid percentage 0.99",
+			input:      "0.99",
+			wantThresh: 0.99,
+			wantPct:    true,
+			wantErr:    false,
+		},
+		{
+			name:    "invalid - zero",
+			input:   "0",
+			wantErr: true,
+		},
+		{
+			name:    "invalid - negative",
+			input:   "-5",
+			wantErr: true,
+		},
+		{
+			name:    "invalid - not a number",
+			input:   "abc",
+			wantErr: true,
+		},
+		{
+			name:    "invalid - empty string",
+			input:   "",
+			wantErr: true,
+		},
+		{
+			name:       "float >= 1 treated as absolute",
+			input:      "3.7",
+			wantThresh: 4, // math.Ceil(3.7)
+			wantPct:    false,
+			wantErr:    false,
+		},
+		{
+			name:       "1.0 treated as absolute 1",
+			input:      "1.0",
+			wantThresh: 1,
+			wantPct:    false,
+			wantErr:    false,
+		},
+		{
+			name:       "large absolute value",
+			input:      "100",
+			wantThresh: 100,
+			wantPct:    false,
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotThresh, gotPct, err := parseWTBDThreshold(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseWTBDThreshold(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+				return
+			}
+			if tt.wantErr {
+				return
+			}
+			if gotPct != tt.wantPct {
+				t.Errorf("parseWTBDThreshold(%q) isPercentage = %v, want %v", tt.input, gotPct, tt.wantPct)
+			}
+			if math.Abs(gotThresh-tt.wantThresh) > 1e-9 {
+				t.Errorf("parseWTBDThreshold(%q) threshold = %v, want %v", tt.input, gotThresh, tt.wantThresh)
+			}
+		})
+	}
+}
+
 func TestHandleMinNum(t *testing.T) {
 	tests := []struct {
 		name      string
