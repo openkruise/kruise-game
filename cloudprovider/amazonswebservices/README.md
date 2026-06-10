@@ -183,3 +183,91 @@ networkStatus:
     lastTransitionTime: "2024-05-30T03:34:14Z"
     networkType: AmazonWebServices-NLB
 ```
+---
+
+# AmazonWebServices-GlobalAcceleratorCustomRouting
+
+For latency-sensitive game servers that run as ordinary Deployment/StatefulSet Pods (Pod IP reachable via VPC-CNI), the `AmazonWebServices-GlobalAcceleratorCustomRouting` plugin exposes each Pod through an [AWS Global Accelerator **custom routing** accelerator](https://docs.aws.amazon.com/global-accelerator/latest/dg/about-custom-routing-accelerators.html). Players connect to a static anycast IP at the AWS edge; Global Accelerator deterministically maps an accelerator IP/port to the Pod IP/port inside a registered VPC subnet, preserving the real client source IP with no load balancer in the data path.
+
+Unlike the `AmazonWebServices-NLB` plugin, this plugin does **not** create any AWS or Kubernetes resources for the data path (no NLB, no TargetGroup, no Service). It only toggles per-Pod traffic on a **pre-created** custom routing endpoint group and looks up the deterministic port mapping, then publishes the result into the GameServer `network-status` annotation. The game server reads the annotation (commonly via the downward API) and self-reports its `agaStaticIP:mappedPort` to clients.
+
+## Prerequisites (created by the operator, NOT by the plugin)
+
+The plugin assumes the following are provisioned out-of-band (CLI / SDK / Terraform):
+
+1. **Custom routing accelerator + listener (port range) + custom routing endpoint group + registered subnet(s).** Port-mapping capacity (`subnet usable IPs × destination ports × protocols`) is a one-time capacity-planning decision and is intentionally kept out of the Pod hot path. The plugin only reads the endpoint group ARN and the registered subnet IDs from `networkConf`.
+2. **Cluster-level SNAT disabled** so return traffic to the real client IP is not rewritten:
+   ```
+   kubectl set env daemonset aws-node -n kube-system AWS_VPC_K8S_CNI_EXTERNALSNAT=true
+   ```
+   Node groups should sit in private subnets behind a NAT Gateway. This is a cluster-wide change with known side effects (public-subnet Pods lose direct egress).
+3. **Security Group**: the node SG must allow inbound on the game port from `0.0.0.0/0`, because custom routing preserves the real client IP and the source cannot be restricted to an AGA-owned range.
+4. **IAM (IRSA)**: the controller's service account needs `globalaccelerator:AllowCustomRoutingTraffic`, `globalaccelerator:DenyCustomRoutingTraffic`, and `globalaccelerator:ListCustomRoutingPortMappingsByDestination`. Credentials are taken from the default AWS chain; the plugin does not bind any auth method.
+
+> **No health checking.** Custom routing has no native health checks or failover — delivery is deterministic regardless of backend health. The plugin does not implement health probing; unhealthy Pods are recycled by Kubernetes (recreate → `OnPodDeleted` → `OnPodAdded` re-resolves the mapping).
+
+## `networkConf` parameters
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `CustomRoutingEndpointGroupArn` | yes | ARN of the pre-created custom routing endpoint group. |
+| `GamePort` | yes | Destination port the game server listens on (`1`–`65535`). |
+| `Protocol` | no | `TCP` or `UDP`. Defaults to `UDP`. |
+| `SubnetIds` | yes | Comma-separated list of registered VPC subnet IDs (one per AZ). The plugin resolves which subnet owns the Pod IP automatically. |
+
+## Lifecycle
+
+| Plugin hook | Action |
+| --- | --- |
+| `Init` | Build the Global Accelerator client (lazily, default AWS credential chain) and an in-memory cache. The plugin creates no accelerator/listener/subnet. |
+| `OnPodAdded` / `OnPodUpdated` | Take `pod.Status.PodIP`; `AllowCustomRoutingTraffic` (destination `podIP:GamePort`) on the owning subnet; `ListCustomRoutingPortMappingsByDestination` to obtain the AGA static IP + mapped port; write `NetworkStatus.ExternalAddresses{IP: agaStaticIP, Ports: mappedPort}` with `InternalAddresses` set to the Pod IP and state `Ready`. If the Pod IP is not assigned yet or the mapping is not yet visible, state stays `NotReady`/retries. Idempotent: a re-resolved Pod IP that is unchanged is a no-op. |
+| `OnPodDeleted` | `DenyCustomRoutingTraffic` (destination `podIP:GamePort`) to drain the Pod. |
+
+## Example GameServerSet
+
+```yaml
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: game
+  namespace: default
+spec:
+  replicas: 3
+  network:
+    networkType: AmazonWebServices-GlobalAcceleratorCustomRouting
+    networkConf:
+      - name: CustomRoutingEndpointGroupArn
+        value: "arn:aws:globalaccelerator::123456789012:accelerator/abcd1234/listener/5678/endpoint-group/9012"
+      - name: GamePort
+        value: "7777"
+      - name: Protocol
+        value: "UDP"
+      - name: SubnetIds
+        value: "subnet-0a1b2c3d,subnet-0e4f5a6b"
+  gameServerTemplate:
+    spec:
+      containers:
+        - name: game
+          image: your-game-image:latest
+```
+
+The resulting GameServer `network-status` looks like:
+
+```yaml
+networkStatus:
+    currentNetworkState: Ready
+    desiredNetworkState: Ready
+    externalAddresses:
+    - ip: 75.2.1.1            # AGA static anycast IP — self-reported by the game server
+      ports:
+      - name: game
+        port: 50001            # custom routing mapped port
+        protocol: UDP
+    internalAddresses:
+    - ip: 10.0.1.23            # Pod IP
+      ports:
+      - name: game
+        port: 7777
+        protocol: UDP
+    networkType: AmazonWebServices-GlobalAcceleratorCustomRouting
+```
