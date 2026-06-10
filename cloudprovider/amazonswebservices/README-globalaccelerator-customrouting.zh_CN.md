@@ -4,7 +4,6 @@
 
 与 `AmazonWebServices-NLB` 插件（见 [README.zh_CN.md](./README.zh_CN.md)）不同，本插件**不**为数据面创建任何 AWS 或 Kubernetes 资源（无 NLB、无 TargetGroup、无 Service）。它只在**预先创建好**的 custom routing endpoint group 上对每个 Pod 切换 Allow/Deny，并查询确定性端口映射，再把结果写入 GameServer 的 `network-status`。游戏服通过 downward API 等方式读取该字段，自行把 `agaStaticIP:mappedPort` 上报给客户端。
 
-> **2026-06-10 已在 EKS（us-west-2）真机端到端验证通过。** 外部客户端→AGA→Pod 的真实 UDP echo、OnPodDeleted Deny、OnPodUpdated PodIP 变更、`ListCustomRoutingPortMappings` 分页（25 Pod、8187 条映射）、高频 Allow/Deny scaling 全部通过，且未触发任何 AGA throttling。验证时使用 **EKS VPC-CNI 默认 SNAT 设置**（无需修改 `EXTERNALSNAT` / `RANDOMIZESNAT`）。
 
 ## 部署前置（运维方提供，**不**由插件创建）
 
@@ -22,11 +21,11 @@
 ingress: <Protocol> <GamePort> from 0.0.0.0/0
 ```
 
-Custom routing 保留真实客户端 IP，源地址范围无法限定到 AGA 拥有的网段。流量直接到达承载 Pod 的 node ENI，所以是**节点 SG**（而非任何 AGA 侧 SG）作为流量门控。这条规则缺失 → AGA→Pod 的包被节点 SG 直接 drop，Pod 内监听看似正常却收不到任何包，是真机部署最常见的踩坑点。2026-06-10 e2e 实锤踩过。
+Custom routing 保留真实客户端 IP，源地址范围无法限定到 AGA 拥有的网段。流量直接到达承载 Pod 的 node ENI，所以是**节点 SG**（而非任何 AGA 侧 SG）作为流量门控。这条规则缺失 → AGA→Pod 的包被节点 SG 直接 drop，Pod 内监听看似正常却收不到任何包。
 
 AGA 在你 VPC 中托管的 ENI/SG 不要手改。
 
-> **VPC-CNI SNAT 不需要改动。** Custom routing 的入向流量直接到达 Pod ENI，不经节点的 SNAT 链。我们在 **EKS VPC-CNI 默认设置**下（`AWS_VPC_K8S_CNI_EXTERNALSNAT` 未设置、`AWS_VPC_K8S_CNI_RANDOMIZESNAT=prng`）验证过 AGA UDP echo 正常工作，**无需**任何 `EXTERNALSNAT=true` / `RANDOMIZESNAT=none` 改动。
+> **VPC-CNI SNAT 无需修改。** Custom routing 的入向流量直接到达 Pod ENI，不经节点 SNAT 链；回程由 conntrack 处理。AGA Custom Routing 使用 EKS VPC-CNI 默认设置即可，不要为 AGA 去设置 `EXTERNALSNAT=true` / `RANDOMIZESNAT=none`。
 
 ### 3. IAM（IRSA）
 
@@ -116,4 +115,4 @@ networkStatus:
 ## 运维注意
 
 - **删除是最终一致的。** 拆除 custom routing accelerator 时，`update-custom-routing-accelerator --no-enabled` 后 `describe` 即使返回 `Status=DEPLOYED, Enabled=False`，`delete-custom-routing-accelerator` 仍可能持续报 `AcceleratorNotDisabledException` 几十秒到 1-2 分钟。Endpoint group / listener 在 accelerator 处于 `IN_PROGRESS` 时也无法删除。**清理脚本必须带轮询重试**（建议 30s × 6 轮）。这是 Global Accelerator 服务行为，不是插件 bug。
-- **映射可见性。** `AllowCustomRoutingTraffic` 成功后，`ListCustomRoutingPortMappingsByDestination` 在我们的测试中可立即读到映射（无可观察的最终一致性间隙）。即便慢传播，插件也会把"暂不可见"当作 `NetworkNotReady` 而非 error，因此最坏只会出现短暂的 `NetworkNotReady` 窗口，不会让 webhook 整体失败。
+- **映射可见性。** 若 `ListCustomRoutingPortMappingsByDestination` 尚未返回刚 Allow 的 Pod IP，插件发布 `NetworkNotReady` 不报错，GameServer 会保持 not-ready 直到下一轮 reconcile；mutating webhook 路径不会因此失败。

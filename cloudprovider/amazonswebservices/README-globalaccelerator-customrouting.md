@@ -4,8 +4,6 @@ For latency-sensitive game servers that run as ordinary Deployment/StatefulSet P
 
 Unlike the `AmazonWebServices-NLB` plugin (see [README.md](./README.md)), this plugin does **not** create any AWS or Kubernetes resources for the data path (no NLB, no TargetGroup, no Service). It only toggles per-Pod traffic on a **pre-created** custom routing endpoint group and looks up the deterministic port mapping, then publishes the result into the GameServer `network-status` annotation. The game server reads the annotation (commonly via the downward API) and self-reports its `agaStaticIP:mappedPort` to clients.
 
-> **Verified end-to-end on EKS (us-west-2) on 2026-06-10.** Real external client UDP echo through AGA → Pod, OnPodDeleted Deny, OnPodUpdated PodIP-change, paged `ListCustomRoutingPortMappings` (25 Pods, 8187 mappings), and high-frequency Allow/Deny scaling all passed without any AGA throttling. Verified working with the **default EKS VPC-CNI SNAT settings** (no `EXTERNALSNAT` / `RANDOMIZESNAT` change needed).
-
 ## Prerequisites (created by the operator, NOT by the plugin)
 
 The plugin assumes the following are provisioned out-of-band (CLI / SDK / Terraform). Skipping any of these will not produce a clean error from the plugin — the Pod will simply never receive traffic.
@@ -22,11 +20,11 @@ When creating the endpoint group, set `DenyAllTrafficToEndpoint=true`. The plugi
 ingress: <Protocol> <GamePort> from 0.0.0.0/0
 ```
 
-Custom routing preserves the real client IP and the source cannot be restricted to an AGA-owned address range. Traffic arrives directly at the node ENI hosting the Pod, so the **node SG**, not any AGA-side SG, is the gating control. If this rule is missing, AGA→Pod packets are silently dropped at the node SG: the listener inside the Pod looks healthy, but no packets ever arrive — the most common deployment trap. Verified on 2026-06-10.
+Custom routing preserves the real client IP and the source cannot be restricted to an AGA-owned address range. Traffic arrives directly at the node ENI hosting the Pod, so the **node SG**, not any AGA-side SG, is the gating control. If this rule is missing, AGA→Pod packets are silently dropped at the node SG: the listener inside the Pod looks healthy, but no packets ever arrive.
 
 The AGA-managed ENIs/SGs in your VPC must not be hand-modified.
 
-> **VPC-CNI SNAT does NOT need to be changed.** Custom routing inbound traffic arrives at the Pod ENI without traversing the node's SNAT chain. We verified UDP echo through AGA works with the **default EKS VPC-CNI settings** (`AWS_VPC_K8S_CNI_EXTERNALSNAT` unset, `AWS_VPC_K8S_CNI_RANDOMIZESNAT=prng`). No `EXTERNALSNAT=true` / `RANDOMIZESNAT=none` change is required for AGA Custom Routing.
+> **VPC-CNI SNAT requires no change.** Custom routing inbound traffic reaches the Pod ENI without traversing the node's SNAT chain, and the return path is handled by conntrack. AGA Custom Routing works with the default EKS VPC-CNI settings; do not set `EXTERNALSNAT=true` or `RANDOMIZESNAT=none` for AGA's sake.
 
 ### 3. IAM (IRSA)
 
@@ -115,5 +113,5 @@ networkStatus:
 
 ## Operational notes
 
-- **Deletion is eventually consistent.** When you tear down a custom routing accelerator, `update-custom-routing-accelerator --no-enabled` may report `Status=DEPLOYED, Enabled=False` while `delete-custom-routing-accelerator` still returns `AcceleratorNotDisabledException` for tens of seconds to a couple of minutes. Endpoint groups and listeners cannot be deleted while the accelerator is in `IN_PROGRESS` either. **Cleanup scripts must poll-and-retry** (e.g. 30s × 6 rounds). This is a Global Accelerator service behavior, not a plugin issue.
-- **Mapping visibility.** After `AllowCustomRoutingTraffic` succeeds, `ListCustomRoutingPortMappingsByDestination` returns the mapping immediately in our test (no observable eventual-consistency gap). The plugin still treats "not visible yet" as `NetworkNotReady` rather than as an error, so a slow propagation would result in a brief `NetworkNotReady` window, never a webhook failure.
+- **Deletion is eventually consistent.** When tearing down a custom routing accelerator, `update-custom-routing-accelerator --no-enabled` may report `Status=DEPLOYED, Enabled=False` while `delete-custom-routing-accelerator` still returns `AcceleratorNotDisabledException` for tens of seconds to a couple of minutes. Endpoint groups and listeners cannot be deleted while the accelerator is in `IN_PROGRESS` either. **Cleanup scripts must poll-and-retry** (e.g. 30s × 6 rounds). This is a Global Accelerator service behavior, not a plugin issue.
+- **Mapping visibility.** If `ListCustomRoutingPortMappingsByDestination` does not yet show a freshly allowed Pod IP, the plugin publishes `NetworkNotReady` and returns no error, so the GameServer simply stays not-ready until the next reconcile. The mutating-webhook path never fails for this reason.
