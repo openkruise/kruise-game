@@ -104,6 +104,17 @@ func (a *AutoNLBsV3Plugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 		networkStatus = &gamekruiseiov1alpha1.NetworkStatus{}
 	}
 
+	// 0. 同步网络隔离状态到 Pod annotation，PA Controller 通过此 annotation 触发 Disable/Enable
+	disabled := networkManager.GetNetworkDisabled()
+	if pod.Annotations == nil {
+		pod.Annotations = make(map[string]string)
+	}
+	if disabled {
+		pod.Annotations[AnnotationNetworkDisabled] = "true"
+	} else {
+		delete(pod.Annotations, AnnotationNetworkDisabled)
+	}
+
 	// 1. 从 Pod annotation 中获取 PA claim
 	paName := ""
 	if pod.Annotations != nil {

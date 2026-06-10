@@ -469,6 +469,41 @@ func TestAutoNLBsV3OnPodUpdated(t *testing.T) {
 			t.Errorf("state = %v, want NetworkNotReady", ns.CurrentNetworkState)
 		}
 	})
+
+	t.Run("network disabled → sets disable annotation", func(t *testing.T) {
+		pod := newV3TestPod("game-pod-6", "giant-pool", "pa-disable")
+		pod.Labels = map[string]string{
+			gamekruiseiov1alpha1.GameServerNetworkDisabled: "true",
+		}
+		pa := newV3TestPA("pa-disable", "game-pod-6", PortAllocationPhaseBound, sampleEndpoints)
+
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pa).Build()
+
+		got, pluginErr := plugin.OnPodUpdated(c, pod, ctx)
+		if pluginErr != nil {
+			t.Fatalf("unexpected error: %v", pluginErr)
+		}
+		if got.Annotations[AnnotationNetworkDisabled] != "true" {
+			t.Errorf("expected %s=true, got %q", AnnotationNetworkDisabled, got.Annotations[AnnotationNetworkDisabled])
+		}
+	})
+
+	t.Run("network re-enabled → removes disable annotation", func(t *testing.T) {
+		pod := newV3TestPod("game-pod-7", "giant-pool", "pa-enable")
+		pod.Annotations[AnnotationNetworkDisabled] = "true"
+		// No disabled label → network enabled
+		pa := newV3TestPA("pa-enable", "game-pod-7", PortAllocationPhaseBound, sampleEndpoints)
+
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pa).Build()
+
+		got, pluginErr := plugin.OnPodUpdated(c, pod, ctx)
+		if pluginErr != nil {
+			t.Fatalf("unexpected error: %v", pluginErr)
+		}
+		if _, exists := got.Annotations[AnnotationNetworkDisabled]; exists {
+			t.Errorf("expected %s annotation removed, but still present", AnnotationNetworkDisabled)
+		}
+	})
 }
 
 func TestAutoNLBsV3OnPodDeleted(t *testing.T) {
