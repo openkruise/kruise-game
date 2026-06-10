@@ -20,7 +20,7 @@
 
 #### 选项 1——AWS 控制台
 
-Global Accelerator 控制台必须在 **美西（俽勒冈）`us-west-2`** 区域使用（AGA 控制面只在这个区，与 EKS 集群所在区无关）。
+Global Accelerator 控制台必须在 **美西（俄勒冈）`us-west-2`** 区域使用（AGA 控制面只在这个区，与 EKS 集群所在区无关）。
 
 1. 打开 [Global Accelerator 控制台](https://console.aws.amazon.com/globalaccelerator/home?region=us-west-2#/accelerators) → **Create accelerator** → 选 **Custom routing**。起名、选 IP 地址池（Amazon-owned 一般就够）。
 2. **添加 listener**：选一个足够宽的端口范围，涵盖 `子网可用 IP × 目标端口 × 协议`（见[限制与 quota](#%E9%99%90%E5%88%B6%E4%B8%8E-quota)）。一般一个宽范围如 `16000–65535` 最保险。Listener 端口范围创建后只能扩大不能缩小。
