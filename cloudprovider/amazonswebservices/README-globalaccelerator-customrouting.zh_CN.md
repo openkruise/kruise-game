@@ -1,6 +1,6 @@
 # AmazonWebServices-GlobalAcceleratorCustomRouting
 
-对于以普通 Deployment/StatefulSet Pod 形式运行（Pod IP 经 VPC-CNI 可直连）的低延迟游戏服，`AmazonWebServices-GlobalAcceleratorCustomRouting` 插件通过 [AWS Global Accelerator **自定义路由（custom routing）** 加速器](https://docs.aws.amazon.com/global-accelerator/latest/dg/about-custom-routing-accelerators.html) 暴露每个 Pod。玩家连接到 AWS 边缘的静态 anycast IP，Global Accelerator 会把加速器 IP/端口确定性地映射到已注册 VPC 子网内的 Pod IP/端口，数据路径上没有负载均衡，且保留真实客户端源 IP。
+对于以普通 Deployment/StatefulSet Pod 形式运行（Pod IP 经 VPC-CNI 可直连）的低延迟游戏服，`AmazonWebServices-GlobalAcceleratorCustomRouting` 插件通过 [AWS Global Accelerator **自定义路由（custom routing）** 加速器](https://docs.aws.amazon.com/global-accelerator/latest/dg/about-custom-routing-accelerators.html) 暴露每个 Pod。每个 accelerator 在 AWS 边缘从两个独立网络区（network zone）上发布 **两个静态 anycast IP**（内置网络冗余机制），Global Accelerator 把任一 anycast IP + listener 端口确定性地映射到已注册 VPC 子网内的 Pod IP/端口，数据路径上没有负载均衡，且保留真实客户端源 IP。
 
 与 `AmazonWebServices-NLB` 插件（见 [README.zh_CN.md](./README.zh_CN.md)）不同，本插件**不**为数据面创建任何 AWS 或 Kubernetes 资源（无 NLB、无 TargetGroup、无 Service）。它只在**预先创建好**的 custom routing endpoint group 上对每个 Pod 切换 Allow/Deny，并查询确定性端口映射，再把结果写入 GameServer 的 `network-status`。游戏服通过 downward API 等方式读取该字段，自行把 `agaStaticIP:mappedPort` 上报给客户端。
 
@@ -235,7 +235,7 @@ Custom routing 原生没有健康检查 / 故障转移——确定性投递不�
 | 插件 hook | 行为 |
 | --- | --- |
 | `Init` | 初始化内存缓存。Global Accelerator 客户端（aws-sdk-go-v2，默认 AWS 凭证链，区域钉到 AGA 控制面）首次使用时懒加载。插件不创建 accelerator / listener / 子网。 |
-| `OnPodAdded` / `OnPodUpdated` | 取 `pod.Status.PodIP`；在用户指定的 `EndpointId` 上调 `AllowCustomRoutingTraffic`（目的 `podIP:GamePort`）；调 `ListCustomRoutingPortMappingsByDestination`（分页）拿到 AGA 静态 IP + 映射端口；把 `NetworkStatus.ExternalAddresses{IP: agaStaticIP, Ports: mappedPort}` + `InternalAddresses=PodIP` 写入并置状态 `Ready`。Pod IP 还没下来或映射尚不可见时，发布 `NetworkNotReady` 并返回 `(pod, nil)`（mutating webhook 路径上不抛 error）。幂等：Pod IP 不变是 no-op。Pod IP 改变（重调度）时先 `Deny` 旧 IP 再 Allow 新 IP，避免泄漏映射容量。 |
+| `OnPodAdded` / `OnPodUpdated` | 取 `pod.Status.PodIP`；在用户指定的 `EndpointId` 上调 `AllowCustomRoutingTraffic`（目的 `podIP:GamePort`）；调 `ListCustomRoutingPortMappingsByDestination`（分页）拿到 **所有** AGA 静态 anycast IP（一般两个）和映射端口；为每个 anycast IP 在 `NetworkStatus.ExternalAddresses` 写一条（共享同一映射端口），并把 `InternalAddresses` 设为 Pod IP，置状态 `Ready`。Pod IP 还没下来或映射尚不可见时，发布 `NetworkNotReady` 并返回 `(pod, nil)`（mutating webhook 路径上不抛 error）。幂等：Pod IP 不变是 no-op。Pod IP 改变（重调度）时先 `Deny` 旧 IP 再 Allow 新 IP，避免泄漏映射容量。 |
 | `OnPodDeleted` | 调 `DenyCustomRoutingTraffic`（目的 `podIP:GamePort`）排空该 Pod。 |
 
 ## GameServerSet 示例
@@ -275,10 +275,15 @@ networkStatus:
   currentNetworkState: Ready
   desiredNetworkState: Ready
   externalAddresses:
-  - ip: 75.2.1.1            # AGA 静态 anycast IP，由游戏服自行上报
+  - ip: 75.2.1.1            # AGA anycast IP #1（network-zone A）
     ports:
     - name: game
-      port: 50001            # custom routing 映射端口
+      port: 50001            # 映射端口；两个 anycast IP 上一致
+      protocol: UDP
+  - ip: 99.83.89.57          # AGA anycast IP #2（network-zone B）
+    ports:
+    - name: game
+      port: 50001
       protocol: UDP
   internalAddresses:
   - ip: 10.0.1.23            # Pod IP
@@ -288,6 +293,8 @@ networkStatus:
       protocol: UDP
   networkType: AmazonWebServices-GlobalAcceleratorCustomRouting
 ```
+
+客户端连任一 anycast IP 都能到达同一 Pod 的同一映射端口。解析 accelerator 的 DNS 名会返回两条 A 记录，常规做法是直接发布 DNS 名让 DNS（或客户端 getaddrinfo 循环）处理 failover；游戏服也可以把两个字面 IP 一起上报给客户端做硬编码冗余。
 
 ## 限制与 quota
 

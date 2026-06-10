@@ -1,6 +1,6 @@
 # AmazonWebServices-GlobalAcceleratorCustomRouting
 
-For latency-sensitive game servers that run as ordinary Deployment/StatefulSet Pods (Pod IP reachable via VPC-CNI), the `AmazonWebServices-GlobalAcceleratorCustomRouting` plugin exposes each Pod through an [AWS Global Accelerator **custom routing** accelerator](https://docs.aws.amazon.com/global-accelerator/latest/dg/about-custom-routing-accelerators.html). Players connect to a static anycast IP at the AWS edge; Global Accelerator deterministically maps an accelerator IP/port to the Pod IP/port inside a registered VPC subnet, preserving the real client source IP with no load balancer in the data path.
+For latency-sensitive game servers that run as ordinary Deployment/StatefulSet Pods (Pod IP reachable via VPC-CNI), the `AmazonWebServices-GlobalAcceleratorCustomRouting` plugin exposes each Pod through an [AWS Global Accelerator **custom routing** accelerator](https://docs.aws.amazon.com/global-accelerator/latest/dg/about-custom-routing-accelerators.html). Each accelerator advertises **two static anycast IPs** at the AWS edge from independent network zones (a built-in redundancy mechanism); Global Accelerator deterministically maps either anycast IP plus a listener port to the Pod IP/port inside a registered VPC subnet, preserving the real client source IP with no load balancer in the data path.
 
 Unlike the `AmazonWebServices-NLB` plugin (see [README.md](./README.md)), this plugin does **not** create any AWS or Kubernetes resources for the data path (no NLB, no TargetGroup, no Service). It only toggles per-Pod traffic on a **pre-created** custom routing endpoint group and looks up the deterministic port mapping, then publishes the result into the GameServer `network-status` annotation. The game server reads the annotation (commonly via the downward API) and self-reports its `agaStaticIP:mappedPort` to clients.
 
@@ -234,7 +234,7 @@ If the application needs UDP-style health, expose a separate TCP/HTTP probe and 
 | Plugin hook | Action |
 | --- | --- |
 | `Init` | Initialize the in-memory cache. The Global Accelerator client (aws-sdk-go-v2, default AWS credential chain, region anchored to the AGA control plane) is built lazily on first use. The plugin creates no accelerator / listener / subnet. |
-| `OnPodAdded` / `OnPodUpdated` | Take `pod.Status.PodIP`; `AllowCustomRoutingTraffic` (destination `podIP:GamePort`) on the user-specified `EndpointId`; `ListCustomRoutingPortMappingsByDestination` (paged) to obtain the AGA static IP + mapped port; write `NetworkStatus.ExternalAddresses{IP: agaStaticIP, Ports: mappedPort}` with `InternalAddresses` set to the Pod IP and state `Ready`. If the Pod IP is not assigned yet or the mapping is not yet visible, `NetworkNotReady` is published and `(pod, nil)` returned (no error escapes the mutating-webhook path). Idempotent: an unchanged Pod IP is a no-op. If the Pod IP changes (reschedule), the previous IP is `Deny`'d before the new IP is allowed, so mapping capacity is not leaked. |
+| `OnPodAdded` / `OnPodUpdated` | Take `pod.Status.PodIP`; `AllowCustomRoutingTraffic` (destination `podIP:GamePort`) on the user-specified `EndpointId`; `ListCustomRoutingPortMappingsByDestination` (paged) to obtain **all** AGA static anycast IPs (typically two) plus the mapped port; write one entry into `NetworkStatus.ExternalAddresses` per anycast IP, all sharing the same mapped port, with `InternalAddresses` set to the Pod IP and state `Ready`. If the Pod IP is not assigned yet or the mapping is not yet visible, `NetworkNotReady` is published and `(pod, nil)` returned (no error escapes the mutating-webhook path). Idempotent: an unchanged Pod IP is a no-op. If the Pod IP changes (reschedule), the previous IP is `Deny`'d before the new IP is allowed, so mapping capacity is not leaked. |
 | `OnPodDeleted` | `DenyCustomRoutingTraffic` (destination `podIP:GamePort`) to drain the Pod. |
 
 ## Example GameServerSet
@@ -274,10 +274,15 @@ networkStatus:
   currentNetworkState: Ready
   desiredNetworkState: Ready
   externalAddresses:
-  - ip: 75.2.1.1            # AGA static anycast IP — self-reported by the game server
+  - ip: 75.2.1.1            # AGA anycast IP #1 (network-zone A)
     ports:
     - name: game
-      port: 50001            # custom routing mapped port
+      port: 50001            # mapped port; same on both anycast IPs
+      protocol: UDP
+  - ip: 99.83.89.57          # AGA anycast IP #2 (network-zone B)
+    ports:
+    - name: game
+      port: 50001
       protocol: UDP
   internalAddresses:
   - ip: 10.0.1.23            # Pod IP
@@ -287,6 +292,8 @@ networkStatus:
       protocol: UDP
   networkType: AmazonWebServices-GlobalAcceleratorCustomRouting
 ```
+
+Clients can connect to either anycast IP — both reach the same Pod through the same mapped port. Resolving the accelerator's DNS name returns both A records, so the standard pattern is to publish the DNS name and let DNS (or the client's getaddrinfo loop) handle failover; alternatively the game server can self-report both literal IPs to clients for hardcoded redundancy.
 
 ## Limits and quotas
 
