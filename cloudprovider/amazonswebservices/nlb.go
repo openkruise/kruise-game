@@ -732,22 +732,24 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 		protocol := awsTargetGroupProtocol(config.backends[i].protocol)
 		targetPort := int64(config.backends[i].targetPort)
 		var targetTypeIP = string(ackv1alpha1.TargetTypeEnum_ip)
-		_, err := controllerutil.CreateOrUpdate(ctx, client, &ackv1alpha1.TargetGroup{
+		tg := &ackv1alpha1.TargetGroup{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:            targetGroupName,
-				Namespace:       pod.GetNamespace(),
-				OwnerReferences: ownerReference,
-				Labels: map[string]string{
-					ResourceTagKey:           ResourceTagValue,
-					SvcSelectorKey:           pod.GetName(),
-					AWSTargetGroupSyncStatus: "false",
-				},
-				Annotations: map[string]string{
-					NlbARNAnnoKey:  lbARN,
-					NlbPortAnnoKey: fmt.Sprintf("%d", ports[i]),
-				},
+				Name:      targetGroupName,
+				Namespace: pod.GetNamespace(),
 			},
-			Spec: ackv1alpha1.TargetGroupSpec{
+		}
+		_, err := controllerutil.CreateOrUpdate(ctx, client, tg, func() error {
+			tg.OwnerReferences = ownerReference
+			tg.Labels = map[string]string{
+				ResourceTagKey:           ResourceTagValue,
+				SvcSelectorKey:           pod.GetName(),
+				AWSTargetGroupSyncStatus: "false",
+			}
+			tg.Annotations = map[string]string{
+				NlbARNAnnoKey:  lbARN,
+				NlbPortAnnoKey: fmt.Sprintf("%d", ports[i]),
+			}
+			tg.Spec = ackv1alpha1.TargetGroupSpec{
 				HealthCheckEnabled:         config.healthCheck.healthCheckEnabled,
 				HealthCheckIntervalSeconds: config.healthCheck.healthCheckIntervalSeconds,
 				HealthCheckPath:            config.healthCheck.healthCheckPath,
@@ -763,8 +765,9 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 				TargetType:                 &targetTypeIP,
 				Tags: []*ackv1alpha1.Tag{{Key: ptr.To[string](ResourceTagKey),
 					Value: ptr.To[string](ResourceTagValue)}},
-			},
-		}, func() error { return nil })
+			}
+			return nil
+		})
 		if err != nil {
 			return err
 		}
@@ -778,25 +781,26 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 	for key, value := range config.annotations {
 		annotations[key] = value
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, client, &corev1.Service{
+	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            pod.GetName(),
-			Namespace:       pod.GetNamespace(),
-			Annotations:     annotations,
-			OwnerReferences: ownerReference,
-			Labels: map[string]string{
-				ResourceTagKey: ResourceTagValue,
-				SvcSelectorKey: pod.GetName(),
-			},
+			Name:      pod.GetName(),
+			Namespace: pod.GetNamespace(),
 		},
-		Spec: corev1.ServiceSpec{
-			Type: corev1.ServiceTypeClusterIP,
-			Selector: map[string]string{
-				SvcSelectorKey: pod.GetName(),
-			},
-			Ports: svcPorts,
-		},
-	}, func() error { return nil })
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, client, svc, func() error {
+		svc.Annotations = annotations
+		svc.OwnerReferences = ownerReference
+		svc.Labels = map[string]string{
+			ResourceTagKey: ResourceTagValue,
+			SvcSelectorKey: pod.GetName(),
+		}
+		svc.Spec.Type = corev1.ServiceTypeClusterIP
+		svc.Spec.Selector = map[string]string{
+			SvcSelectorKey: pod.GetName(),
+		}
+		svc.Spec.Ports = svcPorts
+		return nil
+	})
 	if err != nil {
 		return err
 	}
