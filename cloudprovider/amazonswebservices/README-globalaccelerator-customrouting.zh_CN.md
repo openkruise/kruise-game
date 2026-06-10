@@ -84,6 +84,8 @@ Terraform 的 `aws_globalaccelerator_*` 资源覆盖 custom routing accelerator�
 
 ### 2. 节点 Security Group —— 放行游戏端口入站
 
+承载游戏服 Pod 的 EKS 工作节点上挂的 Security Group 必须放行游戏端口的入站：
+
 ```
 ingress: <Protocol> <GamePort> from 0.0.0.0/0
 ```
@@ -91,6 +93,38 @@ ingress: <Protocol> <GamePort> from 0.0.0.0/0
 Custom routing 保留真实客户端 IP，源地址范围无法限定到 AGA 拥有的网段。流量直接到达承载 Pod 的 node ENI，所以是**节点 SG**（而非任何 AGA 侧 SG）作为流量门控。这条规则缺失 → AGA→Pod 的包被节点 SG 直接 drop，Pod 内监听看似正常却收不到任何包。
 
 AGA 在你 VPC 中托管的 ENI/SG 不要手改。
+
+#### 找到正确的 Security Group
+
+Managed node group 会给每个 worker ENI 挂一个形如 `eks-cluster-sg-<cluster>-<id>` 的 SG（EKS [“集群 security group”](https://docs.aws.amazon.com/eks/latest/userguide/sec-group-reqs.html)）。自建 node group 可能用别的 SG —— 直接看 ENI 上挂的：
+
+```sh
+# 查任一 worker 节点主 ENI 上挂了哪些 SG
+NODE_INSTANCE=$(kubectl get node <node-name> -o jsonpath='{.spec.providerID}' | sed 's|.*/||')
+aws ec2 describe-instances --instance-ids "$NODE_INSTANCE" \
+  --query 'Reservations[].Instances[].SecurityGroups'
+```
+
+若把游戏服 node group 和系统负载拆开了，只需在游戏服 node group 用的 SG 上加这条规则。
+
+#### 选项 1——AWS 控制台
+
+1. 打开集群所在 region 的 [VPC 控制台 → Security Groups](https://console.aws.amazon.com/vpc/home#SecurityGroups:)。
+2. 选上面查出的节点 SG → **入站规则** → **编辑入站规则**。
+3. **添加规则**：类型 = `Custom UDP`（或按 `Protocol` 选 `Custom TCP`），端口范围 = `<GamePort>`，源 = `0.0.0.0/0`（发布 AAAA 记录还要加 `::/0`）。描述如 `okg-aga-customrouting`。
+4. 保存。
+
+#### 选项 2——AWS CLI
+
+```sh
+aws ec2 authorize-security-group-ingress \
+  --region <eks-cluster-region> \
+  --group-id <node-sg-id> \
+  --ip-permissions \
+      'IpProtocol=udp,FromPort=7777,ToPort=7777,IpRanges=[{CidrIp=0.0.0.0/0,Description=okg-aga-customrouting}]'
+```
+
+`IpProtocol` 和 `FromPort/ToPort` 调成你的 `Protocol` / `GamePort`。TCP+UDP 都要的话再发一条 `IpProtocol=tcp`。IPv6 并行加一条 `Ipv6Ranges`。
 
 > **VPC-CNI SNAT 无需修改。** Custom routing 的入向流量直接到达 Pod ENI，不经节点 SNAT 链；回程由 conntrack 处理。AGA Custom Routing 使用 EKS VPC-CNI 默认设置即可，不要为 AGA 去设置 `EXTERNALSNAT=true` / `RANDOMIZESNAT=none`。
 

@@ -83,6 +83,8 @@ Terraform's `aws_globalaccelerator_*` resources cover custom routing accelerator
 
 ### 2. Node Security Group — open ingress to the game port
 
+The node Security Group attached to the EKS worker nodes hosting the game-server Pods must allow inbound on the game port:
+
 ```
 ingress: <Protocol> <GamePort> from 0.0.0.0/0
 ```
@@ -90,6 +92,38 @@ ingress: <Protocol> <GamePort> from 0.0.0.0/0
 Custom routing preserves the real client IP and the source cannot be restricted to an AGA-owned address range. Traffic arrives directly at the node ENI hosting the Pod, so the **node SG**, not any AGA-side SG, is the gating control. If this rule is missing, AGA→Pod packets are silently dropped at the node SG: the listener inside the Pod looks healthy, but no packets ever arrive.
 
 The AGA-managed ENIs/SGs in your VPC must not be hand-modified.
+
+#### Identifying the right Security Group
+
+Managed node groups attach a SG named like `eks-cluster-sg-<cluster>-<id>` (the EKS ["cluster security group"](https://docs.aws.amazon.com/eks/latest/userguide/sec-group-reqs.html)) to every worker ENI. Custom node groups may use a different SG — check the actual ENI:
+
+```sh
+# Inspect any worker node’s primary ENI to see which SGs are attached
+NODE_INSTANCE=$(kubectl get node <node-name> -o jsonpath='{.spec.providerID}' | sed 's|.*/||')
+aws ec2 describe-instances --instance-ids "$NODE_INSTANCE" \
+  --query 'Reservations[].Instances[].SecurityGroups'
+```
+
+If you partition node groups (e.g. game servers vs. system workloads), apply the rule only to the SG used by the game-server node group.
+
+#### Option 1 — AWS Console
+
+1. Open the [VPC console → Security Groups](https://console.aws.amazon.com/vpc/home#SecurityGroups:) in the EKS cluster's region.
+2. Select the node SG identified above → **Inbound rules** → **Edit inbound rules**.
+3. **Add rule**: Type = `Custom UDP` (or `Custom TCP` to match `Protocol`), Port range = `<GamePort>`, Source = `0.0.0.0/0` (and `::/0` for IPv6 if you publish AAAA). Description = e.g. `okg-aga-customrouting`.
+4. Save.
+
+#### Option 2 — AWS CLI
+
+```sh
+aws ec2 authorize-security-group-ingress \
+  --region <eks-cluster-region> \
+  --group-id <node-sg-id> \
+  --ip-permissions \
+      'IpProtocol=udp,FromPort=7777,ToPort=7777,IpRanges=[{CidrIp=0.0.0.0/0,Description=okg-aga-customrouting}]'
+```
+
+Adjust `IpProtocol` and `FromPort/ToPort` to match your `Protocol` and `GamePort`. For TCP+UDP, repeat with `IpProtocol=tcp`. For IPv6 add a parallel entry with `Ipv6Ranges`.
 
 > **VPC-CNI SNAT requires no change.** Custom routing inbound traffic reaches the Pod ENI without traversing the node's SNAT chain, and the return path is handled by conntrack. AGA Custom Routing works with the default EKS VPC-CNI settings; do not set `EXTERNALSNAT=true` or `RANDOMIZESNAT=none` for AGA's sake.
 
