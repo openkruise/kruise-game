@@ -970,17 +970,19 @@ func syncListenerAndTargetGroupBinding(ctx context.Context, client client.Client
 	}
 	lbARN := tg.Annotations[NlbARNAnnoKey]
 	podName := tg.Labels[SvcSelectorKey]
-	_, err = controllerutil.CreateOrUpdate(ctx, client, &ackv1alpha1.Listener{
+	listener := &ackv1alpha1.Listener{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            tg.GetName(),
-			Namespace:       tg.GetNamespace(),
-			OwnerReferences: tg.GetOwnerReferences(),
-			Labels: map[string]string{
-				ResourceTagKey: ResourceTagValue,
-				SvcSelectorKey: podName,
-			},
+			Name:      tg.GetName(),
+			Namespace: tg.GetNamespace(),
 		},
-		Spec: ackv1alpha1.ListenerSpec{
+	}
+	_, err = controllerutil.CreateOrUpdate(ctx, client, listener, func() error {
+		listener.OwnerReferences = tg.GetOwnerReferences()
+		listener.Labels = map[string]string{
+			ResourceTagKey: ResourceTagValue,
+			SvcSelectorKey: podName,
+		}
+		listener.Spec = ackv1alpha1.ListenerSpec{
 			Protocol:        tg.Spec.Protocol,
 			Port:            &port,
 			LoadBalancerARN: &lbARN,
@@ -992,32 +994,36 @@ func syncListenerAndTargetGroupBinding(ctx context.Context, client client.Client
 			},
 			Tags: []*ackv1alpha1.Tag{{Key: ptr.To[string](ResourceTagKey),
 				Value: ptr.To[string](ResourceTagValue)}},
-		},
-	}, func() error { return nil })
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
 
 	var targetTypeIP = elbv2api.TargetTypeIP
-	_, err = controllerutil.CreateOrUpdate(ctx, client, &elbv2api.TargetGroupBinding{
+	tgb := &elbv2api.TargetGroupBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            tg.GetName(),
-			Namespace:       tg.GetNamespace(),
-			OwnerReferences: tg.GetOwnerReferences(),
-			Labels: map[string]string{
-				ResourceTagKey: ResourceTagValue,
-				SvcSelectorKey: podName,
-			},
+			Name:      tg.GetName(),
+			Namespace: tg.GetNamespace(),
 		},
-		Spec: elbv2api.TargetGroupBindingSpec{
+	}
+	_, err = controllerutil.CreateOrUpdate(ctx, client, tgb, func() error {
+		tgb.OwnerReferences = tg.GetOwnerReferences()
+		tgb.Labels = map[string]string{
+			ResourceTagKey: ResourceTagValue,
+			SvcSelectorKey: podName,
+		}
+		tgb.Spec = elbv2api.TargetGroupBindingSpec{
 			TargetGroupARN: *targetGroupARN,
 			TargetType:     &targetTypeIP,
 			ServiceRef: elbv2api.ServiceReference{
 				Name: podName,
 				Port: intstr.FromInt(int(port)),
 			},
-		},
-	}, func() error { return nil })
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
