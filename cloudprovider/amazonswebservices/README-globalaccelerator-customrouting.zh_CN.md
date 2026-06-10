@@ -4,7 +4,7 @@
 
 与 `AmazonWebServices-NLB` 插件（见 [README.zh_CN.md](./README.zh_CN.md)）不同，本插件**不**为数据面创建任何 AWS 或 Kubernetes 资源（无 NLB、无 TargetGroup、无 Service）。它只在**预先创建好**的 custom routing endpoint group 上对每个 Pod 切换 Allow/Deny，并查询确定性端口映射，再把结果写入 GameServer 的 `network-status`。游戏服通过 downward API 等方式读取该字段，自行把 `agaStaticIP:mappedPort` 上报给客户端。
 
-> **2026-06-10 已在 EKS（us-west-2）真机端到端验证通过。** 客户端→AGA→Pod 的真实 UDP echo、OnPodDeleted Deny、OnPodUpdated PodIP 变更、`ListCustomRoutingPortMappings` 分页（25 Pod、8187 条映射）、高频 Allow/Deny scaling 全部通过，且未触发任何 AGA throttling。
+> **2026-06-10 已在 EKS（us-west-2）真机端到端验证通过。** 外部客户端→AGA→Pod 的真实 UDP echo、OnPodDeleted Deny、OnPodUpdated PodIP 变更、`ListCustomRoutingPortMappings` 分页（25 Pod、8187 条映射）、高频 Allow/Deny scaling 全部通过，且未触发任何 AGA throttling。验证时使用 **EKS VPC-CNI 默认 SNAT 设置**（无需修改 `EXTERNALSNAT` / `RANDOMIZESNAT`）。
 
 ## 部署前置（运维方提供，**不**由插件创建）
 
@@ -16,20 +16,7 @@
 
 创建 endpoint group 时设置 `DenyAllTrafficToEndpoint=true`。插件运行时唯一的职责就是在这个默认拒绝的 EG 上选择性 `Allow` 各 Pod IP 目的地。
 
-### 2. 集群级 SNAT —— 必须用 `EXTERNALSNAT=true`
-
-Custom routing 的核心价值在于把真实客户端 IP 一路保留到 Pod ENI。要让全链路成立，Pod 的回程流量**不能**被 node SNAT 改写：
-
-```sh
-kubectl set env ds/aws-node -n kube-system AWS_VPC_K8S_CNI_EXTERNALSNAT=true
-kubectl rollout restart ds/aws-node -n kube-system
-```
-
-Node group 应当**部署在带 NAT Gateway 的私有子网**，这样关闭 SNAT 后 Pod 出向（公网、AWS API 等）仍可工作。这是集群级改动，已知副作用：公有子网中的 Pod 会失去直接出向能力。
-
-> **`RANDOMIZESNAT=none` 不能替代**：AWS VPC CNI 还有第二个 SNAT 相关 env `AWS_VPC_K8S_CNI_RANDOMIZESNAT=none`，它仍保留 SNAT 但不随机化源端口（用于 SIP 等需要可预测端口的协议）。它**不能**替代 `EXTERNALSNAT=true`。我们 2026-06-10 e2e 在 `RANDOMIZESNAT=none` 下入向 UDP 也通了（因为入向流量本就不经 SNAT 链），但生产部署应直接使用 `EXTERNALSNAT=true`，让回程同样绕开 SNAT。
-
-### 3. 节点 Security Group —— 放行游戏端口入站
+### 2. 节点 Security Group —— 放行游戏端口入站
 
 ```
 ingress: <Protocol> <GamePort> from 0.0.0.0/0
@@ -39,7 +26,9 @@ Custom routing 保留真实客户端 IP，源地址范围无法限定到 AGA 拥
 
 AGA 在你 VPC 中托管的 ENI/SG 不要手改。
 
-### 4. IAM（IRSA）
+> **VPC-CNI SNAT 不需要改动。** Custom routing 的入向流量直接到达 Pod ENI，不经节点的 SNAT 链。我们在 **EKS VPC-CNI 默认设置**下（`AWS_VPC_K8S_CNI_EXTERNALSNAT` 未设置、`AWS_VPC_K8S_CNI_RANDOMIZESNAT=prng`）验证过 AGA UDP echo 正常工作，**无需**任何 `EXTERNALSNAT=true` / `RANDOMIZESNAT=none` 改动。
+
+### 3. IAM（IRSA）
 
 Controller 的 ServiceAccount 需要：
 
@@ -49,7 +38,7 @@ Controller 的 ServiceAccount 需要：
 
 凭证从默认 AWS credential chain 读取，插件不绑死任何 auth 方式。
 
-### 5. 不做健康检查
+### 4. 不做健康检查
 
 Custom routing 原生没有健康检查 / 故障转移——确定性投递不管后端死活。插件不实现健康探测；不健康的 Pod 由 Kubernetes 自身重建（重建走 `OnPodDeleted` → `OnPodAdded` 重新解析映射）。
 

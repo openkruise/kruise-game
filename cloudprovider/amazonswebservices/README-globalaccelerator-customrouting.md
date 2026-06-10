@@ -4,7 +4,7 @@ For latency-sensitive game servers that run as ordinary Deployment/StatefulSet P
 
 Unlike the `AmazonWebServices-NLB` plugin (see [README.md](./README.md)), this plugin does **not** create any AWS or Kubernetes resources for the data path (no NLB, no TargetGroup, no Service). It only toggles per-Pod traffic on a **pre-created** custom routing endpoint group and looks up the deterministic port mapping, then publishes the result into the GameServer `network-status` annotation. The game server reads the annotation (commonly via the downward API) and self-reports its `agaStaticIP:mappedPort` to clients.
 
-> **Verified end-to-end on EKS (us-west-2) on 2026-06-10.** Real client UDP echo through AGA → Pod, OnPodDeleted Deny, OnPodUpdated PodIP-change, paged `ListCustomRoutingPortMappings` (25 Pods, 8187 mappings), and high-frequency Allow/Deny scaling all passed without any AGA throttling.
+> **Verified end-to-end on EKS (us-west-2) on 2026-06-10.** Real external client UDP echo through AGA → Pod, OnPodDeleted Deny, OnPodUpdated PodIP-change, paged `ListCustomRoutingPortMappings` (25 Pods, 8187 mappings), and high-frequency Allow/Deny scaling all passed without any AGA throttling. Verified working with the **default EKS VPC-CNI SNAT settings** (no `EXTERNALSNAT` / `RANDOMIZESNAT` change needed).
 
 ## Prerequisites (created by the operator, NOT by the plugin)
 
@@ -16,20 +16,7 @@ Port-mapping capacity (`subnet usable IPs × destination ports × protocols`) is
 
 When creating the endpoint group, set `DenyAllTrafficToEndpoint=true`. The plugin's only runtime job is to selectively `Allow` per-Pod-IP destinations on this default-deny endpoint group.
 
-### 2. Cluster-level SNAT — must use `EXTERNALSNAT=true`
-
-Custom routing's main value is preserving the real client IP all the way to the Pod ENI. To make this work end-to-end, return traffic from the Pod must NOT be SNAT'd by the node:
-
-```sh
-kubectl set env ds/aws-node -n kube-system AWS_VPC_K8S_CNI_EXTERNALSNAT=true
-kubectl rollout restart ds/aws-node -n kube-system
-```
-
-Node groups should sit in **private subnets behind a NAT Gateway** so Pod egress (to the public Internet, AWS APIs, etc.) still works after SNAT is disabled. This is a cluster-wide change with known side effects (Pods in public subnets lose direct egress).
-
-> **Note on `RANDOMIZESNAT=none`**: AWS VPC CNI has a second SNAT-related env, `AWS_VPC_K8S_CNI_RANDOMIZESNAT=none`, that keeps SNAT enabled but stops randomizing source ports (used for protocols like SIP that need predictable ports). It is **not a substitute** for `EXTERNALSNAT=true`. In our 2026-06-10 e2e the inbound UDP path happened to work under `RANDOMIZESNAT=none` because the inbound flow does not traverse the SNAT chain, but production deployments should set `EXTERNALSNAT=true` directly so return traffic also bypasses SNAT.
-
-### 3. Node Security Group — open ingress to the game port
+### 2. Node Security Group — open ingress to the game port
 
 ```
 ingress: <Protocol> <GamePort> from 0.0.0.0/0
@@ -39,7 +26,9 @@ Custom routing preserves the real client IP and the source cannot be restricted 
 
 The AGA-managed ENIs/SGs in your VPC must not be hand-modified.
 
-### 4. IAM (IRSA)
+> **VPC-CNI SNAT does NOT need to be changed.** Custom routing inbound traffic arrives at the Pod ENI without traversing the node's SNAT chain. We verified UDP echo through AGA works with the **default EKS VPC-CNI settings** (`AWS_VPC_K8S_CNI_EXTERNALSNAT` unset, `AWS_VPC_K8S_CNI_RANDOMIZESNAT=prng`). No `EXTERNALSNAT=true` / `RANDOMIZESNAT=none` change is required for AGA Custom Routing.
+
+### 3. IAM (IRSA)
 
 The controller's service account needs:
 
@@ -49,7 +38,7 @@ The controller's service account needs:
 
 Credentials are picked up from the default AWS credential chain; the plugin does not bind any auth method.
 
-### 5. No health checking
+### 4. No health checking
 
 Custom routing has no native health checks or failover — delivery is deterministic regardless of backend health. The plugin does not implement health probing; unhealthy Pods are recycled by Kubernetes (recreate → `OnPodDeleted` → `OnPodAdded` re-resolves the mapping).
 
