@@ -12,7 +12,74 @@ The plugin assumes the following are provisioned out-of-band (CLI / SDK / Terraf
 
 Port-mapping capacity (`subnet usable IPs × destination ports × protocols`) is a one-time capacity-planning decision and is intentionally kept out of the Pod hot path. The plugin only reads the endpoint group ARN and the Pod's subnet (`EndpointId`) from `networkConf`.
 
-When creating the endpoint group, set `DenyAllTrafficToEndpoint=true`. The plugin's only runtime job is to selectively `Allow` per-Pod-IP destinations on this default-deny endpoint group.
+When creating the endpoint group, leave `DenyAllTrafficToEndpoint=true` (the default). The plugin's only runtime job is to selectively `Allow` per-Pod-IP destinations on this default-deny endpoint group.
+
+References:
+[Custom routing accelerators](https://docs.aws.amazon.com/global-accelerator/latest/dg/about-custom-routing-accelerators.html) · [Getting started — custom routing](https://docs.aws.amazon.com/global-accelerator/latest/dg/getting-started-custom-routing.html) · [Guidelines and restrictions](https://docs.aws.amazon.com/global-accelerator/latest/dg/about-custom-routing-guidelines.html)
+
+#### Option 1 — AWS Console
+
+The Global Accelerator console must be used in the **US West (Oregon) `us-west-2`** region (the AGA control plane lives there regardless of where your EKS cluster is).
+
+1. Open the [Global Accelerator console](https://console.aws.amazon.com/globalaccelerator/home?region=us-west-2#/accelerators) → **Create accelerator** → select **Custom routing**. Pick a name and IP address pool (Amazon-owned is fine for most cases).
+2. **Add listener**: choose a port range wide enough to cover `subnet usable IPs × destination ports × protocols` (see [Limits and quotas](#limits-and-quotas)). A single wide range like `16000–65535` is usually safest. Listener port ranges cannot be shrunk later, only grown.
+3. **Add endpoint group**: pick the AWS region of your EKS cluster.
+   - Under **Destination configurations**, add one row per game port: `From port`, `To port`, `Protocols` (TCP / UDP / both).
+   - Leave **Deny all traffic to endpoints** **enabled** (this is the default and is what the plugin relies on).
+4. **Add VPC subnet endpoints**: for each EKS Pod subnet you intend to register, add a row with that subnet ID. Subnets must be `/28`–`/17`. The same subnet may be registered to only one custom routing accelerator at a time.
+5. Wait until the accelerator status reaches **Deployed**, then copy the **endpoint group ARN** — that is the value for `CustomRoutingEndpointGroupArn` in `networkConf`.
+
+#### Option 2 — AWS CLI
+
+All commands target `--region us-west-2` (the AGA control plane region). See the [API reference](https://docs.aws.amazon.com/global-accelerator/latest/api/Welcome.html) for full parameter detail.
+
+```sh
+# 1. Create the custom routing accelerator
+ACC_ARN=$(aws globalaccelerator create-custom-routing-accelerator \
+  --region us-west-2 \
+  --name okg-cr-accelerator \
+  --idempotency-token "$(date +%s)" \
+  --query 'Accelerator.AcceleratorArn' --output text)
+
+# Wait for status DEPLOYED before adding listeners (poll every 30s)
+aws globalaccelerator describe-custom-routing-accelerator \
+  --region us-west-2 --accelerator-arn "$ACC_ARN" \
+  --query 'Accelerator.{Status:Status,DnsName:DnsName,IPs:IpSets[0].IpAddresses}'
+
+# 2. Create a listener with one wide port range
+LST_ARN=$(aws globalaccelerator create-custom-routing-listener \
+  --region us-west-2 \
+  --accelerator-arn "$ACC_ARN" \
+  --port-ranges FromPort=16000,ToPort=65535 \
+  --idempotency-token "$(date +%s)-lst" \
+  --query 'Listener.ListenerArn' --output text)
+
+# 3. Create an endpoint group in the EKS cluster's region.
+#    DestinationConfigurations is a listener-level allow-list of destination
+#    (port,protocol) pairs that the EG can map to. Add one entry per game port.
+EG_ARN=$(aws globalaccelerator create-custom-routing-endpoint-group \
+  --region us-west-2 \
+  --listener-arn "$LST_ARN" \
+  --endpoint-group-region <eks-cluster-region> \
+  --destination-configurations FromPort=7777,ToPort=7777,Protocols=UDP \
+  --idempotency-token "$(date +%s)-eg" \
+  --query 'EndpointGroup.EndpointGroupArn' --output text)
+
+# 4. Register each EKS Pod subnet as an endpoint. The subnet ID is what the
+#    plugin's networkConf 'EndpointId' must reference.
+aws globalaccelerator add-custom-routing-endpoints \
+  --region us-west-2 \
+  --endpoint-group-arn "$EG_ARN" \
+  --endpoint-configurations EndpointId=<subnet-id>
+
+echo "CustomRoutingEndpointGroupArn = $EG_ARN"
+```
+
+The DNS name printed by step 1 is the address the game client connects to; the plugin writes it (and the per-Pod mapped port) into the GameServer `network-status`.
+
+#### Option 3 — Terraform / Infrastructure as code
+
+Terraform's `aws_globalaccelerator_*` resources cover custom routing accelerators, listeners, endpoint groups, and subnet endpoints. Note that **AWS CloudFormation does not support custom routing accelerators**; CFN deployments must wrap the AWS CLI / SDK in a custom resource.
 
 ### 2. Node Security Group — open ingress to the game port
 

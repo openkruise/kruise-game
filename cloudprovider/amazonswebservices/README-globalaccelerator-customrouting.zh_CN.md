@@ -13,7 +13,74 @@
 
 端口映射容量（`子网可用 IP × 目标端口 × 协议组合数`）是一次性的容量规划决策，刻意不放进 Pod 热路径。插件只从 `networkConf` 读取 endpoint group ARN 和 Pod 所在子网 ID（`EndpointId`）。
 
-创建 endpoint group 时设置 `DenyAllTrafficToEndpoint=true`。插件运行时唯一的职责就是在这个默认拒绝的 EG 上选择性 `Allow` 各 Pod IP 目的地。
+创建 endpoint group 时保持 `DenyAllTrafficToEndpoint=true`（默认值）。插件运行时唯一的职责就是在这个默认拒绝的 EG 上选择性 `Allow` 各 Pod IP 目的地。
+
+官方文档：
+[Custom routing accelerators](https://docs.aws.amazon.com/global-accelerator/latest/dg/about-custom-routing-accelerators.html) · [Getting started — custom routing](https://docs.aws.amazon.com/global-accelerator/latest/dg/getting-started-custom-routing.html) · [Guidelines and restrictions](https://docs.aws.amazon.com/global-accelerator/latest/dg/about-custom-routing-guidelines.html)
+
+#### 选项 1——AWS 控制台
+
+Global Accelerator 控制台必须在 **美西（俽勒冈）`us-west-2`** 区域使用（AGA 控制面只在这个区，与 EKS 集群所在区无关）。
+
+1. 打开 [Global Accelerator 控制台](https://console.aws.amazon.com/globalaccelerator/home?region=us-west-2#/accelerators) → **Create accelerator** → 选 **Custom routing**。起名、选 IP 地址池（Amazon-owned 一般就够）。
+2. **添加 listener**：选一个足够宽的端口范围，涵盖 `子网可用 IP × 目标端口 × 协议`（见[限制与 quota](#%E9%99%90%E5%88%B6%E4%B8%8E-quota)）。一般一个宽范围如 `16000–65535` 最保险。Listener 端口范围创建后只能扩大不能缩小。
+3. **添加 endpoint group**：选 EKS 集群所在的 AWS 区域。
+   - 在 **Destination configurations** 下，每个游戏端口加一行：`From port`、`To port`、`Protocols`（TCP / UDP / 均可）。
+   - **Deny all traffic to endpoints** 保持**启用**（这是默认值，也是插件依赖的前提）。
+4. **注册 VPC 子网 endpoint**：为每个 EKS Pod 所在子网加一行，填子网 ID。子网必须是 `/28`–`/17`；同一子网同一时间只能注册给一个 custom routing accelerator。
+5. 等 accelerator 状态变为 **Deployed**，复制 **endpoint group ARN** ——这就是 `networkConf` 中 `CustomRoutingEndpointGroupArn` 的值。
+
+#### 选项 2——AWS CLI
+
+所有命令 `--region us-west-2`（AGA 控制面区域）。完整参数见 [API 参考](https://docs.aws.amazon.com/global-accelerator/latest/api/Welcome.html)。
+
+```sh
+# 1. 创建 custom routing accelerator
+ACC_ARN=$(aws globalaccelerator create-custom-routing-accelerator \
+  --region us-west-2 \
+  --name okg-cr-accelerator \
+  --idempotency-token "$(date +%s)" \
+  --query 'Accelerator.AcceleratorArn' --output text)
+
+# 等状态进 DEPLOYED 再加 listener（每 30s 轮询）
+aws globalaccelerator describe-custom-routing-accelerator \
+  --region us-west-2 --accelerator-arn "$ACC_ARN" \
+  --query 'Accelerator.{Status:Status,DnsName:DnsName,IPs:IpSets[0].IpAddresses}'
+
+# 2. 创建 listener，一个宽端口范围
+LST_ARN=$(aws globalaccelerator create-custom-routing-listener \
+  --region us-west-2 \
+  --accelerator-arn "$ACC_ARN" \
+  --port-ranges FromPort=16000,ToPort=65535 \
+  --idempotency-token "$(date +%s)-lst" \
+  --query 'Listener.ListenerArn' --output text)
+
+# 3. 在 EKS 集群所在 region 创建 endpoint group。
+#    DestinationConfigurations 是 listener 级的目标端口/协议白名单，
+#    每个游戏端口加一条。
+EG_ARN=$(aws globalaccelerator create-custom-routing-endpoint-group \
+  --region us-west-2 \
+  --listener-arn "$LST_ARN" \
+  --endpoint-group-region <eks-cluster-region> \
+  --destination-configurations FromPort=7777,ToPort=7777,Protocols=UDP \
+  --idempotency-token "$(date +%s)-eg" \
+  --query 'EndpointGroup.EndpointGroupArn' --output text)
+
+# 4. 将每个 EKS Pod 子网注册为 endpoint。子网 ID 就是插件 networkConf 中
+#    'EndpointId' 需填的值。
+aws globalaccelerator add-custom-routing-endpoints \
+  --region us-west-2 \
+  --endpoint-group-arn "$EG_ARN" \
+  --endpoint-configurations EndpointId=<subnet-id>
+
+echo "CustomRoutingEndpointGroupArn = $EG_ARN"
+```
+
+Step 1 输出的 DNS 名字是客户端连接的地址；插件会把它连同每 Pod 的映射端口一起写入 GameServer `network-status`。
+
+#### 选项 3——Terraform / IaC
+
+Terraform 的 `aws_globalaccelerator_*` 资源覆盖 custom routing accelerator、listener、endpoint group、子网 endpoint。注意：**AWS CloudFormation 不支持 custom routing accelerator**；CFN 部署需用 custom resource 包装 AWS CLI / SDK。
 
 ### 2. 节点 Security Group —— 放行游戏端口入站
 
