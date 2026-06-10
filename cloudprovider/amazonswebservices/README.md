@@ -195,7 +195,7 @@ Unlike the `AmazonWebServices-NLB` plugin, this plugin does **not** create any A
 
 The plugin assumes the following are provisioned out-of-band (CLI / SDK / Terraform):
 
-1. **Custom routing accelerator + listener (port range) + custom routing endpoint group + registered subnet(s).** Port-mapping capacity (`subnet usable IPs × destination ports × protocols`) is a one-time capacity-planning decision and is intentionally kept out of the Pod hot path. The plugin only reads the endpoint group ARN and the registered subnet IDs from `networkConf`.
+1. **Custom routing accelerator + listener (port range) + custom routing endpoint group + registered subnet(s).** Port-mapping capacity (`subnet usable IPs × destination ports × protocols`) is a one-time capacity-planning decision and is intentionally kept out of the Pod hot path. The plugin only reads the endpoint group ARN and the Pod's subnet (`EndpointId`) from `networkConf`.
 2. **Cluster-level SNAT disabled** so return traffic to the real client IP is not rewritten:
    ```
    kubectl set env daemonset aws-node -n kube-system AWS_VPC_K8S_CNI_EXTERNALSNAT=true
@@ -213,14 +213,15 @@ The plugin assumes the following are provisioned out-of-band (CLI / SDK / Terraf
 | `CustomRoutingEndpointGroupArn` | yes | ARN of the pre-created custom routing endpoint group. |
 | `GamePort` | yes | Destination port the game server listens on (`1`–`65535`). |
 | `Protocol` | no | `TCP` or `UDP`. Defaults to `UDP`. |
-| `SubnetIds` | yes | Comma-separated list of registered VPC subnet IDs (one per AZ). The plugin resolves which subnet owns the Pod IP automatically. |
+| `EndpointId` | yes | The registered VPC **subnet ID** the Pod runs in (the custom routing endpoint ID). Supplied explicitly by the user; the plugin never guesses by trial-and-error. In a multi-AZ deployment, pin each GameServerSet to the subnet of its node pool / AZ. |
+| `Region` | no | AWS region of the Global Accelerator **control plane**. Defaults to `us-west-2`. All Allow/Deny/ListPortMappings calls are issued here regardless of the cluster's own region. Override only for other partitions / future control-plane regions. |
 
 ## Lifecycle
 
 | Plugin hook | Action |
 | --- | --- |
-| `Init` | Build the Global Accelerator client (lazily, default AWS credential chain) and an in-memory cache. The plugin creates no accelerator/listener/subnet. |
-| `OnPodAdded` / `OnPodUpdated` | Take `pod.Status.PodIP`; `AllowCustomRoutingTraffic` (destination `podIP:GamePort`) on the owning subnet; `ListCustomRoutingPortMappingsByDestination` to obtain the AGA static IP + mapped port; write `NetworkStatus.ExternalAddresses{IP: agaStaticIP, Ports: mappedPort}` with `InternalAddresses` set to the Pod IP and state `Ready`. If the Pod IP is not assigned yet or the mapping is not yet visible, state stays `NotReady`/retries. Idempotent: a re-resolved Pod IP that is unchanged is a no-op. |
+| `Init` | Initialize the in-memory cache. The Global Accelerator client (aws-sdk-go-v2, default AWS credential chain, region anchored to the AGA control plane) is built lazily on first use. The plugin creates no accelerator/listener/subnet. |
+| `OnPodAdded` / `OnPodUpdated` | Take `pod.Status.PodIP`; `AllowCustomRoutingTraffic` (destination `podIP:GamePort`) on the user-specified `EndpointId`; `ListCustomRoutingPortMappingsByDestination` (paged) to obtain the AGA static IP + mapped port; write `NetworkStatus.ExternalAddresses{IP: agaStaticIP, Ports: mappedPort}` with `InternalAddresses` set to the Pod IP and state `Ready`. If the Pod IP is not assigned yet or the mapping is not yet visible, `NetworkNotReady` is published and `(pod, nil)` returned (no error escapes the mutating-webhook path). Idempotent: an unchanged Pod IP is a no-op. If the Pod IP changes (reschedule), the previous IP is `Deny`'d before the new IP is allowed, so mapping capacity is not leaked. |
 | `OnPodDeleted` | `DenyCustomRoutingTraffic` (destination `podIP:GamePort`) to drain the Pod. |
 
 ## Example GameServerSet
@@ -242,8 +243,10 @@ spec:
         value: "7777"
       - name: Protocol
         value: "UDP"
-      - name: SubnetIds
-        value: "subnet-0a1b2c3d,subnet-0e4f5a6b"
+      - name: EndpointId
+        value: "subnet-0a1b2c3d"
+      # - name: Region        # optional, defaults to us-west-2
+      #   value: "us-west-2"
   gameServerTemplate:
     spec:
       containers:

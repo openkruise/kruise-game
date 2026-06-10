@@ -15,20 +15,21 @@ package amazonswebservices
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"sync"
 	"testing"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/service/globalaccelerator"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/globalaccelerator"
+	gatypes "github.com/aws/aws-sdk-go-v2/service/globalaccelerator/types"
+	smithy "github.com/aws/smithy-go"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/json"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
+	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
 )
 
 const (
@@ -37,77 +38,146 @@ const (
 	testPodIP  = "10.0.1.23"
 )
 
-// fakeAGA is an in-memory mock of customRoutingAPI.
+// fakeAGA is an in-memory mock of customRoutingAPI (aws-sdk-go-v2 shape).
 type fakeAGA struct {
 	mu sync.Mutex
 
-	// configuration of the fake mapping table: pod IP -> (accIP, accPort)
-	mappings map[string]struct {
-		accIP   string
-		accPort int64
-	}
-	// subnet that "owns" the pod IP; Allow/Deny on other subnets returns error.
-	owningSubnet string
+	// configuration of the fake mapping table: pod IP -> list of (accIP, accPort)
+	// at the game port (7777). Multiple entries exercise the paging path.
+	mappings map[string][]accSock
 
-	allowCalls []string
-	denyCalls  []string
+	allowCalls []string // "endpointId/destIP"
+	denyCalls  []string // "endpointId/destIP"
 
 	allowErr error
 	listErr  error
+	denyErr  error
+
+	// pageSize, when > 1, splits the mapping list across paginated responses.
+	pageSize int
 }
 
-func (f *fakeAGA) AllowCustomRoutingTrafficWithContext(ctx aws.Context, in *globalaccelerator.AllowCustomRoutingTrafficInput, opts ...request.Option) (*globalaccelerator.AllowCustomRoutingTrafficOutput, error) {
+type accSock struct {
+	accIP   string
+	accPort int32
+}
+
+func (f *fakeAGA) AllowCustomRoutingTraffic(ctx context.Context, in *globalaccelerator.AllowCustomRoutingTrafficInput, optFns ...func(*globalaccelerator.Options)) (*globalaccelerator.AllowCustomRoutingTrafficOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.allowErr != nil {
 		return nil, f.allowErr
 	}
-	if f.owningSubnet != "" && aws.StringValue(in.EndpointId) != f.owningSubnet {
-		return nil, fmt.Errorf("destination address not in subnet %s", aws.StringValue(in.EndpointId))
-	}
-	f.allowCalls = append(f.allowCalls, aws.StringValue(in.EndpointId)+"/"+aws.StringValue(in.DestinationAddresses[0]))
+	f.allowCalls = append(f.allowCalls, aws.ToString(in.EndpointId)+"/"+in.DestinationAddresses[0])
 	return &globalaccelerator.AllowCustomRoutingTrafficOutput{}, nil
 }
 
-func (f *fakeAGA) DenyCustomRoutingTrafficWithContext(ctx aws.Context, in *globalaccelerator.DenyCustomRoutingTrafficInput, opts ...request.Option) (*globalaccelerator.DenyCustomRoutingTrafficOutput, error) {
+func (f *fakeAGA) DenyCustomRoutingTraffic(ctx context.Context, in *globalaccelerator.DenyCustomRoutingTrafficInput, optFns ...func(*globalaccelerator.Options)) (*globalaccelerator.DenyCustomRoutingTrafficOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.owningSubnet != "" && aws.StringValue(in.EndpointId) != f.owningSubnet {
-		return nil, fmt.Errorf("destination address not in subnet %s", aws.StringValue(in.EndpointId))
+	if f.denyErr != nil {
+		return nil, f.denyErr
 	}
-	f.denyCalls = append(f.denyCalls, aws.StringValue(in.EndpointId)+"/"+aws.StringValue(in.DestinationAddresses[0]))
+	f.denyCalls = append(f.denyCalls, aws.ToString(in.EndpointId)+"/"+in.DestinationAddresses[0])
 	return &globalaccelerator.DenyCustomRoutingTrafficOutput{}, nil
 }
 
-func (f *fakeAGA) ListCustomRoutingPortMappingsByDestinationWithContext(ctx aws.Context, in *globalaccelerator.ListCustomRoutingPortMappingsByDestinationInput, opts ...request.Option) (*globalaccelerator.ListCustomRoutingPortMappingsByDestinationOutput, error) {
+func (f *fakeAGA) ListCustomRoutingPortMappingsByDestination(ctx context.Context, in *globalaccelerator.ListCustomRoutingPortMappingsByDestinationInput, optFns ...func(*globalaccelerator.Options)) (*globalaccelerator.ListCustomRoutingPortMappingsByDestinationOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
-	m, ok := f.mappings[aws.StringValue(in.DestinationAddress)]
+	socks, ok := f.mappings[aws.ToString(in.DestinationAddress)]
 	if !ok {
 		return &globalaccelerator.ListCustomRoutingPortMappingsByDestinationOutput{}, nil
 	}
-	return &globalaccelerator.ListCustomRoutingPortMappingsByDestinationOutput{
-		DestinationPortMappings: []*globalaccelerator.DestinationPortMapping{
-			{
-				EndpointId:               in.EndpointId,
-				DestinationSocketAddress: &globalaccelerator.SocketAddress{IpAddress: aws.String(testPodIP), Port: aws.Int64(7777)},
-				AcceleratorSocketAddresses: []*globalaccelerator.SocketAddress{
-					{IpAddress: aws.String(m.accIP), Port: aws.Int64(m.accPort)},
-				},
+
+	// Determine the page window.
+	start := 0
+	if in.NextToken != nil {
+		// token encodes the next start index as a decimal string.
+		start = decodeToken(aws.ToString(in.NextToken))
+	}
+	pageSize := f.pageSize
+	if pageSize <= 0 {
+		pageSize = len(socks)
+	}
+	end := start + pageSize
+	if end > len(socks) {
+		end = len(socks)
+	}
+
+	mappings := make([]gatypes.DestinationPortMapping, 0, end-start)
+	for _, s := range socks[start:end] {
+		mappings = append(mappings, gatypes.DestinationPortMapping{
+			EndpointId:               in.EndpointId,
+			DestinationSocketAddress: &gatypes.SocketAddress{IpAddress: aws.String(aws.ToString(in.DestinationAddress)), Port: aws.Int32(7777)},
+			AcceleratorSocketAddresses: []gatypes.SocketAddress{
+				{IpAddress: aws.String(s.accIP), Port: aws.Int32(s.accPort)},
 			},
-		},
-	}, nil
+		})
+	}
+	out := &globalaccelerator.ListCustomRoutingPortMappingsByDestinationOutput{
+		DestinationPortMappings: mappings,
+	}
+	if end < len(socks) {
+		out.NextToken = aws.String(encodeToken(end))
+	}
+	return out, nil
 }
+
+func encodeToken(i int) string {
+	return "tok-" + itoa(i)
+}
+
+func decodeToken(s string) int {
+	if len(s) <= 4 {
+		return 0
+	}
+	return atoi(s[4:])
+}
+
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b []byte
+	for i > 0 {
+		b = append([]byte{byte('0' + i%10)}, b...)
+		i /= 10
+	}
+	return string(b)
+}
+
+func atoi(s string) int {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			break
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
+// apiErr is a minimal smithy.APIError implementation for typed-error tests.
+type apiErr struct {
+	code string
+	msg  string
+}
+
+func (e *apiErr) Error() string                 { return e.code + ": " + e.msg }
+func (e *apiErr) ErrorCode() string             { return e.code }
+func (e *apiErr) ErrorMessage() string          { return e.msg }
+func (e *apiErr) ErrorFault() smithy.ErrorFault { return smithy.FaultClient }
 
 func newTestPod(podIP string) *corev1.Pod {
 	conf := []gamekruiseiov1alpha1.NetworkConfParams{
 		{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
 		{Name: CustomRoutingGamePortConfigName, Value: "7777"},
 		{Name: CustomRoutingProtocolConfigName, Value: "UDP"},
-		{Name: CustomRoutingSubnetIdsConfigName, Value: "subnet-aaa," + testSubnet},
+		{Name: CustomRoutingEndpointIdConfigName, Value: testSubnet},
 	}
 	confBytes, _ := json.Marshal(conf)
 	return &corev1.Pod{
@@ -138,12 +208,8 @@ func getNetworkStatus(t *testing.T, pod *corev1.Pod) *gamekruiseiov1alpha1.Netwo
 
 func newFakeAGA() *fakeAGA {
 	return &fakeAGA{
-		owningSubnet: testSubnet,
-		mappings: map[string]struct {
-			accIP   string
-			accPort int64
-		}{
-			testPodIP: {accIP: "75.2.1.1", accPort: 50001},
+		mappings: map[string][]accSock{
+			testPodIP: {{accIP: "75.2.1.1", accPort: 50001}},
 		},
 	}
 }
@@ -161,39 +227,57 @@ func TestParseCustomRoutingConfig(t *testing.T) {
 				{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
 				{Name: CustomRoutingGamePortConfigName, Value: "7777"},
 				{Name: CustomRoutingProtocolConfigName, Value: "tcp"},
-				{Name: CustomRoutingSubnetIdsConfigName, Value: "subnet-a, subnet-b"},
+				{Name: CustomRoutingEndpointIdConfigName, Value: "subnet-a"},
 			},
 			want: &customRoutingConfig{
 				endpointGroupArn: testEGArn,
 				gamePort:         7777,
 				protocol:         corev1.ProtocolTCP,
-				subnetIds:        []string{"subnet-a", "subnet-b"},
+				endpointId:       "subnet-a",
+				region:           defaultAGARegion,
 			},
 		},
 		{
-			name: "default protocol udp",
+			name: "default protocol udp and region",
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
 				{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
 				{Name: CustomRoutingGamePortConfigName, Value: "8000"},
-				{Name: CustomRoutingSubnetIdsConfigName, Value: testSubnet},
+				{Name: CustomRoutingEndpointIdConfigName, Value: testSubnet},
 			},
 			want: &customRoutingConfig{
 				endpointGroupArn: testEGArn,
 				gamePort:         8000,
 				protocol:         corev1.ProtocolUDP,
-				subnetIds:        []string{testSubnet},
+				endpointId:       testSubnet,
+				region:           defaultAGARegion,
+			},
+		},
+		{
+			name: "region override",
+			conf: []gamekruiseiov1alpha1.NetworkConfParams{
+				{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
+				{Name: CustomRoutingGamePortConfigName, Value: "7777"},
+				{Name: CustomRoutingEndpointIdConfigName, Value: testSubnet},
+				{Name: CustomRoutingRegionConfigName, Value: "us-east-1"},
+			},
+			want: &customRoutingConfig{
+				endpointGroupArn: testEGArn,
+				gamePort:         7777,
+				protocol:         corev1.ProtocolUDP,
+				endpointId:       testSubnet,
+				region:           "us-east-1",
 			},
 		},
 		{
 			name: "missing arn",
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
 				{Name: CustomRoutingGamePortConfigName, Value: "7777"},
-				{Name: CustomRoutingSubnetIdsConfigName, Value: testSubnet},
+				{Name: CustomRoutingEndpointIdConfigName, Value: testSubnet},
 			},
 			wantErr: true,
 		},
 		{
-			name: "missing subnets",
+			name: "missing endpoint id",
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
 				{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
 				{Name: CustomRoutingGamePortConfigName, Value: "7777"},
@@ -205,7 +289,7 @@ func TestParseCustomRoutingConfig(t *testing.T) {
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
 				{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
 				{Name: CustomRoutingGamePortConfigName, Value: "abc"},
-				{Name: CustomRoutingSubnetIdsConfigName, Value: testSubnet},
+				{Name: CustomRoutingEndpointIdConfigName, Value: testSubnet},
 			},
 			wantErr: true,
 		},
@@ -214,7 +298,7 @@ func TestParseCustomRoutingConfig(t *testing.T) {
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
 				{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
 				{Name: CustomRoutingGamePortConfigName, Value: "70000"},
-				{Name: CustomRoutingSubnetIdsConfigName, Value: testSubnet},
+				{Name: CustomRoutingEndpointIdConfigName, Value: testSubnet},
 			},
 			wantErr: true,
 		},
@@ -224,7 +308,7 @@ func TestParseCustomRoutingConfig(t *testing.T) {
 				{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
 				{Name: CustomRoutingGamePortConfigName, Value: "7777"},
 				{Name: CustomRoutingProtocolConfigName, Value: "sctp"},
-				{Name: CustomRoutingSubnetIdsConfigName, Value: testSubnet},
+				{Name: CustomRoutingEndpointIdConfigName, Value: testSubnet},
 			},
 			wantErr: true,
 		},
@@ -272,12 +356,12 @@ func TestOnPodAddedReady(t *testing.T) {
 	if len(ns.InternalAddresses) != 1 || ns.InternalAddresses[0].IP != testPodIP {
 		t.Fatalf("unexpected internal addresses: %#v", ns.InternalAddresses)
 	}
-	// Only the owning subnet should have a successful allow call.
+	// Exactly one allow call, on the user-specified endpoint (no trial-and-error).
 	if len(fake.allowCalls) != 1 || fake.allowCalls[0] != testSubnet+"/"+testPodIP {
 		t.Errorf("unexpected allow calls: %#v", fake.allowCalls)
 	}
-	// Cache must be populated for the owning subnet.
-	if cached := p.getCache("default/game-0"); cached == nil || cached.subnetId != testSubnet {
+	// Cache must be populated for the endpoint.
+	if cached := p.getCache("default/game-0"); cached == nil || cached.endpointId != testSubnet {
 		t.Errorf("cache not populated correctly: %#v", cached)
 	}
 }
@@ -300,24 +384,91 @@ func TestOnPodAddedNoPodIP(t *testing.T) {
 	}
 }
 
+// M2: mapping not visible yet must publish NotReady and return (pod, nil) — no
+// error escapes the webhook path (otherwise the status write is swallowed).
 func TestOnPodAddedMappingNotFound(t *testing.T) {
 	fake := newFakeAGA()
-	fake.mappings = map[string]struct {
-		accIP   string
-		accPort int64
-	}{} // no mapping yet
+	fake.mappings = map[string][]accSock{} // no mapping yet
+	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
+	pod := newTestPod(testPodIP)
+
+	out, perr := p.OnPodAdded(nil, pod, context.Background())
+	if perr != nil {
+		t.Fatalf("expected no error when mapping not found, got %v", perr)
+	}
+	ns := getNetworkStatus(t, out)
+	if ns == nil || ns.CurrentNetworkState != gamekruiseiov1alpha1.NetworkNotReady {
+		t.Fatalf("expected NetworkNotReady, got %#v", ns)
+	}
+	if p.getCache("default/game-0") != nil {
+		t.Errorf("cache should not be populated when mapping not found")
+	}
+}
+
+// S: Allow failure must surface as an apiCallError (not silently swallowed).
+func TestOnPodAddedAllowError(t *testing.T) {
+	fake := newFakeAGA()
+	fake.allowErr = &apiErr{code: "AccessDeniedException", msg: "not authorized"}
 	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
 	pod := newTestPod(testPodIP)
 
 	_, perr := p.OnPodAdded(nil, pod, context.Background())
 	if perr == nil {
-		t.Fatalf("expected retry error when mapping not found")
+		t.Fatalf("expected error when allow fails")
 	}
-	if perr.Type() != "retryError" {
-		t.Errorf("expected retryError, got %v", perr.Type())
+	if perr.Type() != cperrors.ApiCallError {
+		t.Errorf("expected apiCallError, got %v", perr.Type())
 	}
 	if p.getCache("default/game-0") != nil {
-		t.Errorf("cache should not be populated when mapping not found")
+		t.Errorf("cache should not be populated on allow failure")
+	}
+}
+
+// S: List failure must surface as an apiCallError.
+func TestOnPodAddedListError(t *testing.T) {
+	fake := newFakeAGA()
+	fake.listErr = &apiErr{code: "InternalServiceErrorException", msg: "boom"}
+	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
+	pod := newTestPod(testPodIP)
+
+	_, perr := p.OnPodAdded(nil, pod, context.Background())
+	if perr == nil {
+		t.Fatalf("expected error when list fails")
+	}
+	if perr.Type() != cperrors.ApiCallError {
+		t.Errorf("expected apiCallError, got %v", perr.Type())
+	}
+}
+
+// S: List paging — multiple accelerator sockets returned across pages must all
+// be collected into ExternalAddresses.
+func TestOnPodAddedListPaging(t *testing.T) {
+	fake := newFakeAGA()
+	fake.pageSize = 1
+	fake.mappings[testPodIP] = []accSock{
+		{accIP: "75.2.1.1", accPort: 50001},
+		{accIP: "75.2.1.2", accPort: 50002},
+		{accIP: "75.2.1.3", accPort: 50003},
+	}
+	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
+	pod := newTestPod(testPodIP)
+
+	out, perr := p.OnPodAdded(nil, pod, context.Background())
+	if perr != nil {
+		t.Fatalf("OnPodAdded error: %v", perr)
+	}
+	ns := getNetworkStatus(t, out)
+	if len(ns.ExternalAddresses) != 3 {
+		t.Fatalf("expected 3 external addresses across pages, got %d: %#v", len(ns.ExternalAddresses), ns.ExternalAddresses)
+	}
+	gotIPs := map[string]bool{}
+	for _, ea := range ns.ExternalAddresses {
+		gotIPs[ea.IP] = true
+	}
+	for _, want := range []string{"75.2.1.1", "75.2.1.2", "75.2.1.3"} {
+		if !gotIPs[want] {
+			t.Errorf("missing paged external address %s: %#v", want, ns.ExternalAddresses)
+		}
 	}
 }
 
@@ -345,12 +496,11 @@ func TestOnPodUpdatedIdempotent(t *testing.T) {
 	}
 }
 
+// M3: when the Pod IP changes the plugin must Deny the old IP (to free the
+// limited mapping capacity) and Allow the new IP.
 func TestOnPodUpdatedPodIPChanged(t *testing.T) {
 	fake := newFakeAGA()
-	fake.mappings["10.0.1.99"] = struct {
-		accIP   string
-		accPort int64
-	}{accIP: "75.2.1.1", accPort: 50002}
+	fake.mappings["10.0.1.99"] = []accSock{{accIP: "75.2.1.1", accPort: 50002}}
 	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
 
 	pod := newTestPod(testPodIP)
@@ -358,11 +508,26 @@ func TestOnPodUpdatedPodIPChanged(t *testing.T) {
 		t.Fatalf("OnPodAdded error: %v", perr)
 	}
 
-	// Pod re-scheduled with a new IP -> must re-allow and refresh.
+	// Pod re-scheduled with a new IP -> must deny old IP, re-allow new IP, refresh.
 	pod.Status.PodIP = "10.0.1.99"
 	out, perr := p.OnPodUpdated(nil, pod, context.Background())
 	if perr != nil {
 		t.Fatalf("OnPodUpdated error: %v", perr)
+	}
+
+	// Old IP must have been denied on the owning endpoint.
+	if len(fake.denyCalls) != 1 || fake.denyCalls[0] != testSubnet+"/"+testPodIP {
+		t.Errorf("expected old IP %s to be denied, deny calls: %#v", testPodIP, fake.denyCalls)
+	}
+	// New IP must have been allowed.
+	foundNewAllow := false
+	for _, a := range fake.allowCalls {
+		if a == testSubnet+"/10.0.1.99" {
+			foundNewAllow = true
+		}
+	}
+	if !foundNewAllow {
+		t.Errorf("expected new IP to be allowed, allow calls: %#v", fake.allowCalls)
 	}
 	if cached := p.getCache("default/game-0"); cached == nil || cached.podIP != "10.0.1.99" {
 		t.Errorf("cache not refreshed for new pod IP: %#v", cached)
@@ -393,6 +558,28 @@ func TestOnPodDeleted(t *testing.T) {
 	}
 }
 
+// S: Deny failure on delete must surface for retry and keep the cache.
+func TestOnPodDeletedDenyError(t *testing.T) {
+	fake := newFakeAGA()
+	fake.denyErr = &apiErr{code: "InternalServiceErrorException", msg: "boom"}
+	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
+	pod := newTestPod(testPodIP)
+
+	if _, perr := p.OnPodAdded(nil, pod, context.Background()); perr != nil {
+		t.Fatalf("OnPodAdded error: %v", perr)
+	}
+	perr := p.OnPodDeleted(nil, pod, context.Background())
+	if perr == nil {
+		t.Fatalf("expected error when deny fails")
+	}
+	if perr.Type() != cperrors.ApiCallError {
+		t.Errorf("expected apiCallError, got %v", perr.Type())
+	}
+	if p.getCache("default/game-0") == nil {
+		t.Errorf("cache should be retained when deny fails (for retry)")
+	}
+}
+
 func TestOnPodDeletedNoPodIP(t *testing.T) {
 	fake := newFakeAGA()
 	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
@@ -403,5 +590,52 @@ func TestOnPodDeletedNoPodIP(t *testing.T) {
 	}
 	if len(fake.denyCalls) != 0 {
 		t.Errorf("should not deny without pod IP: %#v", fake.denyCalls)
+	}
+}
+
+// S: region from networkConf must be threaded into the client factory.
+func TestRegionConfigPassedToClient(t *testing.T) {
+	var gotRegion string
+	p := &CustomRoutingPlugin{
+		cache: make(map[string]*allocatedEndpoint),
+		newAGAClient: func(ctx context.Context, region string) (customRoutingAPI, error) {
+			gotRegion = region
+			return newFakeAGA(), nil
+		},
+	}
+	conf := []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
+		{Name: CustomRoutingGamePortConfigName, Value: "7777"},
+		{Name: CustomRoutingEndpointIdConfigName, Value: testSubnet},
+		{Name: CustomRoutingRegionConfigName, Value: "eu-west-1"},
+	}
+	confBytes, _ := json.Marshal(conf)
+	pod := newTestPod(testPodIP)
+	pod.Annotations[gamekruiseiov1alpha1.GameServerNetworkConf] = string(confBytes)
+
+	if _, perr := p.OnPodAdded(nil, pod, context.Background()); perr != nil {
+		t.Fatalf("OnPodAdded error: %v", perr)
+	}
+	if gotRegion != "eu-west-1" {
+		t.Errorf("expected client built with region eu-west-1, got %q", gotRegion)
+	}
+}
+
+// S: default region (us-west-2) is used when no Region override is supplied.
+func TestDefaultRegionAnchored(t *testing.T) {
+	var gotRegion string
+	p := &CustomRoutingPlugin{
+		cache: make(map[string]*allocatedEndpoint),
+		newAGAClient: func(ctx context.Context, region string) (customRoutingAPI, error) {
+			gotRegion = region
+			return newFakeAGA(), nil
+		},
+	}
+	pod := newTestPod(testPodIP)
+	if _, perr := p.OnPodAdded(nil, pod, context.Background()); perr != nil {
+		t.Fatalf("OnPodAdded error: %v", perr)
+	}
+	if gotRegion != defaultAGARegion {
+		t.Errorf("expected default region %q, got %q", defaultAGARegion, gotRegion)
 	}
 }

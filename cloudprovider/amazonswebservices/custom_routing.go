@@ -15,15 +15,16 @@ package amazonswebservices
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"sync"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/globalaccelerator"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/globalaccelerator"
+	smithy "github.com/aws/smithy-go"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	log "k8s.io/klog/v2"
@@ -45,34 +46,47 @@ const (
 	CustomRoutingEndpointGroupArnConfigName = "CustomRoutingEndpointGroupArn"
 	CustomRoutingGamePortConfigName         = "GamePort"
 	CustomRoutingProtocolConfigName         = "Protocol"
-	CustomRoutingSubnetIdsConfigName        = "SubnetIds"
+	CustomRoutingEndpointIdConfigName       = "EndpointId"
+	CustomRoutingRegionConfigName           = "Region"
 
 	// gamePortName is the NetworkPort name used in the published NetworkStatus.
 	gamePortName = "game"
+
+	// defaultAGARegion is where the Global Accelerator control plane lives. All
+	// custom routing API calls (Allow/Deny/ListPortMappings) must be issued
+	// against this region regardless of the cluster's own region, otherwise they
+	// hit an endpoint that has no AGA control plane. Overridable via the Region
+	// networkConf key for partitions / future control-plane regions.
+	defaultAGARegion = "us-west-2"
 )
 
 // customRoutingAPI abstracts the subset of the AWS Global Accelerator custom
-// routing API that this plugin needs. It is satisfied by the concrete
-// *globalaccelerator.GlobalAccelerator client and is mocked in unit tests.
+// routing API (aws-sdk-go-v2) that this plugin needs. It is satisfied directly
+// by the concrete *globalaccelerator.Client and is mocked in unit tests.
 type customRoutingAPI interface {
-	AllowCustomRoutingTrafficWithContext(ctx aws.Context, input *globalaccelerator.AllowCustomRoutingTrafficInput, opts ...request.Option) (*globalaccelerator.AllowCustomRoutingTrafficOutput, error)
-	DenyCustomRoutingTrafficWithContext(ctx aws.Context, input *globalaccelerator.DenyCustomRoutingTrafficInput, opts ...request.Option) (*globalaccelerator.DenyCustomRoutingTrafficOutput, error)
-	ListCustomRoutingPortMappingsByDestinationWithContext(ctx aws.Context, input *globalaccelerator.ListCustomRoutingPortMappingsByDestinationInput, opts ...request.Option) (*globalaccelerator.ListCustomRoutingPortMappingsByDestinationOutput, error)
+	AllowCustomRoutingTraffic(ctx context.Context, params *globalaccelerator.AllowCustomRoutingTrafficInput, optFns ...func(*globalaccelerator.Options)) (*globalaccelerator.AllowCustomRoutingTrafficOutput, error)
+	DenyCustomRoutingTraffic(ctx context.Context, params *globalaccelerator.DenyCustomRoutingTrafficInput, optFns ...func(*globalaccelerator.Options)) (*globalaccelerator.DenyCustomRoutingTrafficOutput, error)
+	ListCustomRoutingPortMappingsByDestination(ctx context.Context, params *globalaccelerator.ListCustomRoutingPortMappingsByDestinationInput, optFns ...func(*globalaccelerator.Options)) (*globalaccelerator.ListCustomRoutingPortMappingsByDestinationOutput, error)
 }
 
 // customRoutingConfig is the parsed per-GameServerSet networkConf.
 type customRoutingConfig struct {
 	endpointGroupArn string
-	gamePort         int64
+	gamePort         int32
 	protocol         corev1.Protocol
-	subnetIds        []string
+	// endpointId is the VPC subnet ID the Pod lands in. The user supplies it
+	// explicitly (DESIGN §7); the plugin never guesses by trial-and-error.
+	endpointId string
+	// region overrides the AGA control-plane region (default us-west-2).
+	region string
 }
 
 // allocatedEndpoint caches the resolved state for a pod so that OnPodUpdated can
-// be a no-op while nothing changes and OnPodDeleted knows which subnet to deny.
+// be a no-op while nothing changes, OnPodUpdated can deny the previous IP when
+// the Pod IP changes, and OnPodDeleted knows which endpoint to deny.
 type allocatedEndpoint struct {
 	podIP             string
-	subnetId          string
+	endpointId        string
 	externalAddresses []gamekruiseiov1alpha1.NetworkAddress
 }
 
@@ -80,7 +94,7 @@ type CustomRoutingPlugin struct {
 	aga          customRoutingAPI
 	cache        map[string]*allocatedEndpoint // podKey(ns/name) -> resolved endpoint
 	mutex        sync.RWMutex
-	newAGAClient func() (customRoutingAPI, error)
+	newAGAClient func(ctx context.Context, region string) (customRoutingAPI, error)
 }
 
 func (p *CustomRoutingPlugin) Name() string {
@@ -99,33 +113,52 @@ func (p *CustomRoutingPlugin) Init(c client.Client, options cloudprovider.CloudP
 		p.cache = make(map[string]*allocatedEndpoint)
 	}
 
-	// Build the AGA client lazily so that environments not using custom routing
-	// (and possibly lacking IAM permissions) are not forced to construct it.
-	// The credentials come from the default AWS chain (IRSA in EKS). Global
-	// Accelerator is a global service whose control plane lives in us-west-2,
-	// which the SDK selects by default.
-	if p.aga == nil {
-		newClient := p.newAGAClient
-		if newClient == nil {
-			newClient = defaultAGAClient
-		}
-		aga, err := newClient()
-		if err != nil {
-			return cperrors.ToPluginError(fmt.Errorf("failed to init global accelerator client: %v", err), cperrors.InternalError)
-		}
-		p.aga = aga
-	}
-
+	// The AGA client is built lazily on first use (see getClient): its region
+	// comes from per-GameServerSet networkConf, which is not available here.
+	// Environments not using custom routing (and possibly lacking IAM
+	// permissions) therefore never construct it.
 	log.Infof("[%s] plugin initialized", GlobalAcceleratorCustomRoutingNetwork)
 	return nil
 }
 
-func defaultAGAClient() (customRoutingAPI, error) {
-	sess, err := session.NewSession()
+// getClient returns the (lazily constructed) AGA client. The client is built
+// once with the region anchored to the AGA control plane (us-west-2 by default,
+// or the configured override) using the default AWS credential chain (IRSA in
+// EKS). Tests inject a client by setting p.aga directly.
+func (p *CustomRoutingPlugin) getClient(ctx context.Context, region string) (customRoutingAPI, cperrors.PluginError) {
+	p.mutex.RLock()
+	existing := p.aga
+	p.mutex.RUnlock()
+	if existing != nil {
+		return existing, nil
+	}
+
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	if p.aga != nil {
+		return p.aga, nil
+	}
+	newClient := p.newAGAClient
+	if newClient == nil {
+		newClient = defaultAGAClient
+	}
+	aga, err := newClient(ctx, region)
+	if err != nil {
+		return nil, cperrors.ToPluginError(fmt.Errorf("failed to init global accelerator client: %v", err), cperrors.InternalError)
+	}
+	p.aga = aga
+	return p.aga, nil
+}
+
+func defaultAGAClient(ctx context.Context, region string) (customRoutingAPI, error) {
+	if region == "" {
+		region = defaultAGARegion
+	}
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
 	if err != nil {
 		return nil, err
 	}
-	return globalaccelerator.New(sess), nil
+	return globalaccelerator.NewFromConfig(cfg), nil
 }
 
 func (p *CustomRoutingPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
@@ -137,10 +170,15 @@ func (p *CustomRoutingPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx
 }
 
 // reconcile is shared by OnPodAdded and OnPodUpdated. It is idempotent: the pod
-// IP is allowed on the custom routing endpoint group, the deterministic port
-// mapping is looked up, and the result is written to the network-status
-// annotation. When the pod IP is not yet assigned or the mapping cannot be
-// resolved, NetworkNotReady is published so OKG keeps retrying.
+// IP is allowed on the user-specified custom routing endpoint, the deterministic
+// port mapping is looked up, and the result is written to the network-status
+// annotation.
+//
+// Because this plugin runs inside a mutating webhook, returning an error makes
+// OKG discard the mutated Pod (DeepCopy) and deny admission, which also swallows
+// any NetworkNotReady status we wrote. So transient "not yet ready" conditions
+// (no Pod IP, mapping not visible yet) publish NetworkNotReady and return
+// (pod, nil); only genuine API/parameter failures return a PluginError.
 func (p *CustomRoutingPlugin) reconcile(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
 	networkManager := utils.NewNetworkManager(pod, c)
 
@@ -149,94 +187,79 @@ func (p *CustomRoutingPlugin) reconcile(c client.Client, pod *corev1.Pod, ctx co
 		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
 	}
 
+	podKey := pod.GetNamespace() + "/" + pod.GetName()
 	podIP := pod.Status.PodIP
 	if podIP == "" {
 		// Pod not scheduled / IP not assigned yet; stay NotReady and retry.
-		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
-			CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
-		}, pod)
-		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+		return p.publishNotReady(networkManager, pod)
 	}
 
-	podKey := pod.GetNamespace() + "/" + pod.GetName()
+	cached := p.getCache(podKey)
 
 	// Fast path: already resolved for this pod IP, just republish.
-	if cached := p.getCache(podKey); cached != nil && cached.podIP == podIP && len(cached.externalAddresses) > 0 {
+	if cached != nil && cached.podIP == podIP && len(cached.externalAddresses) > 0 {
 		return p.publishReady(networkManager, pod, conf, podIP, cached.externalAddresses)
 	}
 
-	// Resolve the subnet endpoint that owns this pod IP, allow the traffic and
-	// fetch the deterministic accelerator port mapping.
-	subnetId, externalAddresses, perr := p.resolveEndpoint(ctx, conf, podIP)
+	aga, perr := p.getClient(ctx, conf.region)
 	if perr != nil {
 		return pod, perr
 	}
-	if len(externalAddresses) == 0 {
-		// Mapping not visible yet (eventual consistency); retry.
-		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
-			CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
-		}, pod)
-		if err != nil {
-			return pod, cperrors.ToPluginError(err, cperrors.InternalError)
+
+	// M3: the Pod was rescheduled with a new IP. Deny the previous IP first so
+	// we do not leak the (limited) custom routing mapping capacity.
+	if cached != nil && cached.podIP != "" && cached.podIP != podIP {
+		if derr := p.denyTraffic(ctx, aga, conf, cached.endpointId, cached.podIP); derr != nil {
+			// Best-effort drain of the stale IP: log and continue so the new IP
+			// can still be allocated. The stale Allow will be cleaned up on a
+			// later OnPodDeleted / reconcile.
+			log.Warningf("[%s] failed to deny stale ip %s on endpoint %s: %v",
+				GlobalAcceleratorCustomRoutingNetwork, cached.podIP, cached.endpointId, awsErrMessage(derr))
 		}
-		return pod, cperrors.NewPluginErrorWithMessage(cperrors.RetryError,
-			fmt.Sprintf("custom routing port mapping for %s not found yet", podIP))
+	}
+
+	// Allow traffic to the Pod IP on the user-specified subnet endpoint.
+	_, err = aga.AllowCustomRoutingTraffic(ctx, &globalaccelerator.AllowCustomRoutingTrafficInput{
+		EndpointGroupArn:     aws.String(conf.endpointGroupArn),
+		EndpointId:           aws.String(conf.endpointId),
+		DestinationAddresses: []string{podIP},
+		DestinationPorts:     []int32{conf.gamePort},
+	})
+	if err != nil {
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError,
+			fmt.Sprintf("failed to allow custom routing traffic for %s on %s: %v", podIP, conf.endpointId, awsErrMessage(err)))
+	}
+
+	externalAddresses, err := p.lookupExternalAddresses(ctx, aga, conf, podIP)
+	if err != nil {
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError,
+			fmt.Sprintf("failed to list custom routing port mappings for %s: %v", podIP, awsErrMessage(err)))
+	}
+	if len(externalAddresses) == 0 {
+		// Mapping not visible yet (eventual consistency). Publish NotReady and
+		// let OKG re-enqueue; do NOT return an error from the webhook path.
+		return p.publishNotReady(networkManager, pod)
 	}
 
 	p.setCache(podKey, &allocatedEndpoint{
 		podIP:             podIP,
-		subnetId:          subnetId,
+		endpointId:        conf.endpointId,
 		externalAddresses: externalAddresses,
 	})
 
 	return p.publishReady(networkManager, pod, conf, podIP, externalAddresses)
 }
 
-// resolveEndpoint iterates the configured subnets, allows traffic to podIP and
-// returns the resolved subnet plus external (AGA static IP + mapped port)
-// addresses. The pod lands in exactly one subnet; allow/list on the others
-// fail (IP not a subset of the subnet) and are skipped.
-func (p *CustomRoutingPlugin) resolveEndpoint(ctx context.Context, conf *customRoutingConfig, podIP string) (string, []gamekruiseiov1alpha1.NetworkAddress, cperrors.PluginError) {
-	var lastErr error
-	for _, subnetId := range conf.subnetIds {
-		_, err := p.aga.AllowCustomRoutingTrafficWithContext(ctx, &globalaccelerator.AllowCustomRoutingTrafficInput{
-			EndpointGroupArn:     aws.String(conf.endpointGroupArn),
-			EndpointId:           aws.String(subnetId),
-			DestinationAddresses: []*string{aws.String(podIP)},
-			DestinationPorts:     []*int64{aws.Int64(conf.gamePort)},
-		})
-		if err != nil {
-			// podIP is most likely not part of this subnet; try the next one.
-			lastErr = err
-			log.V(5).Infof("[%s] allow traffic for %s on subnet %s failed: %v",
-				GlobalAcceleratorCustomRoutingNetwork, podIP, subnetId, err)
-			continue
-		}
-
-		externalAddresses, err := p.lookupExternalAddresses(ctx, conf, subnetId, podIP)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		return subnetId, externalAddresses, nil
-	}
-
-	if lastErr != nil {
-		return "", nil, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError,
-			fmt.Sprintf("failed to allow custom routing traffic for %s: %v", podIP, lastErr))
-	}
-	return "", nil, nil
-}
-
 // lookupExternalAddresses queries the deterministic port mappings for podIP and
-// builds one ExternalAddress per accelerator static IP / mapped port.
-func (p *CustomRoutingPlugin) lookupExternalAddresses(ctx context.Context, conf *customRoutingConfig, subnetId, podIP string) ([]gamekruiseiov1alpha1.NetworkAddress, error) {
+// builds one ExternalAddress per accelerator static IP / mapped port, paging
+// through all results.
+func (p *CustomRoutingPlugin) lookupExternalAddresses(ctx context.Context, aga customRoutingAPI, conf *customRoutingConfig, podIP string) ([]gamekruiseiov1alpha1.NetworkAddress, error) {
 	externalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
 	var nextToken *string
 	for {
-		out, err := p.aga.ListCustomRoutingPortMappingsByDestinationWithContext(ctx,
+		out, err := aga.ListCustomRoutingPortMappingsByDestination(ctx,
 			&globalaccelerator.ListCustomRoutingPortMappingsByDestinationInput{
-				EndpointId:         aws.String(subnetId),
+				EndpointId:         aws.String(conf.endpointId),
 				DestinationAddress: aws.String(podIP),
 				NextToken:          nextToken,
 			})
@@ -252,7 +275,7 @@ func (p *CustomRoutingPlugin) lookupExternalAddresses(ctx context.Context, conf 
 				continue
 			}
 			for _, sa := range mapping.AcceleratorSocketAddresses {
-				if sa == nil || sa.IpAddress == nil || sa.Port == nil {
+				if sa.IpAddress == nil || sa.Port == nil {
 					continue
 				}
 				mappedPort := intstr.FromInt(int(*sa.Port))
@@ -274,6 +297,24 @@ func (p *CustomRoutingPlugin) lookupExternalAddresses(ctx context.Context, conf 
 		nextToken = out.NextToken
 	}
 	return externalAddresses, nil
+}
+
+// denyTraffic removes the Allow entry for destIP on the given endpoint.
+func (p *CustomRoutingPlugin) denyTraffic(ctx context.Context, aga customRoutingAPI, conf *customRoutingConfig, endpointId, destIP string) error {
+	_, err := aga.DenyCustomRoutingTraffic(ctx, &globalaccelerator.DenyCustomRoutingTrafficInput{
+		EndpointGroupArn:     aws.String(conf.endpointGroupArn),
+		EndpointId:           aws.String(endpointId),
+		DestinationAddresses: []string{destIP},
+		DestinationPorts:     []int32{conf.gamePort},
+	})
+	return err
+}
+
+func (p *CustomRoutingPlugin) publishNotReady(networkManager *utils.NetworkManager, pod *corev1.Pod) (*corev1.Pod, cperrors.PluginError) {
+	pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
+		CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
+	}, pod)
+	return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 }
 
 func (p *CustomRoutingPlugin) publishReady(networkManager *utils.NetworkManager, pod *corev1.Pod,
@@ -308,12 +349,14 @@ func (p *CustomRoutingPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx
 	podKey := pod.GetNamespace() + "/" + pod.GetName()
 
 	podIP := pod.Status.PodIP
-	var subnetId string
+	endpointId := conf.endpointId
 	if cached := p.getCache(podKey); cached != nil {
 		if podIP == "" {
 			podIP = cached.podIP
 		}
-		subnetId = cached.subnetId
+		if cached.endpointId != "" {
+			endpointId = cached.endpointId
+		}
 	}
 	if podIP == "" {
 		// Nothing to deny.
@@ -321,37 +364,19 @@ func (p *CustomRoutingPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx
 		return nil
 	}
 
-	// Deny the resolved subnet if known, otherwise fall back to all subnets.
-	subnets := conf.subnetIds
-	if subnetId != "" {
-		subnets = []string{subnetId}
+	aga, perr := p.getClient(ctx, conf.region)
+	if perr != nil {
+		return perr
 	}
-	var lastErr error
-	for _, sn := range subnets {
-		_, err := p.aga.DenyCustomRoutingTrafficWithContext(ctx, &globalaccelerator.DenyCustomRoutingTrafficInput{
-			EndpointGroupArn:     aws.String(conf.endpointGroupArn),
-			EndpointId:           aws.String(sn),
-			DestinationAddresses: []*string{aws.String(podIP)},
-			DestinationPorts:     []*int64{aws.Int64(conf.gamePort)},
-		})
-		if err != nil {
-			lastErr = err
-			log.V(5).Infof("[%s] deny traffic for %s on subnet %s failed: %v",
-				GlobalAcceleratorCustomRoutingNetwork, podIP, sn, err)
-			continue
-		}
-		// Succeeded on the owning subnet.
-		lastErr = nil
-		break
+
+	if err := p.denyTraffic(ctx, aga, conf, endpointId, podIP); err != nil {
+		// Surface the error so OKG retries the delete hook; keep the cache so a
+		// retry still knows the owning endpoint.
+		return cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError,
+			fmt.Sprintf("failed to deny custom routing traffic for %s on %s: %v", podIP, endpointId, awsErrMessage(err)))
 	}
 
 	p.deleteCache(podKey)
-
-	if lastErr != nil && subnetId != "" {
-		// We knew the subnet and still failed; surface the error for retry.
-		return cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError,
-			fmt.Sprintf("failed to deny custom routing traffic for %s: %v", podIP, lastErr))
-	}
 	return nil
 }
 
@@ -376,27 +401,39 @@ func (p *CustomRoutingPlugin) deleteCache(podKey string) {
 	delete(p.cache, podKey)
 }
 
+// awsErrMessage extracts a precise "Code: message" string from a typed AWS SDK
+// (smithy) API error, falling back to the raw error string. Used instead of
+// brittle substring matching on error text.
+func awsErrMessage(err error) string {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		return fmt.Sprintf("%s: %s", apiErr.ErrorCode(), apiErr.ErrorMessage())
+	}
+	return err.Error()
+}
+
 func parseCustomRoutingConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*customRoutingConfig, error) {
 	c := &customRoutingConfig{
 		protocol: corev1.ProtocolUDP,
+		region:   defaultAGARegion,
 	}
 	for _, kv := range conf {
 		switch kv.Name {
 		case CustomRoutingEndpointGroupArnConfigName:
 			c.endpointGroupArn = strings.TrimSpace(kv.Value)
 		case CustomRoutingGamePortConfigName:
-			port, err := strconv.ParseInt(strings.TrimSpace(kv.Value), 10, 64)
+			port, err := strconv.ParseInt(strings.TrimSpace(kv.Value), 10, 32)
 			if err != nil {
 				return nil, fmt.Errorf("invalid %s %q: %v", CustomRoutingGamePortConfigName, kv.Value, err)
 			}
-			c.gamePort = port
+			c.gamePort = int32(port)
 		case CustomRoutingProtocolConfigName:
 			c.protocol = corev1.Protocol(strings.ToUpper(strings.TrimSpace(kv.Value)))
-		case CustomRoutingSubnetIdsConfigName:
-			for _, sn := range strings.Split(kv.Value, ",") {
-				if sn = strings.TrimSpace(sn); sn != "" {
-					c.subnetIds = append(c.subnetIds, sn)
-				}
+		case CustomRoutingEndpointIdConfigName:
+			c.endpointId = strings.TrimSpace(kv.Value)
+		case CustomRoutingRegionConfigName:
+			if v := strings.TrimSpace(kv.Value); v != "" {
+				c.region = v
 			}
 		}
 	}
@@ -407,14 +444,17 @@ func parseCustomRoutingConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*c
 	if c.gamePort <= 0 || c.gamePort > 65535 {
 		return nil, fmt.Errorf("%s must be in [1,65535]", CustomRoutingGamePortConfigName)
 	}
-	if len(c.subnetIds) == 0 {
-		return nil, fmt.Errorf("%s is required", CustomRoutingSubnetIdsConfigName)
+	if c.endpointId == "" {
+		return nil, fmt.Errorf("%s is required", CustomRoutingEndpointIdConfigName)
 	}
 	if c.protocol != corev1.ProtocolTCP && c.protocol != corev1.ProtocolUDP {
 		return nil, fmt.Errorf("%s must be TCP or UDP", CustomRoutingProtocolConfigName)
 	}
 	return c, nil
 }
+
+// compile-time assertion that the concrete v2 client satisfies customRoutingAPI.
+var _ customRoutingAPI = (*globalaccelerator.Client)(nil)
 
 func init() {
 	amazonsWebServicesProvider.registerPlugin(&CustomRoutingPlugin{

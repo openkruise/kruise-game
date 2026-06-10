@@ -193,7 +193,7 @@ networkStatus:
 
 插件假定以下资源已通过 CLI / SDK / Terraform 提前创建：
 
-1. **自定义路由 accelerator + listener（端口段）+ 自定义路由 endpoint group + 已注册子网。** 端口映射容量（`子网可用 IP × 目标端口 × 协议数`）是一次性容量规划，刻意不放进 Pod 热路径。插件只从 `networkConf` 读取 endpoint group ARN 和已注册子网 ID。
+1. **自定义路由 accelerator + listener（端口段）+ 自定义路由 endpoint group + 已注册子网。** 端口映射容量（`子网可用 IP × 目标端口 × 协议数`）是一次性容量规划，刻意不放进 Pod 热路径。插件只从 `networkConf` 读取 endpoint group ARN 和 Pod 所属子网（`EndpointId`）。
 2. **关闭集群级 SNAT**，使回程到真实客户端 IP 的流量不被改写：
    ```
    kubectl set env daemonset aws-node -n kube-system AWS_VPC_K8S_CNI_EXTERNALSNAT=true
@@ -211,14 +211,15 @@ networkStatus:
 | `CustomRoutingEndpointGroupArn` | 是 | 预创建的自定义路由 endpoint group ARN。 |
 | `GamePort` | 是 | 游戏服监听的目标端口（`1`–`65535`）。 |
 | `Protocol` | 否 | `TCP` 或 `UDP`，默认 `UDP`。 |
-| `SubnetIds` | 是 | 逗号分隔的已注册 VPC 子网 ID（多 AZ 多个）。插件自动判定 Pod IP 落在哪个子网。 |
+| `EndpointId` | 是 | Pod 所在的已注册 VPC **子网 ID**（即自定义路由 endpoint ID）。由用户显式填写，插件不靠试错猜测。多 AZ 场景下，把每个 GameServerSet 固定到其节点池/AZ 对应的子网。 |
+| `Region` | 否 | Global Accelerator **控制面**所在 AWS region，默认 `us-west-2`。无论集群本身在哪个 region，所有 Allow/Deny/ListPortMappings 调用都打到这里。仅在其它 partition / 未来控制面 region 时才覆盖。 |
 
 ## 生命周期
 
 | 插件钩子 | 动作 |
 | --- | --- |
-| `Init` | 惰性构造 Global Accelerator client（默认 AWS 凭证链）和内存 cache。插件不创建 accelerator/listener/子网。 |
-| `OnPodAdded` / `OnPodUpdated` | 取 `pod.Status.PodIP`；在所属子网上 `AllowCustomRoutingTraffic`（目标 `podIP:GamePort`）；`ListCustomRoutingPortMappingsByDestination` 拿到 AGA 静态 IP + 映射端口；写 `NetworkStatus.ExternalAddresses{IP: agaStaticIP, Ports: 映射端口}`，`InternalAddresses` 填 Pod IP，状态置 `Ready`。Pod IP 未就绪或映射尚不可见时维持 `NotReady`/重试。幂等：Pod IP 未变时为 no-op。 |
+| `Init` | 初始化内存 cache。Global Accelerator client（aws-sdk-go-v2，默认 AWS 凭证链，region 锚定到 AGA 控制面）在首次使用时惰性构造。插件不创建 accelerator/listener/子网。 |
+| `OnPodAdded` / `OnPodUpdated` | 取 `pod.Status.PodIP`；在用户指定的 `EndpointId` 上 `AllowCustomRoutingTraffic`（目标 `podIP:GamePort`）；`ListCustomRoutingPortMappingsByDestination`（分页）拿到 AGA 静态 IP + 映射端口；写 `NetworkStatus.ExternalAddresses{IP: agaStaticIP, Ports: 映射端口}`，`InternalAddresses` 填 Pod IP，状态置 `Ready`。Pod IP 未就绪或映射尚不可见时发布 `NetworkNotReady` 并返回 `(pod, nil)`（不让 error 逃出 mutating webhook 路径）。幂等：Pod IP 未变时为 no-op。Pod IP 变更（重调度）时先 `Deny` 旧 IP 再 Allow 新 IP，避免泄漏映射容量。 |
 | `OnPodDeleted` | `DenyCustomRoutingTraffic`（目标 `podIP:GamePort`）排水。 |
 
 ## GameServerSet 示例
@@ -240,8 +241,10 @@ spec:
         value: "7777"
       - name: Protocol
         value: "UDP"
-      - name: SubnetIds
-        value: "subnet-0a1b2c3d,subnet-0e4f5a6b"
+      - name: EndpointId
+        value: "subnet-0a1b2c3d"
+      # - name: Region        # 可选，默认 us-west-2
+      #   value: "us-west-2"
   gameServerTemplate:
     spec:
       containers:
