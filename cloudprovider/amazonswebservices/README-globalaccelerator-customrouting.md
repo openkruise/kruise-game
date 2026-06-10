@@ -26,15 +26,91 @@ The AGA-managed ENIs/SGs in your VPC must not be hand-modified.
 
 > **VPC-CNI SNAT requires no change.** Custom routing inbound traffic reaches the Pod ENI without traversing the node's SNAT chain, and the return path is handled by conntrack. AGA Custom Routing works with the default EKS VPC-CNI settings; do not set `EXTERNALSNAT=true` or `RANDOMIZESNAT=none` for AGA's sake.
 
-### 3. IAM (IRSA)
+### 3. IAM
 
-The controller's service account needs:
+The controller's pod must be able to call three Global Accelerator APIs:
 
 - `globalaccelerator:AllowCustomRoutingTraffic`
 - `globalaccelerator:DenyCustomRoutingTraffic`
 - `globalaccelerator:ListCustomRoutingPortMappingsByDestination`
 
-Credentials are picked up from the default AWS credential chain; the plugin does not bind any auth method.
+**Recommended policy** (attach to the role assumed by the controller pod):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "OkgCustomRoutingPlugin",
+      "Effect": "Allow",
+      "Action": [
+        "globalaccelerator:AllowCustomRoutingTraffic",
+        "globalaccelerator:DenyCustomRoutingTraffic",
+        "globalaccelerator:ListCustomRoutingPortMappingsByDestination"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+> Custom routing accelerators do not support resource-level IAM policies on the Allow/Deny APIs; `Resource: "*"` is the only working scope. Tighten exposure with separate AWS accounts / OUs if needed.
+
+The plugin uses [`aws-sdk-go-v2`'s default credential chain](https://aws.github.io/aws-sdk-go-v2/docs/configuring-sdk/), so **both EKS auth methods work without code changes**:
+
+#### Option A — EKS Pod Identity (recommended for new clusters)
+
+1. Enable the EKS Pod Identity Agent add-on on the cluster (one-click in the EKS console or `aws eks create-addon --addon-name eks-pod-identity-agent`).
+2. Create the IAM role with the policy above and the following trust policy:
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [{
+       "Effect": "Allow",
+       "Principal": {"Service": "pods.eks.amazonaws.com"},
+       "Action": ["sts:AssumeRole", "sts:TagSession"]
+     }]
+   }
+   ```
+3. Associate the role with the controller's service account:
+   ```sh
+   aws eks create-pod-identity-association \
+     --cluster-name <cluster> \
+     --namespace kruise-game-system \
+     --service-account kruise-game-controller-manager \
+     --role-arn arn:aws:iam::<account>:role/<role-name>
+   ```
+
+No annotation on the service account is required; the agent injects credentials via `AWS_CONTAINER_CREDENTIALS_FULL_URI`, which the SDK picks up automatically.
+
+#### Option B — IRSA (works on every EKS version)
+
+1. Ensure the cluster's OIDC provider is registered with IAM (`eksctl utils associate-iam-oidc-provider --cluster <cluster> --approve`).
+2. Create the IAM role with the policy above and the following trust policy (replace placeholders):
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [{
+       "Effect": "Allow",
+       "Principal": {"Federated": "arn:aws:iam::<account>:oidc-provider/oidc.eks.<region>.amazonaws.com/id/<OIDC-ID>"},
+       "Action": "sts:AssumeRoleWithWebIdentity",
+       "Condition": {"StringEquals": {
+         "oidc.eks.<region>.amazonaws.com/id/<OIDC-ID>:sub": "system:serviceaccount:kruise-game-system:kruise-game-controller-manager",
+         "oidc.eks.<region>.amazonaws.com/id/<OIDC-ID>:aud": "sts.amazonaws.com"
+       }}
+     }]
+   }
+   ```
+3. Annotate the controller service account:
+   ```sh
+   kubectl annotate sa kruise-game-controller-manager -n kruise-game-system \
+     eks.amazonaws.com/role-arn=arn:aws:iam::<account>:role/<role-name>
+   ```
+4. Restart the controller deployment so the projected token is mounted.
+
+#### Other environments
+
+Off-EKS deployments can supply credentials through any provider the default chain understands (instance profile, `~/.aws/credentials`, `AWS_ACCESS_KEY_ID`, etc.). The plugin does not bind a specific auth method.
 
 ### 4. No health checking
 
@@ -110,6 +186,29 @@ networkStatus:
       protocol: UDP
   networkType: AmazonWebServices-GlobalAcceleratorCustomRouting
 ```
+
+## Limits and quotas
+
+Key AWS Global Accelerator quotas to plan around (defaults shown; see the [official quotas page](https://docs.aws.amazon.com/global-accelerator/latest/dg/limits-global-accelerator.html) for the current list and which quotas are adjustable):
+
+| Resource | Default | Adjustable |
+| --- | --- | --- |
+| Custom routing accelerators per AWS account | **10** | yes |
+| Listeners per accelerator | 10 | yes |
+| Port ranges per listener | 10 | no |
+| Endpoint groups per accelerator (across all listeners) | 42 | no |
+| Subnet endpoints per endpoint group | 10 | yes |
+| Subnet size | /28 – /17 | n/a |
+| Listener port range minimum width | 16 ports | n/a |
+
+**Port-mapping capacity** for one subnet is approximately `subnet usable IPs × destination ports × protocols`. Provision listener port ranges large enough to cover this product, and prefer a single wide listener range per accelerator (port ranges per listener cap at 10 and cannot be lowered after creation).
+
+**Other constraints worth knowing**
+
+- The plugin's API calls all run against the AGA control plane, which lives **only in `us-west-2`** regardless of the EKS cluster's own region. The plugin defaults to `us-west-2`; override with `Region` only for non-commercial partitions.
+- **Custom routing accelerators are not supported by AWS CloudFormation.** Provision them with the AWS CLI, SDK, or Terraform.
+- Custom routing accelerators are **IPv4-only**.
+- No native health checks or failover — traffic is routed deterministically regardless of backend health.
 
 ## Operational notes
 

@@ -27,15 +27,91 @@ AGA 在你 VPC 中托管的 ENI/SG 不要手改。
 
 > **VPC-CNI SNAT 无需修改。** Custom routing 的入向流量直接到达 Pod ENI，不经节点 SNAT 链；回程由 conntrack 处理。AGA Custom Routing 使用 EKS VPC-CNI 默认设置即可，不要为 AGA 去设置 `EXTERNALSNAT=true` / `RANDOMIZESNAT=none`。
 
-### 3. IAM（IRSA）
+### 3. IAM
 
-Controller 的 ServiceAccount 需要：
+Controller pod 需能调用三个 Global Accelerator API：
 
 - `globalaccelerator:AllowCustomRoutingTraffic`
 - `globalaccelerator:DenyCustomRoutingTraffic`
 - `globalaccelerator:ListCustomRoutingPortMappingsByDestination`
 
-凭证从默认 AWS credential chain 读取，插件不绑死任何 auth 方式。
+**推荐 policy**（挂到 controller pod 拿的 IAM role 上）：
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "OkgCustomRoutingPlugin",
+      "Effect": "Allow",
+      "Action": [
+        "globalaccelerator:AllowCustomRoutingTraffic",
+        "globalaccelerator:DenyCustomRoutingTraffic",
+        "globalaccelerator:ListCustomRoutingPortMappingsByDestination"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+> Custom routing 的 Allow/Deny API 不支持资源级 IAM，`Resource: "*"` 是唯一可行范围。需隔离请用 AWS 账号 / OU 级分隔。
+
+插件用 [`aws-sdk-go-v2` 默认 credential chain](https://aws.github.io/aws-sdk-go-v2/docs/configuring-sdk/)，**EKS 两种身份方式都原生支持，不需代码改动**：
+
+#### 方式 A——EKS Pod Identity（新集群推荐）
+
+1. 在集群上启用 EKS Pod Identity Agent add-on（EKS 控制台一键开，或 `aws eks create-addon --addon-name eks-pod-identity-agent`）。
+2. 创建一个 IAM role，挂上面那块 policy，使用以下 trust policy：
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [{
+       "Effect": "Allow",
+       "Principal": {"Service": "pods.eks.amazonaws.com"},
+       "Action": ["sts:AssumeRole", "sts:TagSession"]
+     }]
+   }
+   ```
+3. 将该 role 关联到 controller 的 ServiceAccount：
+   ```sh
+   aws eks create-pod-identity-association \
+     --cluster-name <cluster> \
+     --namespace kruise-game-system \
+     --service-account kruise-game-controller-manager \
+     --role-arn arn:aws:iam::<account>:role/<role-name>
+   ```
+
+ServiceAccount 上不需 annotation；agent 会注入 `AWS_CONTAINER_CREDENTIALS_FULL_URI`，SDK 自动识别。
+
+#### 方式 B——IRSA（所有 EKS 版本都能用）
+
+1. 确认集群的 OIDC provider 已在 IAM 注册（`eksctl utils associate-iam-oidc-provider --cluster <cluster> --approve`）。
+2. 创建 IAM role，挂上面 policy，使用以下 trust policy（替换占位符）：
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [{
+       "Effect": "Allow",
+       "Principal": {"Federated": "arn:aws:iam::<account>:oidc-provider/oidc.eks.<region>.amazonaws.com/id/<OIDC-ID>"},
+       "Action": "sts:AssumeRoleWithWebIdentity",
+       "Condition": {"StringEquals": {
+         "oidc.eks.<region>.amazonaws.com/id/<OIDC-ID>:sub": "system:serviceaccount:kruise-game-system:kruise-game-controller-manager",
+         "oidc.eks.<region>.amazonaws.com/id/<OIDC-ID>:aud": "sts.amazonaws.com"
+       }}
+     }]
+   }
+   ```
+3. 给 controller ServiceAccount 打 annotation：
+   ```sh
+   kubectl annotate sa kruise-game-controller-manager -n kruise-game-system \
+     eks.amazonaws.com/role-arn=arn:aws:iam::<account>:role/<role-name>
+   ```
+4. 重启 controller deployment，让 projected token 重新 mount。
+
+#### 其他环境
+
+非 EKS 部署可用默认 chain 能识别的任何提供者（instance profile、`~/.aws/credentials`、`AWS_ACCESS_KEY_ID` 等）。插件不绑死特定 auth 方式。
 
 ### 4. 不做健康检查
 
@@ -111,6 +187,29 @@ networkStatus:
       protocol: UDP
   networkType: AmazonWebServices-GlobalAcceleratorCustomRouting
 ```
+
+## 限制与 quota
+
+需重点关注的 AWS Global Accelerator quota（默认值，最新及可调项以[官方 quota 页面](https://docs.aws.amazon.com/global-accelerator/latest/dg/limits-global-accelerator.html)为准）：
+
+| 资源 | 默认值 | 可调 |
+| --- | --- | --- |
+| 每个 AWS 账号 custom routing accelerator 数 | **10** | 是 |
+| 每个 accelerator 的 listener 数 | 10 | 是 |
+| 每个 listener 的 port range 数 | 10 | 否 |
+| 每个 accelerator 的 endpoint group 数（跨所有 listener） | 42 | 否 |
+| 每个 endpoint group 的子网 endpoint 数 | 10 | 是 |
+| 子网大小 | /28 – /17 | 不适用 |
+| 单个 listener port range 最小宽度 | 16 个端口 | 不适用 |
+
+**单子网端口映射容量** 约 = `子网可用 IP 数 × 目标端口数 × 协议数`。listener portRange 要足够大以覆盖这个乘积；建议一个 accelerator 只用一个宽范围 listener（每 listener 的 port range 上限 10 且创建后不可缩小）。
+
+**其他需知的限制**
+
+- 插件的 API 调用全部打到 AGA 控制面，**仅位于 `us-west-2`**，与 EKS 集群所在 region 无关。插件默认钉到 `us-west-2`；只有跨 partition 时才需要用 `Region` 参数覆盖。
+- **Custom routing accelerator 不支持 AWS CloudFormation**。资源请用 AWS CLI / SDK / Terraform 创建。
+- Custom routing accelerator **仅支持 IPv4**。
+- 无原生健康检查、无故障转移 —— 流量以确定性方式投递，不看后端健康。
 
 ## 运维注意
 

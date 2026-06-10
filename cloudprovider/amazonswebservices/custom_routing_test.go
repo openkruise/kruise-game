@@ -329,7 +329,7 @@ func TestParseCustomRoutingConfig(t *testing.T) {
 	}
 }
 
-func TestOnPodAddedReady(t *testing.T) {
+func TestCustomRoutingOnPodAddedReady(t *testing.T) {
 	fake := newFakeAGA()
 	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
 	pod := newTestPod(testPodIP)
@@ -366,7 +366,7 @@ func TestOnPodAddedReady(t *testing.T) {
 	}
 }
 
-func TestOnPodAddedNoPodIP(t *testing.T) {
+func TestCustomRoutingOnPodAddedNoPodIP(t *testing.T) {
 	fake := newFakeAGA()
 	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
 	pod := newTestPod("")
@@ -386,7 +386,7 @@ func TestOnPodAddedNoPodIP(t *testing.T) {
 
 // M2: mapping not visible yet must publish NotReady and return (pod, nil) — no
 // error escapes the webhook path (otherwise the status write is swallowed).
-func TestOnPodAddedMappingNotFound(t *testing.T) {
+func TestCustomRoutingOnPodAddedMappingNotFound(t *testing.T) {
 	fake := newFakeAGA()
 	fake.mappings = map[string][]accSock{} // no mapping yet
 	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
@@ -406,7 +406,7 @@ func TestOnPodAddedMappingNotFound(t *testing.T) {
 }
 
 // S: Allow failure must surface as an apiCallError (not silently swallowed).
-func TestOnPodAddedAllowError(t *testing.T) {
+func TestCustomRoutingOnPodAddedAllowError(t *testing.T) {
 	fake := newFakeAGA()
 	fake.allowErr = &apiErr{code: "AccessDeniedException", msg: "not authorized"}
 	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
@@ -425,7 +425,7 @@ func TestOnPodAddedAllowError(t *testing.T) {
 }
 
 // S: List failure must surface as an apiCallError.
-func TestOnPodAddedListError(t *testing.T) {
+func TestCustomRoutingOnPodAddedListError(t *testing.T) {
 	fake := newFakeAGA()
 	fake.listErr = &apiErr{code: "InternalServiceErrorException", msg: "boom"}
 	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
@@ -442,7 +442,7 @@ func TestOnPodAddedListError(t *testing.T) {
 
 // S: List paging — multiple accelerator sockets returned across pages must all
 // be collected into ExternalAddresses.
-func TestOnPodAddedListPaging(t *testing.T) {
+func TestCustomRoutingOnPodAddedListPaging(t *testing.T) {
 	fake := newFakeAGA()
 	fake.pageSize = 1
 	fake.mappings[testPodIP] = []accSock{
@@ -472,7 +472,7 @@ func TestOnPodAddedListPaging(t *testing.T) {
 	}
 }
 
-func TestOnPodUpdatedIdempotent(t *testing.T) {
+func TestCustomRoutingOnPodUpdatedIdempotent(t *testing.T) {
 	fake := newFakeAGA()
 	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
 	pod := newTestPod(testPodIP)
@@ -498,7 +498,7 @@ func TestOnPodUpdatedIdempotent(t *testing.T) {
 
 // M3: when the Pod IP changes the plugin must Deny the old IP (to free the
 // limited mapping capacity) and Allow the new IP.
-func TestOnPodUpdatedPodIPChanged(t *testing.T) {
+func TestCustomRoutingOnPodUpdatedPodIPChanged(t *testing.T) {
 	fake := newFakeAGA()
 	fake.mappings["10.0.1.99"] = []accSock{{accIP: "75.2.1.1", accPort: 50002}}
 	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
@@ -538,7 +538,7 @@ func TestOnPodUpdatedPodIPChanged(t *testing.T) {
 	}
 }
 
-func TestOnPodDeleted(t *testing.T) {
+func TestCustomRoutingOnPodDeleted(t *testing.T) {
 	fake := newFakeAGA()
 	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
 	pod := newTestPod(testPodIP)
@@ -559,7 +559,7 @@ func TestOnPodDeleted(t *testing.T) {
 }
 
 // S: Deny failure on delete must surface for retry and keep the cache.
-func TestOnPodDeletedDenyError(t *testing.T) {
+func TestCustomRoutingOnPodDeletedDenyError(t *testing.T) {
 	fake := newFakeAGA()
 	fake.denyErr = &apiErr{code: "InternalServiceErrorException", msg: "boom"}
 	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
@@ -580,7 +580,7 @@ func TestOnPodDeletedDenyError(t *testing.T) {
 	}
 }
 
-func TestOnPodDeletedNoPodIP(t *testing.T) {
+func TestCustomRoutingOnPodDeletedNoPodIP(t *testing.T) {
 	fake := newFakeAGA()
 	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
 	pod := newTestPod("")
@@ -594,7 +594,7 @@ func TestOnPodDeletedNoPodIP(t *testing.T) {
 }
 
 // S: region from networkConf must be threaded into the client factory.
-func TestRegionConfigPassedToClient(t *testing.T) {
+func TestCustomRoutingRegionConfigPassedToClient(t *testing.T) {
 	var gotRegion string
 	p := &CustomRoutingPlugin{
 		cache: make(map[string]*allocatedEndpoint),
@@ -622,7 +622,7 @@ func TestRegionConfigPassedToClient(t *testing.T) {
 }
 
 // S: default region (us-west-2) is used when no Region override is supplied.
-func TestDefaultRegionAnchored(t *testing.T) {
+func TestCustomRoutingDefaultRegionAnchored(t *testing.T) {
 	var gotRegion string
 	p := &CustomRoutingPlugin{
 		cache: make(map[string]*allocatedEndpoint),
@@ -637,5 +637,15 @@ func TestDefaultRegionAnchored(t *testing.T) {
 	}
 	if gotRegion != defaultAGARegion {
 		t.Errorf("expected default region %q, got %q", defaultAGARegion, gotRegion)
+	}
+}
+
+func TestCustomRoutingAliasAndName(t *testing.T) {
+	p := &CustomRoutingPlugin{}
+	if got, want := p.Name(), GlobalAcceleratorCustomRoutingNetwork; got != want {
+		t.Errorf("Name() = %q, want %q", got, want)
+	}
+	if got, want := p.Alias(), AliasCustomRouting; got != want {
+		t.Errorf("Alias() = %q, want %q", got, want)
 	}
 }
