@@ -19,7 +19,7 @@ import (
 const (
 	NoneGameServerMinNumberKey = "minAvailable"
 	NoneGameServerMaxNumberKey = "maxAvailable"
-	WTBDThresholdKey           = "wtdbThreshold"
+	ScaleDownThresholdKey      = "scaleDownThreshold"
 )
 
 type ExternalScaler struct {
@@ -151,11 +151,11 @@ func (e *ExternalScaler) GetMetrics(ctx context.Context, metricRequest *GetMetri
 	}
 
 	// Check if WTBD count exceeds the threshold, if so prioritize scale-down
-	thresholdStr := metricRequest.ScaledObjectRef.GetScalerMetadata()[WTBDThresholdKey]
+	thresholdStr := metricRequest.ScaledObjectRef.GetScalerMetadata()[ScaleDownThresholdKey]
 	if thresholdStr != "" && numWaitToBeDeleted > 0 {
-		threshold, isPercentage, parseErr := parseWTBDThreshold(thresholdStr)
+		threshold, isPercentage, parseErr := parseScaleDownThreshold(thresholdStr)
 		if parseErr != nil {
-			klog.Errorf("invalid wtdbThreshold value %q: %v", thresholdStr, parseErr)
+			klog.Errorf("invalid scaleDownThreshold value %q: %v", thresholdStr, parseErr)
 		} else {
 			exceeded := false
 			if isPercentage {
@@ -223,14 +223,14 @@ func NewExternalScaler(client client.Client) *ExternalScaler {
 	}
 }
 
-// parseWTBDThreshold parses the wtdbThreshold value from ScaledObject metadata.
+// parseScaleDownThreshold parses the scaleDownThreshold value from ScaledObject metadata.
 // Supported formats:
 //   - integer >= 1 (e.g. "10"): absolute count threshold, isPercentage=false
 //   - float between 0 and 1 exclusive (e.g. "0.1"): percentage threshold, isPercentage=true
-func parseWTBDThreshold(s string) (threshold float64, isPercentage bool, err error) {
+func parseScaleDownThreshold(s string) (threshold float64, isPercentage bool, err error) {
 	n, err := strconv.ParseFloat(s, 64)
 	if err != nil {
-		return 0, false, fmt.Errorf("invalid wtdbThreshold %q: %v", s, err)
+		return 0, false, fmt.Errorf("invalid scaleDownThreshold %q: %v", s, err)
 	}
 	if n > 0 && n < 1 {
 		return n, true, nil
@@ -238,7 +238,7 @@ func parseWTBDThreshold(s string) (threshold float64, isPercentage bool, err err
 	if n >= 1 {
 		return math.Ceil(n), false, nil
 	}
-	return 0, false, fmt.Errorf("invalid wtdbThreshold %q: must be >= 1 (absolute) or between 0 and 1 exclusive (percentage)", s)
+	return 0, false, fmt.Errorf("invalid scaleDownThreshold %q: must be >= 1 (absolute) or between 0 and 1 exclusive (percentage)", s)
 }
 
 // handleMinNum calculate the expected min number of GameServers from the give minNumStr,

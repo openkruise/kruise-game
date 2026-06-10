@@ -49,7 +49,7 @@ The OKG External Scaler currently uses a mutually exclusive two-branch logic in 
 
 In large-scale clusters, this design causes a problem: the None count frequently drops below `minAvailable` due to slow pod startup, game server allocation, or frequent state changes. As a result, the scaler consistently enters the scale-up branch, the overall `spec.Replicas` keeps growing, and WTBD game servers are never deleted.
 
-This proposal introduces a configurable threshold parameter (`wtdbThreshold`) to the ScaledObject metadata. When the WTBD count (or WTBD ratio) exceeds this threshold, the scaler prioritizes scale-down to clear the WTBD backlog before considering scale-up. When WTBD is below the threshold, the existing scale-up-first behavior is preserved for backward compatibility.
+This proposal introduces a configurable threshold parameter (`scaleDownThreshold`) to the ScaledObject metadata. When the WTBD count (or WTBD ratio) exceeds this threshold, the scaler prioritizes scale-down to clear the WTBD backlog before considering scale-up. When WTBD is below the threshold, the existing scale-up-first behavior is preserved for backward compatibility.
 
 ## Motivation
 
@@ -77,7 +77,7 @@ A game operator runs a cluster with 500 game servers. The `minAvailable` is set 
 
 **Current behavior**: The scaler always sees `noneNum < minAvailable`, keeps scaling up, and `spec.Replicas` grows from 500 to 600+. The 50+ WTBD servers are never deleted.
 
-**Expected behavior**: The operator sets `wtdbThreshold: "10"`. When WTBD count exceeds 10, the scaler returns a `desiredReplicas` lower than the current pod count, triggering scale-down. The controller deletes the WTBD servers. Once WTBD drops below 10, the scaler resumes normal scale-up-first behavior.
+**Expected behavior**: The operator sets `scaleDownThreshold: "10"`. When WTBD count exceeds 10, the scaler returns a `desiredReplicas` lower than the current pod count, triggering scale-down. The controller deletes the WTBD servers. Once WTBD drops below 10, the scaler resumes normal scale-up-first behavior.
 
 #### Story 2: Small-Scale Cluster with Normal WTBD Flow
 
@@ -85,7 +85,7 @@ A game operator runs a cluster with 10 game servers and `minAvailable: 3`. WTBD 
 
 **Current behavior**: Works correctly. The None count is usually sufficient, and the scaler reaches the scale-down branch to delete WTBD servers.
 
-**Expected behavior**: The operator does not set `wtdbThreshold` (or sets it high). The behavior remains identical to the current implementation. No disruption.
+**Expected behavior**: The operator does not set `scaleDownThreshold` (or sets it high). The behavior remains identical to the current implementation. No disruption.
 
 ### Implementation Details/Notes/Constraints
 
@@ -111,7 +111,7 @@ The problem: the scale-up branch has an early return. When `noneNum < minNum` (f
 
 #### Proposed Solution: Threshold-Based Priority Control
 
-Introduce a new ScaledObject metadata parameter `wtdbThreshold` that controls when scale-down takes priority over scale-up.
+Introduce a new ScaledObject metadata parameter `scaleDownThreshold` that controls when scale-down takes priority over scale-up.
 
 **Decision logic**:
 
@@ -129,13 +129,13 @@ The key insight: when WTBD exceeds the threshold, the scaler deliberately allows
 
 #### Threshold Parameter Design
 
-The `wtdbThreshold` parameter supports two formats:
+The `scaleDownThreshold` parameter supports two formats:
 
 **Absolute value** (integer >= 1):
 
 ```yaml
 metadata:
-  wtdbThreshold: "10"   # Trigger scale-down priority when WTBD count > 10
+  scaleDownThreshold: "10"   # Trigger scale-down priority when WTBD count > 10
 ```
 
 - Simple and intuitive for small to medium clusters.
@@ -145,7 +145,7 @@ metadata:
 
 ```yaml
 metadata:
-  wtdbThreshold: "0.1"  # Trigger scale-down priority when WTBD ratio > 10%
+  scaleDownThreshold: "0.1"  # Trigger scale-down priority when WTBD ratio > 10%
 ```
 
 - The WTBD ratio is calculated as: `numWaitToBeDeleted / totalNum`.
@@ -154,7 +154,7 @@ metadata:
 
 **Default behavior** (parameter not set):
 
-- When `wtdbThreshold` is not specified, the scaler behaves identically to the current implementation (scale-up always takes priority when `noneNum < minNum`).
+- When `scaleDownThreshold` is not specified, the scaler behaves identically to the current implementation (scale-up always takes priority when `noneNum < minNum`).
 - This ensures full backward compatibility.
 
 The parameter is parsed using the same approach as `minAvailable` (via `strconv.ParseFloat`), distinguishing between integer and percentage values.
@@ -166,7 +166,7 @@ func (e *ExternalScaler) GetMetrics(ctx context.Context, metricRequest *GetMetri
     // ... existing code: get GSS, list pods, count totalNum, noneNum, numWaitToBeDeleted ...
 
     // --- NEW: WTBD threshold check ---
-    thresholdStr := metricRequest.ScaledObjectRef.GetScalerMetadata()[WTBDThresholdKey]
+    thresholdStr := metricRequest.ScaledObjectRef.GetScalerMetadata()[ScaleDownThresholdKey]
     if thresholdStr != "" {
         threshold, isPercentage := parseThreshold(thresholdStr)
         exceeded := false
@@ -202,7 +202,7 @@ Note on the `minAvailable` floor: when prioritizing scale-down, we still apply `
 
 #### Behavior Walkthrough
 
-Consider: `minAvailable: 3`, `wtdbThreshold: "5"`, cluster with 100 pods (noneNum=2, WTBD=20).
+Consider: `minAvailable: 3`, `scaleDownThreshold: "5"`, cluster with 100 pods (noneNum=2, WTBD=20).
 
 | Cycle | totalNum | noneNum | WTBD | WTBD > threshold? | desireReplicas | Action |
 |-------|----------|---------|------|-------------------|----------------|--------|
@@ -225,13 +225,13 @@ If WTBD does not exceed threshold (e.g., WTBD=3):
 | Users may misconfigure the threshold | Provide clear documentation with recommended values for different cluster sizes. Default behavior (no threshold set) preserves current behavior. |
 | Percentage threshold may cause instability near the boundary | The threshold comparison uses `>` (strict greater than), so values exactly at the boundary do not trigger scale-down. HPA/KEDA stabilization windows also dampen oscillation. |
 | Scale-down and scale-up oscillation when WTBD hovers around the threshold | KEDA's built-in `stabilizationWindowSeconds` and `cooldownPeriod` naturally mitigate this. The threshold is a coarse-grained control, not a real-time PID controller. |
-| Backward compatibility breakage | When `wtdbThreshold` is not set, the scaler behaves identically to the current implementation. No breaking changes. |
+| Backward compatibility breakage | When `scaleDownThreshold` is not set, the scaler behaves identically to the current implementation. No breaking changes. |
 
 ## Upgrade Strategy
 
-- No changes to CRD or API types. The `wtdbThreshold` parameter is added to the ScaledObject metadata, which is already a free-form `map[string]string`.
+- No changes to CRD or API types. The `scaleDownThreshold` parameter is added to the ScaledObject metadata, which is already a free-form `map[string]string`.
 - Existing ScaledObject configurations work without any modification.
-- Users who want to enable the new behavior add `wtdbThreshold` to their ScaledObject metadata.
+- Users who want to enable the new behavior add `scaleDownThreshold` to their ScaledObject metadata.
 - No controller restart or rolling update is required. The External Scaler reads the parameter on each `GetMetrics` call.
 
 ## Implementation History
@@ -262,7 +262,7 @@ OKG External Scaler 当前在 `GetMetrics` 中使用互斥的双分支逻辑：�
 
 在大规模集群中，这个设计会导致问题：由于 Pod 启动慢、游戏服被分配、状态频繁变化等原因，None 数量经常低于 `minAvailable`。Scaler 持续进入扩容分支，`spec.Replicas` 不断上涨，WTBD 游戏服永远无法被删除。
 
-本方案引入一个可配置的阈值参数 `wtdbThreshold` 到 ScaledObject 元数据中。当 WTBD 数量（或比例）超过此阈值时，Scaler 优先缩容以清理 WTBD 积压；当 WTBD 低于阈值时，保留现有的扩容优先行为，确保向后兼容。
+本方案引入一个可配置的阈值参数 `scaleDownThreshold` 到 ScaledObject 元数据中。当 WTBD 数量（或比例）超过此阈值时，Scaler 优先缩容以清理 WTBD 积压；当 WTBD 低于阈值时，保留现有的扩容优先行为，确保向后兼容。
 
 ## 动机
 
@@ -290,7 +290,7 @@ OKG External Scaler 当前在 `GetMetrics` 中使用互斥的双分支逻辑：�
 
 **当前行为**：Scaler 始终看到 `noneNum < minAvailable`，持续扩容，`spec.Replicas` 从 500 涨到 600+。50+ 个 WTBD 游戏服永远无法被删除。
 
-**预期行为**：运营商设置 `wtdbThreshold: "10"`。当 WTBD 数量超过 10 时，Scaler 返回一个小于当前 Pod 数量的 `desiredReplicas`，触发缩容。Controller 删除 WTBD 游戏服。一旦 WTBD 降至 10 以下，Scaler 恢复正常的扩容优先行为。
+**预期行为**：运营商设置 `scaleDownThreshold: "10"`。当 WTBD 数量超过 10 时，Scaler 返回一个小于当前 Pod 数量的 `desiredReplicas`，触发缩容。Controller 删除 WTBD 游戏服。一旦 WTBD 降至 10 以下，Scaler 恢复正常的扩容优先行为。
 
 #### 场景 2：小规模集群的正常 WTBD 流转
 
@@ -298,7 +298,7 @@ OKG External Scaler 当前在 `GetMetrics` 中使用互斥的双分支逻辑：�
 
 **当前行为**：正常工作。None 数量通常充足，Scaler 能走到缩容分支删除 WTBD 游戏服。
 
-**预期行为**：运营商不设置 `wtdbThreshold`（或设置较高值）。行为与现有实现完全一致。无影响。
+**预期行为**：运营商不设置 `scaleDownThreshold`（或设置较高值）。行为与现有实现完全一致。无影响。
 
 ### 实现细节/注意事项/约束
 
@@ -324,7 +324,7 @@ return desireReplicas
 
 #### 方案：基于阈值的优先级控制
 
-在 ScaledObject 元数据中新增 `wtdbThreshold` 参数，控制缩容何时优先于扩容。
+在 ScaledObject 元数据中新增 `scaleDownThreshold` 参数，控制缩容何时优先于扩容。
 
 **决策逻辑**：
 
@@ -342,13 +342,13 @@ return desireReplicas
 
 #### 阈值参数设计
 
-`wtdbThreshold` 参数支持两种格式：
+`scaleDownThreshold` 参数支持两种格式：
 
 **绝对值**（整数 >= 1）：
 
 ```yaml
 metadata:
-  wtdbThreshold: "10"   # 当 WTBD 数量 > 10 时触发缩容优先
+  scaleDownThreshold: "10"   # 当 WTBD 数量 > 10 时触发缩容优先
 ```
 
 - 对小到中型集群简单直观。
@@ -358,7 +358,7 @@ metadata:
 
 ```yaml
 metadata:
-  wtdbThreshold: "0.1"  # 当 WTBD 占比 > 10% 时触发缩容优先
+  scaleDownThreshold: "0.1"  # 当 WTBD 占比 > 10% 时触发缩容优先
 ```
 
 - WTBD 占比计算公式：`numWaitToBeDeleted / totalNum`。
@@ -367,7 +367,7 @@ metadata:
 
 **默认行为**（参数未设置时）：
 
-- 当未指定 `wtdbThreshold` 时，Scaler 行为与现有实现完全一致（当 `noneNum < minNum` 时始终扩容优先）。
+- 当未指定 `scaleDownThreshold` 时，Scaler 行为与现有实现完全一致（当 `noneNum < minNum` 时始终扩容优先）。
 - 确保完全向后兼容。
 
 参数解析方式与 `minAvailable` 相同（通过 `strconv.ParseFloat`），区分整数和百分比值。
@@ -379,7 +379,7 @@ func (e *ExternalScaler) GetMetrics(ctx context.Context, metricRequest *GetMetri
     // ... 现有代码：获取 GSS、列出 Pod、统计 totalNum、noneNum、numWaitToBeDeleted ...
 
     // --- 新增：WTBD 阈值检查 ---
-    thresholdStr := metricRequest.ScaledObjectRef.GetScalerMetadata()[WTBDThresholdKey]
+    thresholdStr := metricRequest.ScaledObjectRef.GetScalerMetadata()[ScaleDownThresholdKey]
     if thresholdStr != "" {
         threshold, isPercentage := parseThreshold(thresholdStr)
         exceeded := false
@@ -415,7 +415,7 @@ func (e *ExternalScaler) GetMetrics(ctx context.Context, metricRequest *GetMetri
 
 #### 行为推演
 
-场景：`minAvailable: 3`，`wtdbThreshold: "5"`，集群 100 个 Pod（noneNum=2，WTBD=20）。
+场景：`minAvailable: 3`，`scaleDownThreshold: "5"`，集群 100 个 Pod（noneNum=2，WTBD=20）。
 
 | 轮次 | totalNum | noneNum | WTBD | WTBD > 阈值? | desireReplicas | 动作 |
 |------|----------|---------|------|-------------|----------------|------|
@@ -438,13 +438,13 @@ WTBD 未超过阈值的场景（如 WTBD=3）：
 | 用户可能错误配置阈值 | 提供清晰的文档，包含不同集群规模的推荐值。默认行为（不设置阈值）保留当前行为。 |
 | 百分比阈值在边界附近可能导致不稳定 | 阈值比较使用 `>`（严格大于），恰好在边界上的值不会触发缩容。HPA/KEDA 的稳定窗口也会抑制振荡。 |
 | WTBD 在阈值附近波动时可能导致扩缩振荡 | KEDA 内置的 `stabilizationWindowSeconds` 和 `cooldownPeriod` 自然会缓解此问题。阈值是粗粒度的控制，不是实时的 PID 控制器。 |
-| 向后兼容性破坏 | 未设置 `wtdbThreshold` 时，Scaler 行为与现有实现完全一致。无破坏性变更。 |
+| 向后兼容性破坏 | 未设置 `scaleDownThreshold` 时，Scaler 行为与现有实现完全一致。无破坏性变更。 |
 
 ## 升级策略
 
-- 无需修改 CRD 或 API 类型。`wtdbThreshold` 参数添加到 ScaledObject 元数据中，该字段已经是自由格式的 `map[string]string`。
+- 无需修改 CRD 或 API 类型。`scaleDownThreshold` 参数添加到 ScaledObject 元数据中，该字段已经是自由格式的 `map[string]string`。
 - 现有的 ScaledObject 配置无需任何修改即可继续使用。
-- 需要启用新行为的用户只需在 ScaledObject 元数据中添加 `wtdbThreshold`。
+- 需要启用新行为的用户只需在 ScaledObject 元数据中添加 `scaleDownThreshold`。
 - 不需要 Controller 重启或滚动更新。External Scaler 在每次 `GetMetrics` 调用时读取该参数。
 
 ## 实施历史

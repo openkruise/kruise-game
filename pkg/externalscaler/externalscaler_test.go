@@ -64,14 +64,14 @@ func TestGetMetrics(t *testing.T) {
 	const ns = "default"
 
 	tests := []struct {
-		name             string
-		replicas         int32
-		pods             []*corev1.Pod
-		metadata         map[string]string
-		wantReplicas     int64
-		wantErr          bool
+		name         string
+		replicas     int32
+		pods         []*corev1.Pod
+		metadata     map[string]string
+		wantReplicas int64
+		wantErr      bool
 	}{
-		// --- wtdbThreshold: absolute mode, exceeded ---
+		// --- scaleDownThreshold: absolute mode, exceeded ---
 		{
 			name:     "threshold exceeded (absolute): scale-down prioritized",
 			replicas: 100,
@@ -84,13 +84,13 @@ func TestGetMetrics(t *testing.T) {
 			),
 			metadata: map[string]string{
 				"minAvailable":  "3",
-				"wtdbThreshold": "10",
+				"scaleDownThreshold": "10",
 			},
 			// totalNum=100, noneNum=2, WTBD=20, threshold=10, exceeded
 			// desireReplicas = max(100-20, 3) = 80
 			wantReplicas: 80,
 		},
-		// --- wtdbThreshold: percentage mode, exceeded ---
+		// --- scaleDownThreshold: percentage mode, exceeded ---
 		{
 			name:     "threshold exceeded (percentage): scale-down prioritized",
 			replicas: 100,
@@ -103,13 +103,13 @@ func TestGetMetrics(t *testing.T) {
 			),
 			metadata: map[string]string{
 				"minAvailable":  "3",
-				"wtdbThreshold": "0.1",
+				"scaleDownThreshold": "0.1",
 			},
 			// ratio = 20/100 = 0.2 > 0.1, exceeded
 			// desireReplicas = max(100-20, 3) = 80
 			wantReplicas: 80,
 		},
-		// --- wtdbThreshold: not exceeded, falls through to existing logic ---
+		// --- scaleDownThreshold: not exceeded, falls through to existing logic ---
 		{
 			name:     "threshold not exceeded (absolute): existing scale-up logic",
 			replicas: 100,
@@ -122,13 +122,13 @@ func TestGetMetrics(t *testing.T) {
 			),
 			metadata: map[string]string{
 				"minAvailable":  "5",
-				"wtdbThreshold": "10",
+				"scaleDownThreshold": "10",
 			},
 			// WTBD=3 <= 10, not exceeded. noneNum(2) < minNum(5)
 			// desireReplicas = 100 + 5 - 2 = 103
 			wantReplicas: 103,
 		},
-		// --- wtdbThreshold: not exceeded, falls through to scale-down WTBD ---
+		// --- scaleDownThreshold: not exceeded, falls through to scale-down WTBD ---
 		{
 			name:     "threshold not exceeded, noneNum >= minNum: scale-down WTBD",
 			replicas: 100,
@@ -141,13 +141,13 @@ func TestGetMetrics(t *testing.T) {
 			),
 			metadata: map[string]string{
 				"minAvailable":  "3",
-				"wtdbThreshold": "10",
+				"scaleDownThreshold": "10",
 			},
 			// WTBD=5 <= 10, not exceeded. noneNum(10) >= minNum(3)
 			// desireReplicas = 100 - 5 = 95
 			wantReplicas: 95,
 		},
-		// --- wtdbThreshold: not set, existing behavior preserved ---
+		// --- scaleDownThreshold: not set, existing behavior preserved ---
 		{
 			name:     "no threshold set, existing scale-up behavior",
 			replicas: 10,
@@ -161,7 +161,7 @@ func TestGetMetrics(t *testing.T) {
 			// noneNum(2) < minNum(5), desireReplicas = 10 + 5 - 2 = 13
 			wantReplicas: 13,
 		},
-		// --- wtdbThreshold: not set, existing scale-down behavior ---
+		// --- scaleDownThreshold: not set, existing scale-down behavior ---
 		{
 			name:     "no threshold set, existing scale-down WTBD behavior",
 			replicas: 10,
@@ -175,7 +175,7 @@ func TestGetMetrics(t *testing.T) {
 			// noneNum(5) >= minNum(3), WTBD=3, desireReplicas = 10 - 3 = 7
 			wantReplicas: 7,
 		},
-		// --- wtdbThreshold: invalid string, falls through gracefully ---
+		// --- scaleDownThreshold: invalid string, falls through gracefully ---
 		{
 			name:     "invalid threshold string: falls through to existing logic",
 			replicas: 10,
@@ -185,13 +185,13 @@ func TestGetMetrics(t *testing.T) {
 			),
 			metadata: map[string]string{
 				"minAvailable":  "5",
-				"wtdbThreshold": "invalid",
+				"scaleDownThreshold": "invalid",
 			},
 			// invalid threshold, falls through. noneNum(2) < minNum(5)
 			// desireReplicas = 10 + 5 - 2 = 13
 			wantReplicas: 13,
 		},
-		// --- wtdbThreshold: exceeded but minNum floor kicks in ---
+		// --- scaleDownThreshold: exceeded but minNum floor kicks in ---
 		{
 			name:     "threshold exceeded but minAvailable floor applied",
 			replicas: 10,
@@ -201,26 +201,26 @@ func TestGetMetrics(t *testing.T) {
 			),
 			metadata: map[string]string{
 				"minAvailable":  "5",
-				"wtdbThreshold": "5",
+				"scaleDownThreshold": "5",
 			},
 			// totalNum=10, WTBD=8, threshold=5, exceeded
 			// desireReplicas = max(10-8, 5) = max(2, 5) = 5
 			wantReplicas: 5,
 		},
-		// --- wtdbThreshold: zero WTBD, threshold check skipped ---
+		// --- scaleDownThreshold: zero WTBD, threshold check skipped ---
 		{
 			name:     "zero WTBD pods: threshold check skipped",
 			replicas: 10,
 			pods:     makePods(gssName, ns, 10, string(gamekruiseiov1alpha1.None), ""),
 			metadata: map[string]string{
 				"minAvailable":  "3",
-				"wtdbThreshold": "5",
+				"scaleDownThreshold": "5",
 			},
 			// WTBD=0, threshold skipped. noneNum(10) >= minNum(3), WTBD=0
 			// no maxAvailable, desireReplicas = 10
 			wantReplicas: 10,
 		},
-		// --- wtdbThreshold: percentage mode, not exceeded ---
+		// --- scaleDownThreshold: percentage mode, not exceeded ---
 		{
 			name:     "threshold not exceeded (percentage): existing logic",
 			replicas: 100,
@@ -233,7 +233,7 @@ func TestGetMetrics(t *testing.T) {
 			),
 			metadata: map[string]string{
 				"minAvailable":  "5",
-				"wtdbThreshold": "0.1",
+				"scaleDownThreshold": "0.1",
 			},
 			// ratio = 3/100 = 0.03 < 0.1, not exceeded. noneNum(10) >= minNum(5)
 			// WTBD=3, desireReplicas = 100 - 3 = 97
@@ -255,7 +255,7 @@ func TestGetMetrics(t *testing.T) {
 			),
 			metadata: map[string]string{
 				"minAvailable":  "3",
-				"wtdbThreshold": "8",
+				"scaleDownThreshold": "8",
 			},
 			// WTBD (non-Deleting) = 5, threshold=8, 5 <= 8, not exceeded
 			// noneNum(5) >= minNum(3), WTBD=5, desireReplicas = 100 - 5 = 95
@@ -316,7 +316,7 @@ func makePodsPrefix(gssName, ns, prefix string, count int, opsState, state strin
 	return pods
 }
 
-func TestParseWTBDThreshold(t *testing.T) {
+func TestParseScaleDownThreshold(t *testing.T) {
 	tests := []struct {
 		name       string
 		input      string
@@ -404,19 +404,19 @@ func TestParseWTBDThreshold(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotThresh, gotPct, err := parseWTBDThreshold(tt.input)
+			gotThresh, gotPct, err := parseScaleDownThreshold(tt.input)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("parseWTBDThreshold(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+				t.Errorf("parseScaleDownThreshold(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
 				return
 			}
 			if tt.wantErr {
 				return
 			}
 			if gotPct != tt.wantPct {
-				t.Errorf("parseWTBDThreshold(%q) isPercentage = %v, want %v", tt.input, gotPct, tt.wantPct)
+				t.Errorf("parseScaleDownThreshold(%q) isPercentage = %v, want %v", tt.input, gotPct, tt.wantPct)
 			}
 			if math.Abs(gotThresh-tt.wantThresh) > 1e-9 {
-				t.Errorf("parseWTBDThreshold(%q) threshold = %v, want %v", tt.input, gotThresh, tt.wantThresh)
+				t.Errorf("parseScaleDownThreshold(%q) threshold = %v, want %v", tt.input, gotThresh, tt.wantThresh)
 			}
 		})
 	}
