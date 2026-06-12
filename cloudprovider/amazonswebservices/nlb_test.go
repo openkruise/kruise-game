@@ -286,3 +286,64 @@ func TestInitLbCache(t *testing.T) {
 		t.Errorf("podAllocate expect %v, but actully got %v", test.podAllocate, test.n.podAllocate)
 	}
 }
+
+func TestConsSvcPorts(t *testing.T) {
+	tests := []struct {
+		name      string
+		backends  []*backend
+		ports     []int32
+		wantNames []string
+	}{
+		{
+			name: "same port TCP and UDP gets protocol suffix",
+			backends: []*backend{
+				{targetPort: 8601, protocol: corev1.ProtocolTCP},
+				{targetPort: 8601, protocol: corev1.ProtocolUDP},
+			},
+			ports:     []int32{6000, 6001},
+			wantNames: []string{"8601-tcp", "8601-udp"},
+		},
+		{
+			name: "single protocol keeps numeric-only name (backward compatible)",
+			backends: []*backend{
+				{targetPort: 8601, protocol: corev1.ProtocolTCP},
+			},
+			ports:     []int32{6000},
+			wantNames: []string{"8601"},
+		},
+		{
+			name: "distinct ports keep numeric-only names",
+			backends: []*backend{
+				{targetPort: 8601, protocol: corev1.ProtocolTCP},
+				{targetPort: 8602, protocol: corev1.ProtocolUDP},
+			},
+			ports:     []int32{6000, 6001},
+			wantNames: []string{"8601", "8602"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svcPorts := consSvcPorts(tt.backends, tt.ports)
+			if len(svcPorts) != len(tt.wantNames) {
+				t.Fatalf("got %d ports, want %d", len(svcPorts), len(tt.wantNames))
+			}
+			seen := make(map[string]bool)
+			for i, p := range svcPorts {
+				if p.Name != tt.wantNames[i] {
+					t.Errorf("port[%d].Name = %q, want %q", i, p.Name, tt.wantNames[i])
+				}
+				if seen[p.Name] {
+					t.Errorf("duplicate ServicePort name %q (invalid Service)", p.Name)
+				}
+				seen[p.Name] = true
+				if p.Port != tt.ports[i] {
+					t.Errorf("port[%d].Port = %d, want %d", i, p.Port, tt.ports[i])
+				}
+				if p.TargetPort.IntValue() != tt.backends[i].targetPort {
+					t.Errorf("port[%d].TargetPort = %d, want %d", i, p.TargetPort.IntValue(), tt.backends[i].targetPort)
+				}
+			}
+		})
+	}
+}
