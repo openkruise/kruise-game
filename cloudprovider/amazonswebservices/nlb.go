@@ -617,6 +617,37 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *nlbConfig {
 	}
 }
 
+// consSvcPorts builds the ServicePort list for the backing ClusterIP Service.
+//
+// Kubernetes requires every ServicePort in a multi-port Service to have a
+// unique Name. When the same target port is exposed for more than one protocol
+// (e.g. PortProtocols "8601/TCP,8601/UDP"), using the bare port number as the
+// Name produces duplicate names and an invalid Service that the API server
+// rejects. In that case we disambiguate by appending the lowercased protocol
+// (e.g. "8601-tcp" / "8601-udp"). Port numbers that appear only once keep the
+// legacy numeric-only name to stay backward compatible.
+func consSvcPorts(backends []*backend, ports []int32) []corev1.ServicePort {
+	portCount := make(map[int]int)
+	for i := 0; i < len(backends); i++ {
+		portCount[backends[i].targetPort]++
+	}
+
+	svcPorts := make([]corev1.ServicePort, 0)
+	for i := 0; i < len(backends); i++ {
+		name := strconv.Itoa(backends[i].targetPort)
+		if portCount[backends[i].targetPort] > 1 {
+			name = name + "-" + strings.ToLower(string(backends[i].protocol))
+		}
+		svcPorts = append(svcPorts, corev1.ServicePort{
+			Name:       name,
+			Port:       ports[i],
+			Protocol:   backends[i].protocol,
+			TargetPort: intstr.FromInt(backends[i].targetPort),
+		})
+	}
+	return svcPorts
+}
+
 func getACKTargetGroupARN(tg *ackv1alpha1.TargetGroup) (string, error) {
 	if len(tg.Status.Conditions) == 0 {
 		return "", fmt.Errorf("targetGroup status not ready")
@@ -691,15 +722,7 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 		}
 	}
 
-	svcPorts := make([]corev1.ServicePort, 0)
-	for i := 0; i < len(config.backends); i++ {
-		svcPorts = append(svcPorts, corev1.ServicePort{
-			Name:       strconv.Itoa(config.backends[i].targetPort),
-			Port:       ports[i],
-			Protocol:   config.backends[i].protocol,
-			TargetPort: intstr.FromInt(config.backends[i].targetPort),
-		})
-	}
+	svcPorts := consSvcPorts(config.backends, ports)
 	annotations := map[string]string{
 		NlbARNAnnoKey:    lbARN,
 		NlbConfigHashKey: util.GetHash(config),
