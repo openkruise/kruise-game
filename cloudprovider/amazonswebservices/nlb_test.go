@@ -347,3 +347,173 @@ func TestConsSvcPorts(t *testing.T) {
 		})
 	}
 }
+
+func TestConsSvcPortsTCPUDP(t *testing.T) {
+	tests := []struct {
+		name     string
+		backends []*backend
+		ports    []int32
+		want     []corev1.ServicePort
+	}{
+		{
+			name: "single TCPUDP backend expands to TCP+UDP sharing the frontend port",
+			backends: []*backend{
+				{targetPort: 8601, protocol: ProtocolTCPUDP},
+			},
+			ports: []int32{30001},
+			want: []corev1.ServicePort{
+				{Name: "8601-tcp", Port: 30001, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt(8601)},
+				{Name: "8601-udp", Port: 30001, Protocol: corev1.ProtocolUDP, TargetPort: intstr.FromInt(8601)},
+			},
+		},
+		{
+			name: "two TCPUDP backends each get their own frontend port",
+			backends: []*backend{
+				{targetPort: 8601, protocol: ProtocolTCPUDP},
+				{targetPort: 8661, protocol: ProtocolTCPUDP},
+			},
+			ports: []int32{30001, 30002},
+			want: []corev1.ServicePort{
+				{Name: "8601-tcp", Port: 30001, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt(8601)},
+				{Name: "8601-udp", Port: 30001, Protocol: corev1.ProtocolUDP, TargetPort: intstr.FromInt(8601)},
+				{Name: "8661-tcp", Port: 30002, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt(8661)},
+				{Name: "8661-udp", Port: 30002, Protocol: corev1.ProtocolUDP, TargetPort: intstr.FromInt(8661)},
+			},
+		},
+		{
+			name: "TCPUDP coexists with a single-protocol backend",
+			backends: []*backend{
+				{targetPort: 8601, protocol: ProtocolTCPUDP},
+				{targetPort: 9000, protocol: corev1.ProtocolTCP},
+			},
+			ports: []int32{30001, 30002},
+			want: []corev1.ServicePort{
+				{Name: "8601-tcp", Port: 30001, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt(8601)},
+				{Name: "8601-udp", Port: 30001, Protocol: corev1.ProtocolUDP, TargetPort: intstr.FromInt(8601)},
+				{Name: "9000", Port: 30002, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt(9000)},
+			},
+		},
+		{
+			name: "DNS-style port 53 TCPUDP",
+			backends: []*backend{
+				{targetPort: 53, protocol: ProtocolTCPUDP},
+			},
+			ports: []int32{32768},
+			want: []corev1.ServicePort{
+				{Name: "53-tcp", Port: 32768, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt(53)},
+				{Name: "53-udp", Port: 32768, Protocol: corev1.ProtocolUDP, TargetPort: intstr.FromInt(53)},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := consSvcPorts(tt.backends, tt.ports)
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("consSvcPorts mismatch\n got:  %s\nwant: %s",
+					pretty.Sprint(got), pretty.Sprint(tt.want))
+			}
+
+			// All ServicePort names must be unique (otherwise the K8s API
+			// server will reject the Service with a Duplicate value error).
+			seen := make(map[string]bool)
+			for _, p := range got {
+				if seen[p.Name] {
+					t.Errorf("duplicate ServicePort name %q", p.Name)
+				}
+				seen[p.Name] = true
+			}
+
+			// For each TCPUDP backend, the two emitted ServicePorts must
+			// share the same frontend Port so they land on a single AWS
+			// TCP_UDP listener.
+			for _, b := range tt.backends {
+				if b.protocol != ProtocolTCPUDP {
+					continue
+				}
+				var frontendPorts []int32
+				var protocols []corev1.Protocol
+				for _, p := range got {
+					if int(p.TargetPort.IntValue()) == b.targetPort {
+						frontendPorts = append(frontendPorts, p.Port)
+						protocols = append(protocols, p.Protocol)
+					}
+				}
+				if len(frontendPorts) != 2 {
+					t.Errorf("backend targetPort=%d: expected 2 emitted ServicePorts, got %d",
+						b.targetPort, len(frontendPorts))
+					continue
+				}
+				if frontendPorts[0] != frontendPorts[1] {
+					t.Errorf("backend targetPort=%d: expected shared frontend Port, got %v",
+						b.targetPort, frontendPorts)
+				}
+				wantProtos := map[corev1.Protocol]bool{corev1.ProtocolTCP: false, corev1.ProtocolUDP: false}
+				for _, pr := range protocols {
+					if _, ok := wantProtos[pr]; ok {
+						wantProtos[pr] = true
+					}
+				}
+				for pr, seenIt := range wantProtos {
+					if !seenIt {
+						t.Errorf("backend targetPort=%d: missing %s protocol entry", b.targetPort, pr)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestParseLbConfigTCPUDP(t *testing.T) {
+	tests := []struct {
+		name         string
+		value        string
+		wantBackends []*backend
+	}{
+		{
+			name:  "single TCPUDP entry",
+			value: "8601/TCPUDP",
+			wantBackends: []*backend{
+				{targetPort: 8601, protocol: ProtocolTCPUDP},
+			},
+		},
+		{
+			name:  "multiple TCPUDP entries",
+			value: "8601/TCPUDP,8661/TCPUDP",
+			wantBackends: []*backend{
+				{targetPort: 8601, protocol: ProtocolTCPUDP},
+				{targetPort: 8661, protocol: ProtocolTCPUDP},
+			},
+		},
+		{
+			name:  "TCPUDP mixed with TCP and UDP",
+			value: "53/TCPUDP,80/TCP,9000/UDP",
+			wantBackends: []*backend{
+				{targetPort: 53, protocol: ProtocolTCPUDP},
+				{targetPort: 80, protocol: corev1.ProtocolTCP},
+				{targetPort: 9000, protocol: corev1.ProtocolUDP},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conf := []gamekruiseiov1alpha1.NetworkConfParams{
+				{
+					Name:  NlbARNsConfigName,
+					Value: "arn:aws:elasticloadbalancing:us-east-1:888888888888:loadbalancer/net/aaa/3b332e6841f23870",
+				},
+				{
+					Name:  PortProtocolsConfigName,
+					Value: tt.value,
+				},
+			}
+			sc := parseLbConfig(conf)
+			if !reflect.DeepEqual(sc.backends, tt.wantBackends) {
+				t.Errorf("backends mismatch\n got:  %s\nwant: %s",
+					pretty.Sprint(sc.backends), pretty.Sprint(tt.wantBackends))
+			}
+		})
+	}
+}
