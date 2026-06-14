@@ -76,6 +76,18 @@ const (
 	listenerActionType         = "forward"
 )
 
+// ProtocolTCPUDP is a synthetic protocol value indicating that a target
+// port should accept both TCP and UDP traffic on the same AWS NLB
+// listener. It is NOT a Kubernetes-recognized protocol and lives only on
+// parsed backends. When emitting a Kubernetes Service the plugin expands
+// it into one TCP and one UDP ServicePort that share the same Port.
+// When emitting AWS resources (TargetGroup, Listener) it is translated
+// to the AWS protocol value "TCP_UDP".
+const (
+	ProtocolTCPUDP    corev1.Protocol = "TCPUDP"
+	awsProtocolTCPUDP                 = "TCP_UDP"
+)
+
 type portAllocated map[int32]bool
 type nlbPorts struct {
 	arn   string
@@ -627,14 +639,40 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *nlbConfig {
 // (e.g. "8601-tcp" / "8601-udp"). Port numbers that appear only once keep the
 // legacy numeric-only name to stay backward compatible.
 func consSvcPorts(backends []*backend, ports []int32) []corev1.ServicePort {
+	// portCount counts how many ServicePorts will land on each target port
+	// number so we know whether to add a protocol suffix to the
+	// ServicePort name. TCPUDP entries contribute two (TCP and UDP).
 	portCount := make(map[int]int)
 	for i := 0; i < len(backends); i++ {
-		portCount[backends[i].targetPort]++
+		if backends[i].protocol == ProtocolTCPUDP {
+			portCount[backends[i].targetPort] += 2
+		} else {
+			portCount[backends[i].targetPort]++
+		}
 	}
 
 	svcPorts := make([]corev1.ServicePort, 0)
 	for i := 0; i < len(backends); i++ {
-		name := strconv.Itoa(backends[i].targetPort)
+		baseName := strconv.Itoa(backends[i].targetPort)
+		if backends[i].protocol == ProtocolTCPUDP {
+			// TCPUDP expands to TCP+UDP sharing the same Port. Always add
+			// the protocol suffix because two ServicePorts on the same
+			// Port number must have unique Names.
+			svcPorts = append(svcPorts, corev1.ServicePort{
+				Name:       baseName + "-tcp",
+				Port:       ports[i],
+				Protocol:   corev1.ProtocolTCP,
+				TargetPort: intstr.FromInt(backends[i].targetPort),
+			})
+			svcPorts = append(svcPorts, corev1.ServicePort{
+				Name:       baseName + "-udp",
+				Port:       ports[i],
+				Protocol:   corev1.ProtocolUDP,
+				TargetPort: intstr.FromInt(backends[i].targetPort),
+			})
+			continue
+		}
+		name := baseName
 		if portCount[backends[i].targetPort] > 1 {
 			name = name + "-" + strings.ToLower(string(backends[i].protocol))
 		}
@@ -682,6 +720,11 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 	for i := range ports {
 		targetGroupName := fmt.Sprintf("%s-%d", pod.GetName(), ports[i])
 		protocol := string(config.backends[i].protocol)
+		if config.backends[i].protocol == ProtocolTCPUDP {
+			// AWS NLB expects "TCP_UDP" for dual-protocol target groups and
+			// listeners. Listener inherits Protocol from TargetGroup.
+			protocol = awsProtocolTCPUDP
+		}
 		targetPort := int64(config.backends[i].targetPort)
 		var targetTypeIP = string(ackv1alpha1.TargetTypeEnum_ip)
 		_, err := controllerutil.CreateOrUpdate(ctx, client, &ackv1alpha1.TargetGroup{
