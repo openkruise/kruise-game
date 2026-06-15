@@ -377,6 +377,9 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	}
 	networkConfig := networkManager.GetNetworkConfig()
 	lbConfig := parseLbConfig(networkConfig)
+	if err := validateLbConfig(lbConfig); err != nil {
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
+	}
 	if networkStatus == nil {
 		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
 			CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
@@ -779,6 +782,76 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *nlbConfig {
 		isFixed:          isFixed,
 		annotations:      annotations,
 	}
+}
+
+// validateLbConfig rejects network configurations that AWS would reject (or that
+// would otherwise stall silently) when the plugin creates the Service / target
+// group / listener, surfacing a clear error early instead of failing deep in an
+// AWS API call or leaving the GameServer stuck in NotReady. All limits follow
+// the AWS ELBv2 API (see CreateTargetGroup / Health checks for NLB target
+// groups). The NLB plugin always uses target type "ip".
+func validateLbConfig(config *nlbConfig) error {
+	if config == nil {
+		return nil
+	}
+
+	// NlbARNs is required: without a load balancer ARN the plugin cannot
+	// allocate a frontend port.
+	if len(config.loadBalancerARNs) == 0 {
+		return fmt.Errorf("%s is required: at least one NLB ARN must be provided", NlbARNsConfigName)
+	}
+
+	// PortProtocols is required and each entry must be a valid port/protocol.
+	if len(config.backends) == 0 {
+		return fmt.Errorf("%s is required: at least one port/protocol must be provided", PortProtocolsConfigName)
+	}
+	for _, b := range config.backends {
+		if b.targetPort < 1 || b.targetPort > 65535 {
+			return fmt.Errorf("%s port %d is invalid: must be in [1,65535]", PortProtocolsConfigName, b.targetPort)
+		}
+		switch b.protocol {
+		case corev1.ProtocolTCP, corev1.ProtocolUDP, ProtocolTCPUDP:
+		default:
+			return fmt.Errorf("%s protocol %q is invalid: must be one of TCP, UDP, TCPUDP", PortProtocolsConfigName, b.protocol)
+		}
+	}
+
+	hc := config.healthCheck
+	if hc == nil {
+		return nil
+	}
+
+	// Target type "ip" requires health checks to be always enabled and they
+	// cannot be disabled. healthCheckEnabled=false makes ack-elbv2 fail to sync
+	// the target group ("Health check enabled must be true with groups with
+	// target type ip"), silently stalling listener creation.
+	if hc.healthCheckEnabled != nil && !*hc.healthCheckEnabled {
+		return fmt.Errorf("%s healthCheckEnabled=false is not allowed: the plugin creates target groups with target type \"ip\", for which AWS requires health checks to be always enabled; remove healthCheckEnabled or set it to true", NlbHealthCheckConfigName)
+	}
+
+	// For NLB, only TCP/HTTP/HTTPS health-check protocols are supported;
+	// UDP/TCP_UDP/TLS/GENEVE are not valid health-check protocols.
+	if hc.healthCheckProtocol != nil {
+		p := strings.ToUpper(*hc.healthCheckProtocol)
+		switch p {
+		case "TCP", "HTTP", "HTTPS":
+		default:
+			return fmt.Errorf("%s healthCheckProtocol %q is invalid: NLB health checks support only TCP, HTTP or HTTPS", NlbHealthCheckConfigName, *hc.healthCheckProtocol)
+		}
+	}
+	if hc.healthCheckIntervalSeconds != nil && (*hc.healthCheckIntervalSeconds < 5 || *hc.healthCheckIntervalSeconds > 300) {
+		return fmt.Errorf("%s healthCheckIntervalSeconds %d is invalid: must be in [5,300]", NlbHealthCheckConfigName, *hc.healthCheckIntervalSeconds)
+	}
+	if hc.healthCheckTimeoutSeconds != nil && (*hc.healthCheckTimeoutSeconds < 2 || *hc.healthCheckTimeoutSeconds > 120) {
+		return fmt.Errorf("%s healthCheckTimeoutSeconds %d is invalid: must be in [2,120]", NlbHealthCheckConfigName, *hc.healthCheckTimeoutSeconds)
+	}
+	if hc.healthyThresholdCount != nil && (*hc.healthyThresholdCount < 2 || *hc.healthyThresholdCount > 10) {
+		return fmt.Errorf("%s healthyThresholdCount %d is invalid: must be in [2,10]", NlbHealthCheckConfigName, *hc.healthyThresholdCount)
+	}
+	if hc.unhealthyThresholdCount != nil && (*hc.unhealthyThresholdCount < 2 || *hc.unhealthyThresholdCount > 10) {
+		return fmt.Errorf("%s unhealthyThresholdCount %d is invalid: must be in [2,10]", NlbHealthCheckConfigName, *hc.unhealthyThresholdCount)
+	}
+	return nil
 }
 
 // consSvcPorts builds the ServicePort list for the backing ClusterIP Service.
