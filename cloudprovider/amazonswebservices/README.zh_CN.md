@@ -110,6 +110,12 @@ TargetGroupBinding的CRD及控制器：https://github.com/kubernetes-sigs/aws-lo
 - 含义：pod暴露的端口及协议，支持填写多个端口/协议
 - 填写格式：port1/protocol1,port2/protocol2,...（协议需大写）
 - 是否支持变更：是
+- 支持的协议：`TCP`、`UDP`、`TCPUDP`。
+- **`TCPUDP`** 表示**同一端口通过单个 NLB 前端端口同时暴露 TCP 和 UDP**。例如 `8601/TCPUDP` 会创建一个 `TCP_UDP` 目标组和一个 `TCP_UDP` 监听器，两种协议共用同一个分配出的前端端口。这与 `8601/TCP,8601/UDP` 不同——后者会分配两个独立的前端端口（每种协议各一个）。
+- `TCPUDP` 的注意事项 / 限制：
+    - 目标组以目标类型 `ip`、协议 `TCP_UDP` 创建。AWS 对 `TCP_UDP` 目标组使用 **TCP** 健康检查，不对 UDP 侧做健康检查。参见 [NLB 目标组健康检查](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html)。
+    - 对于目标类型 `ip`，AWS 要求健康检查**必须开启**（无法关闭），且健康检查协议不能为 `UDP`/`TCP_UDP`。不要设置 `healthCheckEnabled:false` 或 UDP 健康检查协议，否则目标组会被 AWS 拒绝。参见 [CreateTargetGroup](https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_CreateTargetGroup.html)。
+    - 由于健康检查基于 TCP，pod 必须在该端口上接受 TCP 连接，目标才会变为 healthy。请确保 pod/ENI 的 SecurityGroup 放行该端口上的健康检查及客户端流量。
 
 #### Fixed
 - 含义：是否固定访问端口。若是，即使pod删除重建，网络内外映射关系不会改变
