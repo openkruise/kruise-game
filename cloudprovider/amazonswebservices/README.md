@@ -111,6 +111,12 @@ Official deployment documentation: https://docs.aws.amazon.com/eks/latest/usergu
 - Meaning: Ports and protocols exposed by the pod, supports specifying multiple ports/protocols.
 - Format: port1/protocol1,port2/protocol2,... (protocol should be uppercase)
 - Support for change: Yes
+- Supported protocols: `TCP`, `UDP`, and `TCPUDP`.
+- **`TCPUDP`** is a shorthand for exposing the **same port over both TCP and UDP through a single NLB frontend port**. A backend such as `8601/TCPUDP` creates one `TCP_UDP` target group and one `TCP_UDP` listener, so both protocols share the same allocated frontend port. This differs from declaring `8601/TCP,8601/UDP`, which allocates two separate frontend ports (one per protocol).
+- Notes / limitations for `TCPUDP`:
+    - The target group is created with target type `ip` and protocol `TCP_UDP`. AWS uses a **TCP** health check for `TCP_UDP` target groups; the UDP side is not health-checked. See [Health checks for NLB target groups](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html).
+    - For target type `ip`, AWS requires health checks to be **always enabled** (they cannot be disabled), and the health-check protocol cannot be `UDP`/`TCP_UDP`. Do not set `healthCheckEnabled:false` or a UDP health-check protocol, otherwise the target group is rejected by AWS. See [CreateTargetGroup](https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_CreateTargetGroup.html).
+    - Because health checks are TCP-based, the pod must accept TCP connections on the port for the target to become healthy. Ensure the pod/ENI SecurityGroup allows the health-check and client traffic on that port.
 
 #### Fixed
 - Meaning: Whether the access port is fixed. If yes, even if the pod is deleted and rebuilt, the mapping between the internal and external networks will not change.
