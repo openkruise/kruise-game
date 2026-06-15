@@ -19,6 +19,7 @@ import (
 const (
 	NoneGameServerMinNumberKey = "minAvailable"
 	NoneGameServerMaxNumberKey = "maxAvailable"
+	ScaleDownThresholdKey      = "scaleDownThreshold"
 )
 
 type ExternalScaler struct {
@@ -109,6 +110,24 @@ func (e *ExternalScaler) GetMetrics(ctx context.Context, metricRequest *GetMetri
 		}
 	}
 
+	// Count WaitToBeDeleted GameServers (not yet in Deleting state)
+	isWaitToDelete, _ := labels.NewRequirement(gamekruiseiov1alpha1.GameServerOpsStateKey, selection.Equals, []string{string(gamekruiseiov1alpha1.WaitToDelete)})
+	notDeleting, _ := labels.NewRequirement(gamekruiseiov1alpha1.GameServerStateKey, selection.NotEquals, []string{string(gamekruiseiov1alpha1.Deleting)})
+	wtbdPodList := &corev1.PodList{}
+	err = e.client.List(ctx, wtbdPodList, &client.ListOptions{
+		Namespace: ns,
+		LabelSelector: labels.NewSelector().Add(
+			*isWaitToDelete,
+			*notDeleting,
+			*isGssOwner,
+		),
+	})
+	if err != nil {
+		klog.Error(err)
+		return nil, err
+	}
+	numWaitToBeDeleted := len(wtbdPodList.Items)
+
 	maxNumStr := metricRequest.ScaledObjectRef.GetScalerMetadata()[NoneGameServerMaxNumberKey]
 	var maxNumP *int
 	if maxNumStr != "" {
@@ -120,7 +139,8 @@ func (e *ExternalScaler) GetMetrics(ctx context.Context, metricRequest *GetMetri
 		}
 	}
 
-	minNum, err := handleMinNum(totalNum, noneNum, metricRequest.ScaledObjectRef.GetScalerMetadata()[NoneGameServerMinNumberKey])
+	minNumStr := metricRequest.ScaledObjectRef.GetScalerMetadata()[NoneGameServerMinNumberKey]
+	minNum, err := handleMinNum(totalNum, noneNum, minNumStr)
 	if err != nil {
 		klog.Error(err)
 		return nil, err
@@ -128,6 +148,42 @@ func (e *ExternalScaler) GetMetrics(ctx context.Context, metricRequest *GetMetri
 
 	if maxNumP != nil && minNum > *maxNumP {
 		minNum = *maxNumP
+	}
+
+	// Check if WTBD count exceeds the threshold, if so prioritize scale-down
+	thresholdStr := metricRequest.ScaledObjectRef.GetScalerMetadata()[ScaleDownThresholdKey]
+	if thresholdStr != "" && numWaitToBeDeleted > 0 {
+		threshold, isPercentage, parseErr := parseScaleDownThreshold(thresholdStr)
+		if parseErr != nil {
+			klog.Errorf("invalid scaleDownThreshold value %q: %v", thresholdStr, parseErr)
+		} else {
+			exceeded := false
+			if isPercentage {
+				if totalNum > 0 {
+					ratio := float64(numWaitToBeDeleted) / float64(totalNum)
+					exceeded = ratio > threshold
+				}
+			} else {
+				exceeded = float64(numWaitToBeDeleted) > threshold
+			}
+
+			if exceeded {
+				// Prioritize scale-down: set desiredReplicas below totalNum so that
+				// the controller will delete all WTBD pods.
+				desireReplicas := totalNum - numWaitToBeDeleted
+				// Apply minAvailable as a floor to avoid scaling down too aggressively.
+				if minNum > 0 && desireReplicas < minNum {
+					desireReplicas = minNum
+				}
+				klog.Infof("GameServerSet %s/%s WTBD count %d exceeds threshold, prioritize scale-down, desire replicas is %d", ns, name, numWaitToBeDeleted, desireReplicas)
+				return &GetMetricsResponse{
+					MetricValues: []*MetricValue{{
+						MetricName:  "gssReplicas",
+						MetricValue: int64(desireReplicas),
+					}},
+				}, nil
+			}
+		}
 	}
 
 	if noneNum < minNum {
@@ -142,24 +198,7 @@ func (e *ExternalScaler) GetMetrics(ctx context.Context, metricRequest *GetMetri
 	}
 
 	//  scale down those GameServers with WaitToBeDeleted opsState
-	isWaitToDelete, _ := labels.NewRequirement(gamekruiseiov1alpha1.GameServerOpsStateKey, selection.Equals, []string{string(gamekruiseiov1alpha1.WaitToDelete)})
-	notDeleting, _ := labels.NewRequirement(gamekruiseiov1alpha1.GameServerStateKey, selection.NotEquals, []string{string(gamekruiseiov1alpha1.Deleting)})
-	podList = &corev1.PodList{}
-	err = e.client.List(ctx, podList, &client.ListOptions{
-		Namespace: ns,
-		LabelSelector: labels.NewSelector().Add(
-			*isWaitToDelete,
-			*notDeleting,
-			*isGssOwner,
-		),
-	})
-	if err != nil {
-		klog.Error(err)
-		return nil, err
-	}
-
 	desireReplicas := int(*gss.Spec.Replicas)
-	numWaitToBeDeleted := len(podList.Items)
 	if numWaitToBeDeleted != 0 {
 		desireReplicas = desireReplicas - numWaitToBeDeleted
 	} else {
@@ -182,6 +221,24 @@ func NewExternalScaler(client client.Client) *ExternalScaler {
 	return &ExternalScaler{
 		client: client,
 	}
+}
+
+// parseScaleDownThreshold parses the scaleDownThreshold value from ScaledObject metadata.
+// Supported formats:
+//   - integer >= 1 (e.g. "10"): absolute count threshold, isPercentage=false
+//   - float between 0 and 1 exclusive (e.g. "0.1"): percentage threshold, isPercentage=true
+func parseScaleDownThreshold(s string) (threshold float64, isPercentage bool, err error) {
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("invalid scaleDownThreshold %q: %v", s, err)
+	}
+	if n > 0 && n < 1 {
+		return n, true, nil
+	}
+	if n >= 1 {
+		return math.Ceil(n), false, nil
+	}
+	return 0, false, fmt.Errorf("invalid scaleDownThreshold %q: must be >= 1 (absolute) or between 0 and 1 exclusive (percentage)", s)
 }
 
 // handleMinNum calculate the expected min number of GameServers from the give minNumStr,
