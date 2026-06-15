@@ -191,9 +191,9 @@ func TestGetMetrics(t *testing.T) {
 			// desireReplicas = 10 + 5 - 2 = 13
 			wantReplicas: 13,
 		},
-		// --- scaleDownThreshold: exceeded but minNum floor kicks in ---
+		// --- scaleDownThreshold: exceeded, no minAvailable floor (KEDA minReplicaCount is the safety net) ---
 		{
-			name:     "threshold exceeded but minAvailable floor applied",
+			name:     "threshold exceeded: no minAvailable floor applied",
 			replicas: 10,
 			pods: append(
 				makePodsPrefix(gssName, ns, "w", 8, string(gamekruiseiov1alpha1.WaitToDelete), ""),
@@ -204,8 +204,8 @@ func TestGetMetrics(t *testing.T) {
 				"scaleDownThreshold": "5",
 			},
 			// totalNum=10, WTBD=8, threshold=5, exceeded
-			// desireReplicas = max(10-8, 5) = max(2, 5) = 5
-			wantReplicas: 5,
+			// desireReplicas = 10 - 8 = 2 (no minAvailable floor, KEDA minReplicaCount is the safety net)
+			wantReplicas: 2,
 		},
 		// --- scaleDownThreshold: zero WTBD, threshold check skipped ---
 		{
