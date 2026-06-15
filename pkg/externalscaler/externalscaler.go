@@ -170,11 +170,11 @@ func (e *ExternalScaler) GetMetrics(ctx context.Context, metricRequest *GetMetri
 			if exceeded {
 				// Prioritize scale-down: set desiredReplicas below totalNum so that
 				// the controller will delete all WTBD pods.
+				// NOTE: We intentionally do NOT apply minAvailable as a floor here.
+				// The design intent of scaleDownThreshold is "temporarily give up None
+				// guarantee to clean WTBD first". KEDA's minReplicaCount serves as
+				// the actual safety net for minimum pod count.
 				desireReplicas := totalNum - numWaitToBeDeleted
-				// Apply minAvailable as a floor to avoid scaling down too aggressively.
-				if minNum > 0 && desireReplicas < minNum {
-					desireReplicas = minNum
-				}
 				klog.Infof("GameServerSet %s/%s WTBD count %d exceeds threshold, prioritize scale-down, desire replicas is %d", ns, name, numWaitToBeDeleted, desireReplicas)
 				return &GetMetricsResponse{
 					MetricValues: []*MetricValue{{
