@@ -538,3 +538,50 @@ func TestAWSTargetGroupProtocol(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateLbConfig(t *testing.T) {
+	validARN := []string{"arn:aws:elasticloadbalancing:us-east-1:888888888888:loadbalancer/net/aaa/3b332e6841f23870"}
+	validBackends := []*backend{{targetPort: 8601, protocol: corev1.ProtocolTCP}}
+	base := func() *nlbConfig {
+		return &nlbConfig{
+			loadBalancerARNs: validARN,
+			backends:         validBackends,
+			healthCheck:      &healthCheck{},
+		}
+	}
+	tests := []struct {
+		name      string
+		config    *nlbConfig
+		expectErr bool
+	}{
+		{"nil config", nil, false},
+		{"valid minimal", base(), false},
+		{"missing NlbARNs", &nlbConfig{backends: validBackends, healthCheck: &healthCheck{}}, true},
+		{"missing PortProtocols", &nlbConfig{loadBalancerARNs: validARN, healthCheck: &healthCheck{}}, true},
+		{"port too low", &nlbConfig{loadBalancerARNs: validARN, backends: []*backend{{targetPort: 0, protocol: corev1.ProtocolTCP}}, healthCheck: &healthCheck{}}, true},
+		{"port too high", &nlbConfig{loadBalancerARNs: validARN, backends: []*backend{{targetPort: 70000, protocol: corev1.ProtocolTCP}}, healthCheck: &healthCheck{}}, true},
+		{"bad protocol", &nlbConfig{loadBalancerARNs: validARN, backends: []*backend{{targetPort: 8601, protocol: corev1.Protocol("SCTP")}}, healthCheck: &healthCheck{}}, true},
+		{"TCPUDP protocol ok", &nlbConfig{loadBalancerARNs: validARN, backends: []*backend{{targetPort: 8601, protocol: ProtocolTCPUDP}}, healthCheck: &healthCheck{}}, false},
+		{"healthCheckEnabled false rejected", &nlbConfig{loadBalancerARNs: validARN, backends: validBackends, healthCheck: &healthCheck{healthCheckEnabled: ptr.To[bool](false)}}, true},
+		{"healthCheckEnabled true ok", &nlbConfig{loadBalancerARNs: validARN, backends: validBackends, healthCheck: &healthCheck{healthCheckEnabled: ptr.To[bool](true)}}, false},
+		{"healthCheckProtocol UDP rejected", &nlbConfig{loadBalancerARNs: validARN, backends: validBackends, healthCheck: &healthCheck{healthCheckProtocol: ptr.To[string]("UDP")}}, true},
+		{"healthCheckProtocol TCP ok", &nlbConfig{loadBalancerARNs: validARN, backends: validBackends, healthCheck: &healthCheck{healthCheckProtocol: ptr.To[string]("TCP")}}, false},
+		{"healthCheckProtocol HTTP ok", &nlbConfig{loadBalancerARNs: validARN, backends: validBackends, healthCheck: &healthCheck{healthCheckProtocol: ptr.To[string]("HTTP")}}, false},
+		{"interval out of range", &nlbConfig{loadBalancerARNs: validARN, backends: validBackends, healthCheck: &healthCheck{healthCheckIntervalSeconds: ptr.To[int64](1)}}, true},
+		{"interval ok", &nlbConfig{loadBalancerARNs: validARN, backends: validBackends, healthCheck: &healthCheck{healthCheckIntervalSeconds: ptr.To[int64](30)}}, false},
+		{"timeout out of range", &nlbConfig{loadBalancerARNs: validARN, backends: validBackends, healthCheck: &healthCheck{healthCheckTimeoutSeconds: ptr.To[int64](200)}}, true},
+		{"healthy threshold out of range", &nlbConfig{loadBalancerARNs: validARN, backends: validBackends, healthCheck: &healthCheck{healthyThresholdCount: ptr.To[int64](11)}}, true},
+		{"unhealthy threshold out of range", &nlbConfig{loadBalancerARNs: validARN, backends: validBackends, healthCheck: &healthCheck{unhealthyThresholdCount: ptr.To[int64](1)}}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateLbConfig(tt.config)
+			if tt.expectErr && err == nil {
+				t.Errorf("%s: expected error, got nil", tt.name)
+			}
+			if !tt.expectErr && err != nil {
+				t.Errorf("%s: expected no error, got %v", tt.name, err)
+			}
+		})
+	}
+}
