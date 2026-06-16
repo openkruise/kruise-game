@@ -44,8 +44,7 @@ type AutoNLBsV3Plugin struct{}
 
 // autoNLBsV3Config 从 GameServerSet.spec.network.networkConf 解析得到
 type autoNLBsV3Config struct {
-	poolName      string
-	poolNamespace string
+	poolName string
 }
 
 func (a *AutoNLBsV3Plugin) Name() string {
@@ -91,14 +90,6 @@ func (a *AutoNLBsV3Plugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx cont
 func (a *AutoNLBsV3Plugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
 	networkManager := utils.NewNetworkManager(pod, c)
 	networkStatus, _ := networkManager.GetNetworkStatus()
-	networkConfig := networkManager.GetNetworkConfig()
-
-	conf, err := parseAutoNLBsV3Config(networkConfig)
-	if err != nil {
-		log.Errorf("[%s] OnPodUpdated parse config failed for pod %s/%s: %v",
-			AutoNLBsV3Network, pod.GetNamespace(), pod.GetName(), err)
-		return pod, cperrors.NewPluginError(cperrors.ParameterError, err.Error())
-	}
 
 	if networkStatus == nil {
 		networkStatus = &gamekruiseiov1alpha1.NetworkStatus{}
@@ -139,7 +130,6 @@ func (a *AutoNLBsV3Plugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 		log.Infof("[%s] PA %s/%s not yet bound to pod %s (phase=%s, boundPod=%s)",
 			AutoNLBsV3Network, pa.GetNamespace(), pa.GetName(), pod.GetName(),
 			pa.Status.Phase, pa.Spec.BoundPod)
-		_ = conf // poolNamespace currently unused; kept for future cross-ns scenarios
 		return a.markNotReady(networkManager, pod, networkStatus)
 	}
 
@@ -155,7 +145,7 @@ func (a *AutoNLBsV3Plugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx co
 	networkStatus.ExternalAddresses = built.ExternalAddresses
 	networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkReady
 
-	pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
+	pod, err := networkManager.UpdateNetworkStatus(*networkStatus, pod)
 	return pod, cperrors.ToPluginError(err, cperrors.InternalError)
 }
 
@@ -241,16 +231,13 @@ func buildNetworkStatusV3(pod *corev1.Pod, pa *PortAllocation) *gamekruiseiov1al
 	return ns
 }
 
-// parseAutoNLBsV3Config 解析 GSS NetworkConf：仅识别 NLBPoolName / NLBPoolNamespace。
+// parseAutoNLBsV3Config 解析 GSS NetworkConf：仅识别 NLBPoolName。
 // 其它字段（如端口协议）由 PA Controller 自行从 NLBPool CR 读取，与 plugin 无关。
 func parseAutoNLBsV3Config(conf []gamekruiseiov1alpha1.NetworkConfParams) (*autoNLBsV3Config, error) {
 	c := &autoNLBsV3Config{}
 	for _, p := range conf {
-		switch p.Name {
-		case NLBPoolNameConfigV4:
+		if p.Name == NLBPoolNameConfig {
 			c.poolName = p.Value
-		case NLBPoolNamespaceConfigV4:
-			c.poolNamespace = p.Value
 		}
 	}
 	if c.poolName == "" {

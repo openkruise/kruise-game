@@ -1383,46 +1383,49 @@ AutoNLBs-V3 is a PortAllocation-based NLB network model, designed for ultra-larg
 **Key Features:**
 
 1. **NLBPool Resource Pooling**
-   - NLB/ServerGroup/Listener resources are managed by an independent NLBPool CR, completely decoupled from GameServerSet lifecycle
-   - Supports cross-GSS reuse — multiple GameServerSets can share the same NLBPool
-   - PortAllocation (PA) serves as the binding unit between Pod and NLB slot
+   - NLB / ServerGroup / Listener cloud resources are managed by an independent `NLBPool` CR, fully decoupled from GameServerSet lifecycle
+   - Cross-GSS reuse — multiple GameServerSets can share the same NLBPool
+   - `PortAllocation` (PA) is the binding unit between a Pod and an NLB slot
 
 2. **Slot-based Prewarming**
    - All cloud resources (ServerGroup + Listener) are pre-created during pool provisioning
-   - Pod binding only requires AddServersToServerGroup (single API call per SG), achieving sub-second network endpoint allocation
-   - Configurable `slotsPerNLB` and `minAvailableNLBs` for capacity planning
+   - Pod binding only requires a single `AddServersToServerGroup` call per ServerGroup, achieving sub-second network endpoint allocation
+   - Configurable `slotsPerNLB` and `minAvailableNLBs` for capacity planning and auto-expansion
 
 3. **Multi-Lane Multi-Port**
    - Supports multiple lanes (BGP, ChinaTelecom, ChinaMobile, ChinaUnicom) simultaneously
    - Each lane has independent NLB instances with separate EIPs
-   - Supports multiple ports per slot (e.g., game/voice/http/metrics)
+   - Multiple ports per slot supported (e.g. game / voice / http / metrics)
 
-4. **Per-SG Registration Tracking**
-   - Tracks AddServer/RemoveServer progress per ServerGroup in `status.registeredSGs`
-   - Eliminates redundant API calls on retry, improving binding/release efficiency by ~25%
-
-5. **Stateless Plugin Design**
-   - kruise-game plugin only writes annotations; all binding/release logic is handled by PA Controller
-   - No kruise-game state to manage, simplifies operations
+4. **Stateless Plugin Design**
+   - The kruise-game plugin only writes annotations on Pods; all binding / release / disable / enable logic is handled by NLB Pool Operator
+   - kruise-game holds no V3-specific state, simplifying operations and recovery
 
 - This network plugin supports network isolation: Yes
 
 #### Prerequisites
 
-1. **Deploy NLBPool Operator and NLB Operator**
+V3 plugin depends on three Alibaba Cloud operators (NLB Operator + EIP Operator + NLB Pool Operator). The recommended way is to install all three via the official Helm chart [AlibabaCloud-Operator-Charts](https://github.com/chrisliu1995/AlibabaCloud-Operator-Charts):
+
+1. **Install the operators with Helm**
 
 ```bash
-git clone git@github.com:chrisliu1995/AlibabaCloud-Operator-Charts.git
+git clone https://github.com/chrisliu1995/AlibabaCloud-Operator-Charts.git
 cd AlibabaCloud-Operator-Charts
+
+# Read plaintext AK/SK from your aliyun CLI config (or copy from RAM console)
+AK=$(jq -r '.profiles[] | select(.name=="default") | .access_key_id' ~/.aliyun/config.json)
+SK=$(jq -r '.profiles[] | select(.name=="default") | .access_key_secret' ~/.aliyun/config.json)
+
 helm install alibabacloud-operators . \
-  --namespace alibabacloud-operators-system \
-  --create-namespace \
-  --set global.alibabacloud.accessKeyId=<your-access-key-id> \
-  --set global.alibabacloud.accessKeySecret=<your-access-key-secret> \
+  --set global.alibabacloud.accessKeyId="$AK" \
+  --set global.alibabacloud.accessKeySecret="$SK" \
   --set global.alibabacloud.region=<your-region>
 ```
 
-2. **Create NLBPool CR**
+> The chart bundles the validated image versions and CRDs. Required RAM permissions: `AliyunNLBFullAccess`, `AliyunEIPFullAccess`, `AliyunVPCFullAccess`. The chart also validates that your AK/SK is plaintext (not the masked output of `aliyun configure get`) and fails fast otherwise.
+
+2. **Create the NLBPool CR**
 
 ```yaml
 apiVersion: nlbpool.alibabacloud.com/v1alpha1
@@ -1446,45 +1449,35 @@ spec:
   ports:
     - name: game
       protocol: TCP
-      containerPort: 80
+      containerPort: 7777
     - name: voice
       protocol: UDP
-      containerPort: 8081
+      containerPort: 7778
   portRange:
     min: 30000
-    max: 30199
+    max: 31000
   slotsPerNLB: 50
   minAvailableNLBs: 1
   healthCheck:
     enabled: false
 ```
 
-3. **Wait for NLBPool Ready**
+> `portRange` must be wide enough to hold every listener: `slotsPerNLB × len(ports) ≤ (max - min + 1)`. The example above has `50 × 2 = 100` listeners which fits easily into the 1000-port range.
+
+3. **Wait for the pool to become Ready**
 
 ```bash
 kubectl get nlbpool my-pool -w
-# Wait until phase=Ready and availableSlots equals expected count
+# Wait until phase=Ready and availableSlots equals slotsPerNLB × minAvailableNLBs
 ```
-
-**Notes:**
-- Ensure the Alibaba Cloud account has permissions: `AliyunNLBFullAccess`, `AliyunEIPFullAccess`, `AliyunVPCFullAccess`
-- NLBPool Operator image: `v0.2.10-fix-releasing` or later
-- kruise-game image must include AutoNLBs-V3 plugin: `auto-nlbs-v3-3d069e7` or later
 
 #### Network parameters
 
 NLBPoolName
 
-- Meaning: Name of the NLBPool CR to bind to
-- Format: String, must match an existing NLBPool CR name in the same namespace
+- Meaning: name of the NLBPool CR to bind to (must be in the same namespace as the Pod)
+- Format: string
 - Required: Yes
-- Configuration change supported: No
-
-NLBPoolNamespace
-
-- Meaning: Namespace of the NLBPool CR (optional, defaults to Pod namespace)
-- Format: String
-- Required: No
 - Configuration change supported: No
 
 #### How it works
@@ -1492,37 +1485,36 @@ NLBPoolNamespace
 **Architecture:**
 
 ```
-NLBPool CR → NLBPool Operator → Pre-create NLB + ServerGroup + Listener
+NLBPool CR → NLB Pool Operator → Pre-create NLBs + ServerGroups + Listeners
                                          ↓
-GameServerSet → kruise-game (V3 plugin) → Write annotation on Pod
+GameServerSet → kruise-game (V3 plugin) → Annotate Pod with pool name
                                          ↓
-PA Controller → Claim PA for Pod → AddServersToServerGroup → PA Bound
+NLB Pool Operator → Claim a PA for the Pod → AddServersToServerGroup → PA Bound
                                          ↓
-kruise-game (V3 plugin) → Read PA endpoints → Set GS NetworkReady
+kruise-game (V3 plugin) → Read PA.spec.endpoints → Set GS NetworkReady
 ```
 
-**Binding Flow:**
+**Binding flow:**
 1. GSS creates Pod → kruise-game writes `alibabacloud.com/nlb-pool-name` annotation
-2. PA Controller claims an Available PA for the Pod (optimistic locking via annotation)
-3. PA Controller calls AddServersToServerGroup for each SG (4 SGs for 4 ports)
-4. PA transitions to Bound → kruise-game reads PA endpoints → GS NetworkReady
+2. NLB Pool Operator atomically claims an Available PA for the Pod (optimistic locking via annotation)
+3. NLB Pool Operator calls `AddServersToServerGroup` for each ServerGroup (one per port)
+4. PA transitions to Bound → kruise-game reads `PA.spec.endpoints` and sets `GS.status.networkStatus.currentNetworkState=Ready`
 
-**Release Flow:**
-1. Pod deleted → PA Controller detects Pod gone
-2. PA transitions to Releasing → RemoveServersFromServerGroup for each SG
-3. PA transitions to Available → ready for reuse
+**Release flow:**
+1. Pod deleted → NLB Pool Operator detects Pod gone (Pod watcher)
+2. PA transitions to Releasing → calls `RemoveServersFromServerGroup` for each SG
+3. PA transitions back to Available, ready for reuse
 
-**Resource Formula:**
-- NLB count = `len(lanes) × NLB_groups`
-- EIP count = `len(lanes) × NLB_groups × len(zoneMaps)`
+**Resource math:**
+- NLB count = `len(lanes) × ceil((boundSlots + slotsPerNLB × minAvailableNLBs) / slotsPerNLB)`
+- EIP count = `NLB_count × len(zoneMaps)`
 - PA count = `NLB_groups × slotsPerNLB`
 - ServerGroup count = `PA_count × len(ports)`
 - Listener count = `PA_count × len(ports) × len(lanes)`
-- Auto-expansion: `NLB_groups = ceil((boundSlots + slotsPerNLB × minAvailableNLBs) / slotsPerNLB)`
 
 #### Plugin configuration
 
-No additional configuration needed in kruise-game. All resource management is handled by NLBPool Operator.
+No additional kruise-game-side configuration is needed. All resource management is handled by NLB Pool Operator.
 
 #### Example
 
@@ -1546,11 +1538,11 @@ spec:
         value: "my-pool"
 ```
 
-#### Generated GameServer Network Status
+#### Generated GameServer NetworkStatus
 
 ```yaml
 networkStatus:
-  createTime: "2026-06-09T08:00:00Z"
+  createTime: "2026-06-16T08:00:00Z"
   currentNetworkState: Ready
   desiredNetworkState: Ready
   externalAddresses:
@@ -1560,6 +1552,9 @@ networkStatus:
     - name: game
       port: 30000
       protocol: TCP
+  - endPoint: nlb-xxx.cn-hongkong.nlb.aliyuncsslbintl.com/bgp-1,nlb-yyy.cn-hongkong.nlb.aliyuncsslbintl.com/bgp-2
+    ip: nlb-xxx.cn-hongkong.nlb.aliyuncsslbintl.com
+    ports:
     - name: voice
       port: 30001
       protocol: UDP
@@ -1567,30 +1562,24 @@ networkStatus:
   - ip: 10.199.193.100
     ports:
     - name: game
-      port: 80
+      port: 7777
       protocol: TCP
+  - ip: 10.199.193.100
+    ports:
     - name: voice
-      port: 8081
+      port: 7778
       protocol: UDP
-  lastTransitionTime: "2026-06-09T08:00:05Z"
+  lastTransitionTime: "2026-06-16T08:00:05Z"
   networkType: AlibabaCloud-AutoNLBs-V3
 ```
 
-#### Performance Benchmarks
+> `externalAddresses[].endPoint` is a comma-separated list of `<NLB-DNS>/<lane-name>` for every lane that exposes the same listener port. Clients can probe each lane and pick the fastest.
 
-| Operation | Rate | Notes |
-|-----------|------|-------|
-| Prewarming | ~15 PA/min (avg) | Scales with API quota |
-| Binding (100 Pod) | ~87s | ~54 PA/min |
-| Binding (200 Pod) | ~222s | Includes node scaling |
-| Release (200 Pod) | ~431s | ~28 PA/min |
+#### Important notes
 
-#### Important Notes
-
-1. **NLBPool CR must be created before GameServerSet** — Pods will stay NotReady until the pool has available slots
-2. **containerPort is required** — NLBPool `spec.ports[].containerPort` must be set, otherwise backend server port defaults to listenerPort (incorrect for most scenarios)
-3. **V6 Architecture** — ServerGroup and Listener are cloud-only resources (no K8s CRs). Use Alibaba Cloud CLI or console for cloud-side reconciliation
-4. **NETWORK_TOTAL_WAIT_TIME** — Set to 600 (seconds) in kruise-game for large-scale scenarios where binding may take several minutes
+1. **The NLBPool must reach `Ready` before creating the GameServerSet.** Until the pool has available slots, Pods will stay `NotReady` and PA will not be bound.
+2. **`containerPort` is required** in `NLBPool.spec.ports[]`, otherwise the SG backend port falls back to the listener port and traffic will not reach your application.
+3. **`NETWORK_TOTAL_WAIT_TIME`** — for large pools where binding may take a long time, set the kruise-game env `NETWORK_TOTAL_WAIT_TIME=600` (seconds) to extend the network readiness wait window.
 
 ---
 

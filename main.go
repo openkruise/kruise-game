@@ -90,7 +90,7 @@ func init() {
 	utilruntime.Must(nlbv1.SchemeBuilder.AddToScheme(scheme))
 	utilruntime.Must(eipv1.AddToScheme(scheme))
 
-	// Register PortAllocation CRD scheme for AlibabaCloud-NLB-V4
+	// Register PortAllocation CRD scheme for AlibabaCloud-AutoNLBs-V3
 	utilruntime.Must(alibabacloudplugin.AddNLBPoolToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }

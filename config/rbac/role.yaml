@@ -207,9 +207,9 @@ rules:
   verbs:
   - get
   - list
-  - watch
-  - update
   - patch
+  - update
+  - watch
 - apiGroups:
   - nlbpool.alibabacloud.com
   resources:

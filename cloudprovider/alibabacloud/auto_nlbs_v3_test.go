@@ -24,18 +24,16 @@ import (
 func init() {
 	scheme.AddKnownTypes(NLBPoolGroupVersion,
 		&PortAllocation{}, &PortAllocationList{},
-		&NLBPool{}, &NLBPoolList{},
 	)
 	metav1.AddToGroupVersion(scheme, NLBPoolGroupVersion)
 }
 
 func TestParseAutoNLBsV3Config(t *testing.T) {
 	tests := []struct {
-		name        string
-		conf        []gamekruiseiov1alpha1.NetworkConfParams
-		wantPool    string
-		wantNS      string
-		wantErr     bool
+		name     string
+		conf     []gamekruiseiov1alpha1.NetworkConfParams
+		wantPool string
+		wantErr  bool
 	}{
 		{
 			name: "valid NLBPoolName only",
@@ -45,13 +43,12 @@ func TestParseAutoNLBsV3Config(t *testing.T) {
 			wantPool: "my-pool",
 		},
 		{
-			name: "valid NLBPoolName + NLBPoolNamespace",
+			name: "NLBPoolName plus unknown keys are tolerated",
 			conf: []gamekruiseiov1alpha1.NetworkConfParams{
 				{Name: "NLBPoolName", Value: "giant-pool"},
-				{Name: "NLBPoolNamespace", Value: "game-ns"},
+				{Name: "SomeFutureKey", Value: "ignored"},
 			},
 			wantPool: "giant-pool",
-			wantNS:   "game-ns",
 		},
 		{
 			name:    "missing NLBPoolName",
@@ -81,9 +78,6 @@ func TestParseAutoNLBsV3Config(t *testing.T) {
 			}
 			if got.poolName != tt.wantPool {
 				t.Errorf("poolName = %q, want %q", got.poolName, tt.wantPool)
-			}
-			if got.poolNamespace != tt.wantNS {
-				t.Errorf("poolNamespace = %q, want %q", got.poolNamespace, tt.wantNS)
 			}
 		})
 	}
@@ -418,7 +412,7 @@ func TestAutoNLBsV3OnPodUpdated(t *testing.T) {
 
 	t.Run("PA phase not Bound → NotReady", func(t *testing.T) {
 		pod := newV3TestPod("game-pod-3", "giant-pool", "pa-binding")
-		pa := newV3TestPA("pa-binding", "game-pod-3", PortAllocationPhaseBinding, sampleEndpoints)
+		pa := newV3TestPA("pa-binding", "game-pod-3", "Binding", sampleEndpoints)
 
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pa).Build()
 
