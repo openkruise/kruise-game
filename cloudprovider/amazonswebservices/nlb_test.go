@@ -62,7 +62,7 @@ func TestAllocateDeAllocate(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		allocatedPorts := test.nlb.allocate(test.loadBalancerARNs, test.num, test.podKey)
+		allocatedPorts := test.nlb.allocate(test.loadBalancerARNs, test.num, test.podKey, allocatePolicyDefault)
 		if int(test.nlb.maxPort-test.nlb.minPort+1) < test.num && allocatedPorts != nil {
 			t.Errorf("insufficient available ports but NLB was still allocated: %s",
 				pretty.Sprint(allocatedPorts))
@@ -585,5 +585,72 @@ func TestConfigHashIgnoresARNs(t *testing.T) {
 	changedFixed.isFixed = false
 	if base.configHash() == changedFixed.configHash() {
 		t.Errorf("configHash did not change when isFixed changed")
+	}
+}
+
+func newNlbForPolicy() *NlbPlugin {
+	return &NlbPlugin{
+		maxPort:     int32(953), // 3 ports per NLB: 951,952,953
+		minPort:     int32(951),
+		cache:       make(map[string]portAllocated),
+		podAllocate: make(map[string]*nlbPorts),
+		mutex:       sync.RWMutex{},
+	}
+}
+
+// default(first-fit/溢出): 先填满第一个 NLB, 再溢出第二个。
+func TestAllocatePolicyDefaultSpillover(t *testing.T) {
+	arnA := "arn:aws:elasticloadbalancing:us-east-1:1:loadbalancer/net/aaa/1"
+	arnB := "arn:aws:elasticloadbalancing:us-east-1:2:loadbalancer/net/bbb/2"
+	n := newNlbForPolicy()
+	// 4 个单端口服: 3 个应全落 A(填满), 第 4 个溢出 B
+	got := map[string]int{}
+	for i := 0; i < 4; i++ {
+		p := n.allocate([]string{arnA, arnB}, 1, "ns/p"+string(rune('0'+i)), allocatePolicyDefault)
+		if p == nil {
+			t.Fatalf("allocate %d returned nil", i)
+		}
+		got[p.arn]++
+	}
+	if got[arnA] != 3 || got[arnB] != 1 {
+		t.Errorf("default spillover want A=3,B=1; got A=%d,B=%d", got[arnA], got[arnB])
+	}
+}
+
+// balanced: 摊平到空位最多的 NLB, 前两个应分落 A、B(各 1), 而非都堆 A。
+func TestAllocatePolicyBalancedSpread(t *testing.T) {
+	arnA := "arn:aws:elasticloadbalancing:us-east-1:1:loadbalancer/net/aaa/1"
+	arnB := "arn:aws:elasticloadbalancing:us-east-1:2:loadbalancer/net/bbb/2"
+	n := newNlbForPolicy()
+	p0 := n.allocate([]string{arnA, arnB}, 1, "ns/p0", allocatePolicyBalanced)
+	p1 := n.allocate([]string{arnA, arnB}, 1, "ns/p1", allocatePolicyBalanced)
+	if p0 == nil || p1 == nil {
+		t.Fatal("balanced allocate returned nil")
+	}
+	if p0.arn == p1.arn {
+		t.Errorf("balanced should spread first two pods across NLBs, both landed on %s", p0.arn)
+	}
+}
+
+// 同一端口号可分配给不同 NLB(cache 按 ARN 隔离, 不互相占用)。
+func TestSamePortDifferentNLBs(t *testing.T) {
+	arnA := "arn:aws:elasticloadbalancing:us-east-1:1:loadbalancer/net/aaa/1"
+	arnB := "arn:aws:elasticloadbalancing:us-east-1:2:loadbalancer/net/bbb/2"
+	n := newNlbForPolicy()
+	// 用 balanced 让两个服分落 A、B, 二者首个端口都应是 minPort(951), 互不冲突
+	p0 := n.allocate([]string{arnA, arnB}, 1, "ns/p0", allocatePolicyBalanced)
+	p1 := n.allocate([]string{arnA, arnB}, 1, "ns/p1", allocatePolicyBalanced)
+	if p0 == nil || p1 == nil {
+		t.Fatal("allocate returned nil")
+	}
+	if p0.arn == p1.arn {
+		t.Fatalf("expected different NLBs, both on %s", p0.arn)
+	}
+	if p0.ports[0] != 951 || p1.ports[0] != 951 {
+		t.Errorf("same port 951 should be usable on both NLBs; got p0=%d p1=%d", p0.ports[0], p1.ports[0])
+	}
+	// 且各自 cache 独立标记
+	if !n.cache[p0.arn][951] || !n.cache[p1.arn][951] {
+		t.Errorf("port 951 should be marked occupied independently on each NLB")
 	}
 }
