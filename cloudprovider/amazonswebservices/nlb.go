@@ -126,6 +126,29 @@ type nlbConfig struct {
 	annotations      map[string]string
 }
 
+// configHash returns the hash used to detect whether a pod's network must be
+// reconfigured. It intentionally EXCLUDES loadBalancerARNs.
+//
+// Which NLB a pod uses is decided once at allocation time and then pinned in
+// the podAllocate cache and the per-pod Service/TargetGroup/Listener objects
+// (named after the pod). Adding or removing an ARN in NlbARNs must NOT force
+// already-allocated pods to reconfigure: doing so re-runs port allocation
+// against a freshly-added NLB whose port cache is empty, causing double
+// allocation, orphan listeners and a non-self-healing deadlock (servers that
+// were healthy get knocked to NotReady). By hashing everything EXCEPT the ARN
+// list, a change to NlbARNs leaves existing pods untouched (they keep their
+// pinned ARN/ports), while only NEW pods pick up the newly added ARN via
+// allocate(). Other config changes (health check, ports, protocols, fixed,
+// annotations) still change the hash and trigger a legitimate reconfigure.
+func (c *nlbConfig) configHash() string {
+	if c == nil {
+		return ""
+	}
+	view := *c
+	view.loadBalancerARNs = nil
+	return util.GetHash(view)
+}
+
 func startWatchTargetGroup(ctx context.Context) error {
 	var err error
 	go func() {
@@ -301,7 +324,10 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	}
 
 	// update svc
-	if util.GetHash(lbConfig) != svc.GetAnnotations()[NlbConfigHashKey] {
+	// Use configHash (excludes loadBalancerARNs) so that adding/removing an ARN
+	// in NlbARNs does NOT trigger a reconfigure of already-allocated pods —
+	// avoiding the full-reset + port-collision deadlock (see configHash doc).
+	if lbConfig.configHash() != svc.GetAnnotations()[NlbConfigHashKey] {
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		if err != nil {
@@ -773,7 +799,7 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 	svcPorts := consSvcPorts(config.backends, ports)
 	annotations := map[string]string{
 		NlbARNAnnoKey:    lbARN,
-		NlbConfigHashKey: util.GetHash(config),
+		NlbConfigHashKey: config.configHash(),
 	}
 	for key, value := range config.annotations {
 		annotations[key] = value

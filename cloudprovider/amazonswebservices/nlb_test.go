@@ -538,3 +538,52 @@ func TestAWSTargetGroupProtocol(t *testing.T) {
 		})
 	}
 }
+
+// TestConfigHashIgnoresARNs verifies that changing the NlbARNs list does NOT
+// change configHash (so already-allocated pods are not forced to reconfigure
+// when an ARN is added/removed), while changing any other field DOES change it
+// (so legitimate config changes still trigger a reconfigure).
+func TestConfigHashIgnoresARNs(t *testing.T) {
+	base := &nlbConfig{
+		loadBalancerARNs: []string{"arn:aaa"},
+		vpcID:            "vpc-1",
+		backends:         []*backend{{targetPort: 8601, protocol: ProtocolTCPUDP}},
+		isFixed:          true,
+		healthCheck:      &healthCheck{healthCheckProtocol: ptr.To("TCP")},
+	}
+
+	// Adding an ARN must NOT change the hash.
+	addedARN := *base
+	addedARN.loadBalancerARNs = []string{"arn:aaa", "arn:bbb"}
+	if base.configHash() != addedARN.configHash() {
+		t.Errorf("configHash changed when only NlbARNs changed; adding an ARN must not reconfigure existing pods")
+	}
+
+	// A completely different ARN set must NOT change the hash either.
+	swapped := *base
+	swapped.loadBalancerARNs = []string{"arn:zzz"}
+	if base.configHash() != swapped.configHash() {
+		t.Errorf("configHash changed when only the ARN set changed")
+	}
+
+	// Changing a real field (ports) MUST change the hash.
+	changedPorts := *base
+	changedPorts.backends = []*backend{{targetPort: 9000, protocol: corev1.ProtocolTCP}}
+	if base.configHash() == changedPorts.configHash() {
+		t.Errorf("configHash did not change when backends changed; legitimate reconfigure would be missed")
+	}
+
+	// Changing health check MUST change the hash.
+	changedHC := *base
+	changedHC.healthCheck = &healthCheck{healthCheckProtocol: ptr.To("HTTP")}
+	if base.configHash() == changedHC.configHash() {
+		t.Errorf("configHash did not change when healthCheck changed")
+	}
+
+	// Changing isFixed MUST change the hash.
+	changedFixed := *base
+	changedFixed.isFixed = false
+	if base.configHash() == changedFixed.configHash() {
+		t.Errorf("configHash did not change when isFixed changed")
+	}
+}
