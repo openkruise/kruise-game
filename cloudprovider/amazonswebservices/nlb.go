@@ -50,6 +50,7 @@ const (
 	NlbNetwork               = "AmazonWebServices-NLB"
 	AliasNlb                 = "NLB-Network"
 	NlbARNsConfigName        = "NlbARNs"
+	AllocatePolicyConfigName = "AllocatePolicy"
 	NlbVPCIdConfigName       = "NlbVPCId"
 	NlbHealthCheckConfigName = "NlbHealthCheck"
 	PortProtocolsConfigName  = "PortProtocols"
@@ -74,6 +75,14 @@ const (
 	healthyThresholdCount      = "healthyThresholdCount"
 	unhealthyThresholdCount    = "unhealthyThresholdCount"
 	listenerActionType         = "forward"
+)
+
+const (
+	// allocatePolicyDefault: first-fit 溢出——按 ARN 列表顺序, 第一个够用就用, 填满前一个才用下一个。
+	allocatePolicyDefault = "default"
+	// allocatePolicyBalanced: 均衡——选当前剩余空闲端口最多的 NLB, 把游戏服摊平到各 NLB(故障域隔离)。
+	// 移植自 cloudprovider/alibabacloud/multi_nlbs.go 的 "balanced" 策略。
+	allocatePolicyBalanced = "balanced"
 )
 
 // ProtocolTCPUDP is a synthetic protocol value indicating that a target
@@ -119,6 +128,7 @@ type healthCheck struct {
 
 type nlbConfig struct {
 	loadBalancerARNs []string
+	allocatePolicy   string
 	healthCheck      *healthCheck
 	vpcID            string
 	backends         []*backend
@@ -468,7 +478,7 @@ func (n *NlbPlugin) OnPodDeleted(client client.Client, pod *corev1.Pod, ctx cont
 	return nil
 }
 
-func (n *NlbPlugin) allocate(lbARNs []string, num int, nsName string) *nlbPorts {
+func (n *NlbPlugin) allocate(lbARNs []string, num int, nsName string, policy string) *nlbPorts {
 	n.mutex.Lock()
 	defer n.mutex.Unlock()
 
@@ -477,8 +487,8 @@ func (n *NlbPlugin) allocate(lbARNs []string, num int, nsName string) *nlbPorts 
 		n.initCache(nlbARN)
 	}
 
-	// Find lbARN with enough free ports
-	selectedARN := n.findLbWithFreePorts(lbARNs, num)
+	// Find lbARN with enough free ports according to the allocate policy
+	selectedARN := n.findLbWithFreePorts(lbARNs, num, policy)
 	if selectedARN == "" {
 		return nil
 	}
@@ -491,7 +501,34 @@ func (n *NlbPlugin) allocate(lbARNs []string, num int, nsName string) *nlbPorts 
 	return &nlbPorts{arn: selectedARN, ports: ports}
 }
 
-func (n *NlbPlugin) findLbWithFreePorts(lbARNs []string, num int) string {
+// findLbWithFreePorts selects a NLB ARN that has at least num free ports.
+//   - "default" (first-fit / 溢出): iterate ARNs in order, return the first one
+//     with enough free ports — fills the earlier NLB before spilling to the next.
+//   - "balanced": pick the NLB with the MOST free ports, spreading game servers
+//     across NLBs (fault-domain isolation). Ported from the alibabacloud plugin.
+func (n *NlbPlugin) findLbWithFreePorts(lbARNs []string, num int, policy string) string {
+	if policy == allocatePolicyBalanced {
+		bestARN := ""
+		maxFree := 0
+		for _, nlbARN := range lbARNs {
+			freePorts := 0
+			for i := n.minPort; i <= n.maxPort; i++ {
+				if !n.cache[nlbARN][i] {
+					freePorts++
+				}
+			}
+			if freePorts > maxFree {
+				maxFree = freePorts
+				bestARN = nlbARN
+			}
+		}
+		if maxFree >= num {
+			return bestARN
+		}
+		return ""
+	}
+
+	// default: first-fit / 溢出
 	for _, nlbARN := range lbARNs {
 		freePorts := 0
 		for i := n.minPort; i <= n.maxPort && freePorts < num; i++ {
@@ -553,6 +590,7 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *nlbConfig {
 	backends := make([]*backend, 0)
 	isFixed := false
 	annotations := map[string]string{}
+	allocatePolicy := allocatePolicyDefault
 	for _, c := range conf {
 		switch c.Name {
 		case NlbARNsConfigName:
@@ -560,6 +598,10 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *nlbConfig {
 				if nlbARN != "" {
 					lbARNs = append(lbARNs, nlbARN)
 				}
+			}
+		case AllocatePolicyConfigName:
+			if c.Value == allocatePolicyBalanced {
+				allocatePolicy = allocatePolicyBalanced
 			}
 		case NlbHealthCheckConfigName:
 			for _, healthCheckConf := range strings.Split(c.Value, ",") {
@@ -646,6 +688,7 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *nlbConfig {
 	}
 	return &nlbConfig{
 		loadBalancerARNs: lbARNs,
+		allocatePolicy:   allocatePolicy,
 		healthCheck:      &hc,
 		vpcID:            vpcId,
 		backends:         backends,
@@ -744,7 +787,7 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 	podKey := pod.GetNamespace() + "/" + pod.GetName()
 	allocatedPorts, exist := n.podAllocate[podKey]
 	if !exist {
-		allocatedPorts = n.allocate(config.loadBalancerARNs, len(config.backends), podKey)
+		allocatedPorts = n.allocate(config.loadBalancerARNs, len(config.backends), podKey, config.allocatePolicy)
 		if allocatedPorts == nil {
 			return fmt.Errorf("no NLB has %d enough available ports for %s", len(config.backends), podKey)
 		}
