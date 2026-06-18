@@ -83,7 +83,7 @@ func init() {
 // +kubebuilder:rbac:groups=alibabacloud.com,resources=podeips,verbs=get;list;watch
 // +kubebuilder:rbac:groups=alibabacloud.com,resources=podeips/status,verbs=get
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
-// +kubebuilder:rbac:groups=elbv2.k8s.aws,resources=targetgroupbindings,verbs=create;get;list;patch;update;watch
+// +kubebuilder:rbac:groups=elbv2.k8s.aws,resources=targetgroupbindings,verbs=create;delete;get;list;patch;update;watch
 // +kubebuilder:rbac:groups=elbv2.services.k8s.aws,resources=listeners,verbs=create;get;list;patch;update;watch
 // +kubebuilder:rbac:groups=elbv2.services.k8s.aws,resources=targetgroups,verbs=create;get;list;patch;update;watch
 // +kubebuilder:rbac:groups=networking.cloud.tencent.com,resources=dedicatedclblisteners,verbs=get;list;watch;create;update;patch;delete

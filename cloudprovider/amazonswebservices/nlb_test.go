@@ -14,15 +14,24 @@ limitations under the License.
 package amazonswebservices
 
 import (
+	"context"
 	"reflect"
+	"strconv"
 	"sync"
 	"testing"
+	"time"
 
+	ackv1alpha1 "github.com/aws-controllers-k8s/elbv2-controller/apis/v1alpha1"
 	"github.com/kr/pretty"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
+	elbv2api "sigs.k8s.io/aws-load-balancer-controller/apis/elbv2/v1beta1"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 )
@@ -652,5 +661,107 @@ func TestSamePortDifferentNLBs(t *testing.T) {
 	// 且各自 cache 独立标记
 	if !n.cache[p0.arn][951] || !n.cache[p1.arn][951] {
 		t.Errorf("port 951 should be marked occupied independently on each NLB")
+	}
+}
+
+// OnPodAdded 应提前分配端口并预置 readiness gate, gate 名 == TGB 名(target-health.elbv2.k8s.aws/<pod>-<port>)。
+func TestOnPodAddedInjectsReadinessGate(t *testing.T) {
+	arn := "arn:aws:elasticloadbalancing:us-east-1:1:loadbalancer/net/aaa/1"
+	n := newNlbForPolicy()
+	conf := `[{"name":"NlbARNs","value":"` + arn + `"},{"name":"PortProtocols","value":"8601/TCP"},{"name":"NlbVPCId","value":"vpc-1"}]`
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "gd-0",
+			Namespace:   "default",
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType: NlbNetwork,
+				gamekruiseiov1alpha1.GameServerNetworkConf: conf,
+			},
+		},
+	}
+	got, perr := n.OnPodAdded(nil, pod, nil)
+	if perr != nil {
+		t.Fatalf("OnPodAdded error: %v", perr)
+	}
+	// 端口已分配并 pin 到 podAllocate
+	alloc, ok := n.podAllocate["default/gd-0"]
+	if !ok || alloc == nil || len(alloc.ports) != 1 {
+		t.Fatalf("expected 1 port allocated for gd-0, got %#v", alloc)
+	}
+	wantGate := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-" + intToStr(alloc.ports[0]))
+	found := false
+	for _, g := range got.Spec.ReadinessGates {
+		if g.ConditionType == wantGate {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected readiness gate %q injected, got %#v", wantGate, got.Spec.ReadinessGates)
+	}
+	// 幂等: 再调一次不应重复注入(podAllocate 已存在 → 复用, gate 不重复)
+	got2, _ := n.OnPodAdded(nil, got, nil)
+	cnt := 0
+	for _, g := range got2.Spec.ReadinessGates {
+		if g.ConditionType == wantGate {
+			cnt++
+		}
+	}
+	if cnt != 1 {
+		t.Errorf("readiness gate should be injected exactly once (idempotent), got %d", cnt)
+	}
+}
+
+func intToStr(p int32) string {
+	return strconv.Itoa(int(p))
+}
+
+// 自愈: gate False 超过阈值的 TGB 被删除并重置 TG sync 标签; 未超时的不动。
+func TestHealStuckReadinessGates(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = elbv2api.AddToScheme(scheme)
+	_ = ackv1alpha1.AddToScheme(scheme)
+
+	now := metav1.Now()
+	stuckGate := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-9001") // False 已久 → 应被治
+	freshGate := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-9002") // False 但很新 → 不动
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "gd-0", Namespace: "default"},
+		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{
+			{Type: stuckGate, Status: corev1.ConditionFalse,
+				LastTransitionTime: metav1.NewTime(now.Add(-300 * time.Second))},
+			{Type: freshGate, Status: corev1.ConditionFalse,
+				LastTransitionTime: metav1.NewTime(now.Add(-5 * time.Second))},
+		}},
+	}
+	mkTGB := func(name string) *elbv2api.TargetGroupBinding {
+		return &elbv2api.TargetGroupBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
+	}
+	mkTG := func(name string) *ackv1alpha1.TargetGroup {
+		return &ackv1alpha1.TargetGroup{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "default",
+			Labels: map[string]string{AWSTargetGroupSyncStatus: "true"}}}
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(pod, mkTGB("gd-0-9001"), mkTG("gd-0-9001"), mkTGB("gd-0-9002"), mkTG("gd-0-9002")).Build()
+
+	n := newNlbForPolicy()
+	healed := n.healStuckReadinessGates(context.Background(), c, pod, now.Unix())
+	if healed != 1 {
+		t.Fatalf("expected 1 gate healed (only the stuck one), got %d", healed)
+	}
+	// stuck 的 TGB 被删
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "gd-0-9001", Namespace: "default"}, &elbv2api.TargetGroupBinding{}); !errors.IsNotFound(err) {
+		t.Errorf("stuck TGB gd-0-9001 should be deleted, err=%v", err)
+	}
+	// stuck 的 TG sync 标签被重置为 false
+	tg := &ackv1alpha1.TargetGroup{}
+	_ = c.Get(context.Background(), types.NamespacedName{Name: "gd-0-9001", Namespace: "default"}, tg)
+	if tg.Labels[AWSTargetGroupSyncStatus] != "false" {
+		t.Errorf("stuck TG sync label should be reset to false, got %q", tg.Labels[AWSTargetGroupSyncStatus])
+	}
+	// fresh 的 TGB 不动
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "gd-0-9002", Namespace: "default"}, &elbv2api.TargetGroupBinding{}); err != nil {
+		t.Errorf("fresh TGB gd-0-9002 should NOT be deleted, err=%v", err)
 	}
 }
