@@ -765,3 +765,97 @@ func TestHealStuckReadinessGates(t *testing.T) {
 		t.Errorf("fresh TGB gd-0-9002 should NOT be deleted, err=%v", err)
 	}
 }
+
+// 一个 pod 多端口 → 每个 listener 端口一个 readiness gate, 名各对应自己的 TGB。
+func TestOnPodAddedMultiPortGates(t *testing.T) {
+	arn := "arn:aws:elasticloadbalancing:us-east-1:1:loadbalancer/net/aaa/1"
+	n := newNlbForPolicy()
+	conf := `[{"name":"NlbARNs","value":"` + arn + `"},{"name":"PortProtocols","value":"8601/TCP,8602/UDP,8603/TCP"},{"name":"NlbVPCId","value":"vpc-1"}]`
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gd-0",
+			Namespace: "default",
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType: NlbNetwork,
+				gamekruiseiov1alpha1.GameServerNetworkConf: conf,
+			},
+		},
+	}
+	got, perr := n.OnPodAdded(nil, pod, nil)
+	if perr != nil {
+		t.Fatalf("OnPodAdded error: %v", perr)
+	}
+	alloc := n.podAllocate["default/gd-0"]
+	if alloc == nil || len(alloc.ports) != 3 {
+		t.Fatalf("expected 3 ports allocated, got %#v", alloc)
+	}
+	// 每个分配端口都应有一个对应 gate, 且 gate 数量恰等于端口数(不多不少)。
+	if len(got.Spec.ReadinessGates) != 3 {
+		t.Fatalf("expected 3 readiness gates, got %d: %#v", len(got.Spec.ReadinessGates), got.Spec.ReadinessGates)
+	}
+	have := map[corev1.PodConditionType]bool{}
+	for _, g := range got.Spec.ReadinessGates {
+		have[g.ConditionType] = true
+	}
+	for _, port := range alloc.ports {
+		want := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-" + intToStr(port))
+		if !have[want] {
+			t.Errorf("missing readiness gate %q for port %d", want, port)
+		}
+	}
+}
+
+// 无 NLB 网络注解的 pod: OnPodAdded 原样返回, 不分配端口、不注入 gate。
+func TestOnPodAddedNonNlbPodUntouched(t *testing.T) {
+	n := newNlbForPolicy()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "plain-0", Namespace: "default"},
+	}
+	got, perr := n.OnPodAdded(nil, pod, nil)
+	if perr != nil {
+		t.Fatalf("OnPodAdded error: %v", perr)
+	}
+	if len(got.Spec.ReadinessGates) != 0 {
+		t.Errorf("non-NLB pod should not get readiness gates, got %#v", got.Spec.ReadinessGates)
+	}
+	if _, ok := n.podAllocate["default/plain-0"]; ok {
+		t.Errorf("non-NLB pod should not allocate ports")
+	}
+}
+
+// 自愈的负向分支: True 的 gate / 零 LastTransitionTime 的 gate / TGB 已不存在, 都不应判为卡死, healed=0 且无副作用。
+func TestHealStuckReadinessGatesNoFalsePositive(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = elbv2api.AddToScheme(scheme)
+	_ = ackv1alpha1.AddToScheme(scheme)
+
+	now := metav1.Now()
+	trueGate := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-9001")  // 已 True → 健康, 不治
+	zeroGate := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-9002")  // False 但 LastTransitionTime 为零 → 刚注入, 不治
+	noTgbGate := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-9003") // False 已久但 TGB 已不存在 → 安全跳过
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "gd-0", Namespace: "default"},
+		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{
+			{Type: trueGate, Status: corev1.ConditionTrue,
+				LastTransitionTime: metav1.NewTime(now.Add(-300 * time.Second))},
+			{Type: zeroGate, Status: corev1.ConditionFalse}, // LastTransitionTime 零值
+			{Type: noTgbGate, Status: corev1.ConditionFalse,
+				LastTransitionTime: metav1.NewTime(now.Add(-300 * time.Second))},
+		}},
+	}
+	// True gate 的 TGB 存在(不该被删), noTgbGate 的 TGB 不存在。
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(pod, &elbv2api.TargetGroupBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "gd-0-9001", Namespace: "default"}}).Build()
+
+	n := newNlbForPolicy()
+	healed := n.healStuckReadinessGates(context.Background(), c, pod, now.Unix())
+	if healed != 0 {
+		t.Fatalf("expected 0 healed (no false positive), got %d", healed)
+	}
+	// True gate 的 TGB 必须仍在。
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "gd-0-9001", Namespace: "default"}, &elbv2api.TargetGroupBinding{}); err != nil {
+		t.Errorf("healthy(True) gate's TGB must not be deleted, err=%v", err)
+	}
+}
