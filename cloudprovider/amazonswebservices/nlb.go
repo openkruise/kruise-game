@@ -472,6 +472,20 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	// which is reflected in the aggregate PodReady condition. Until PodReady is
 	// True, keep the GameServer NetworkNotReady so its state reflects real
 	// reachability rather than just "resources created".
+	//
+	// IMPORTANT: refresh pod status from the API server before checking PodReady.
+	// OnPodUpdated runs only inside the mutating admission webhook for the `pods`
+	// resource. The kubelet writes the pod readiness condition through the
+	// `pods/status` subresource, which does NOT trigger this webhook. So the
+	// pod object the webhook decoded from the request body can carry a stale
+	// Status (PodReady=False) even when the live pod is already PodReady=True.
+	// Reading stale Status here pins GameServer NetworkState to NotReady forever
+	// (no further `pods` UPDATE will retrigger the check). Fetch the latest pod
+	// directly so the readiness gate decision uses authoritative state.
+	freshPod := &corev1.Pod{}
+	if err := c.Get(ctx, types.NamespacedName{Name: pod.GetName(), Namespace: pod.GetNamespace()}, freshPod); err == nil {
+		pod.Status = freshPod.Status
+	}
 	_, readyCondition := util.GetPodConditionFromList(pod.Status.Conditions, corev1.PodReady)
 	if readyCondition == nil || readyCondition.Status != corev1.ConditionTrue {
 		// Not ready yet. If a readiness gate has been stuck False well past the
