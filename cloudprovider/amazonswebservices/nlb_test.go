@@ -15,6 +15,7 @@ package amazonswebservices
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strconv"
 	"sync"
@@ -902,6 +903,288 @@ func TestValidateLbConfig(t *testing.T) {
 			}
 			if !tt.expectErr && err != nil {
 				t.Errorf("%s: expected no error, got %v", tt.name, err)
+			}
+		})
+	}
+}
+
+// TestOnPodDeleted exercises every branch of OnPodDeleted's port-release
+// decision (nlb.go: OnPodDeleted). It is the primary regression guard for the
+// behavior documented in docs/issues/aws-nlb-plugin-cases.md §1 (Scenario 1):
+// "scale=0 then delete gss" leaks NLB port cache under Fixed=true because the
+// early-return for live GSS combined with the absence of an OnGameServerSetDeleted
+// hook leaves no opportunity to release. The cases below pin down the current
+// branch behavior so any future change has to consciously update them.
+//
+// Coverage matrix (matches docs §1.12 semantic table):
+//
+//	isFixed | GSS state                     | want podAllocate cleared?
+//	------- | ----------------------------- | -----------------------------
+//	false   | (irrelevant)                  | yes — only this pod
+//	true    | exists, deletionTimestamp=nil | NO  (fixed-IP keeps slot)
+//	true    | exists, being deleted         | yes — all pods of GSS
+//	true    | NotFound                      | yes — all pods of GSS
+func TestOnPodDeleted(t *testing.T) {
+	const (
+		ns      = "default"
+		gssName = "gss-A"
+		nlbARN  = "arn:aws:elasticloadbalancing:us-east-1:1:loadbalancer/net/aaa/1"
+	)
+
+	// mkPod builds a pod that carries the OKG NLB network-conf annotation so
+	// OnPodDeleted's parseLbConfig sees the right Fixed value, and the
+	// owner-gss label so GetGameServerSetOfPod resolves the right GSS name.
+	mkPod := func(name, owner string, fixed bool) *corev1.Pod {
+		conf := fmt.Sprintf(
+			`[{"name":"NlbARNs","value":"%s"},`+
+				`{"name":"PortProtocols","value":"8601/TCP"},`+
+				`{"name":"NlbVPCId","value":"vpc-1"},`+
+				`{"name":"Fixed","value":"%t"}]`,
+			nlbARN, fixed)
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: ns,
+				Labels:    map[string]string{gamekruiseiov1alpha1.GameServerOwnerGssKey: owner},
+				Annotations: map[string]string{
+					gamekruiseiov1alpha1.GameServerNetworkType: NlbNetwork,
+					gamekruiseiov1alpha1.GameServerNetworkConf: conf,
+				},
+			},
+		}
+	}
+
+	// mkPlugin pre-populates 3 pods of gss-A (ports 9001/9002/9003) plus 1
+	// pod of an unrelated gss-B (port 9004), all on the same NLB. This lets
+	// the assertions check both "released the right pods" and "did not touch
+	// pods of other GSS".
+	mkPlugin := func() *NlbPlugin {
+		n := &NlbPlugin{
+			minPort:     9001,
+			maxPort:     9050,
+			cache:       map[string]portAllocated{nlbARN: make(portAllocated)},
+			podAllocate: map[string]*nlbPorts{},
+			mutex:       sync.RWMutex{},
+		}
+		for i, podName := range []string{"gss-A-0", "gss-A-1", "gss-A-2"} {
+			port := int32(9001 + i)
+			n.podAllocate[ns+"/"+podName] = &nlbPorts{arn: nlbARN, ports: []int32{port}}
+			n.cache[nlbARN][port] = true
+		}
+		n.podAllocate[ns+"/gss-B-0"] = &nlbPorts{arn: nlbARN, ports: []int32{9004}}
+		n.cache[nlbARN][9004] = true
+		return n
+	}
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+
+	// Live GSS — no deletionTimestamp.
+	liveGSS := &gamekruiseiov1alpha1.GameServerSet{
+		ObjectMeta: metav1.ObjectMeta{Name: gssName, Namespace: ns},
+	}
+	// Deleting GSS — set deletionTimestamp + a finalizer so the fake client
+	// retains the object instead of immediately removing it.
+	now := metav1.Now()
+	deletingGSS := &gamekruiseiov1alpha1.GameServerSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              gssName,
+			Namespace:         ns,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{"keep-for-test"},
+		},
+	}
+
+	tests := []struct {
+		name            string
+		fixed           bool
+		gssInCluster    *gamekruiseiov1alpha1.GameServerSet // nil = NotFound
+		deletedPodName  string
+		wantPresent     map[string]bool // podAllocate state expected after
+		wantPortFreed   []int32         // cache slots that should be false
+		wantPortRetain  []int32         // cache slots that should remain true
+	}{
+		{
+			name:           "Fixed=false releases only this pod",
+			fixed:          false,
+			gssInCluster:   liveGSS, // present but irrelevant: code does not check GSS for !isFixed
+			deletedPodName: "gss-A-1",
+			wantPresent: map[string]bool{
+				ns + "/gss-A-0": true,
+				ns + "/gss-A-1": false,
+				ns + "/gss-A-2": true,
+				ns + "/gss-B-0": true,
+			},
+			wantPortFreed:  []int32{9002},
+			wantPortRetain: []int32{9001, 9003, 9004},
+		},
+		{
+			name:           "Fixed=true with live GSS keeps allocation (fixed-IP semantics)",
+			fixed:          true,
+			gssInCluster:   liveGSS,
+			deletedPodName: "gss-A-1",
+			wantPresent: map[string]bool{
+				ns + "/gss-A-0": true,
+				ns + "/gss-A-1": true, // NOT released — this is the early-return branch
+				ns + "/gss-A-2": true,
+				ns + "/gss-B-0": true,
+			},
+			wantPortFreed:  nil,
+			wantPortRetain: []int32{9001, 9002, 9003, 9004},
+		},
+		{
+			name:           "Fixed=true with deleting GSS releases all pods of that GSS",
+			fixed:          true,
+			gssInCluster:   deletingGSS,
+			deletedPodName: "gss-A-1",
+			wantPresent: map[string]bool{
+				ns + "/gss-A-0": false,
+				ns + "/gss-A-1": false,
+				ns + "/gss-A-2": false,
+				ns + "/gss-B-0": true, // sibling GSS unaffected
+			},
+			wantPortFreed:  []int32{9001, 9002, 9003},
+			wantPortRetain: []int32{9004},
+		},
+		{
+			name:           "Fixed=true with GSS NotFound releases all pods of that GSS",
+			fixed:          true,
+			gssInCluster:   nil, // empty cluster
+			deletedPodName: "gss-A-1",
+			wantPresent: map[string]bool{
+				ns + "/gss-A-0": false,
+				ns + "/gss-A-1": false,
+				ns + "/gss-A-2": false,
+				ns + "/gss-B-0": true,
+			},
+			wantPortFreed:  []int32{9001, 9002, 9003},
+			wantPortRetain: []int32{9004},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := mkPlugin()
+			pod := mkPod(tt.deletedPodName, gssName, tt.fixed)
+			cb := fake.NewClientBuilder().WithScheme(scheme)
+			if tt.gssInCluster != nil {
+				cb = cb.WithObjects(tt.gssInCluster)
+			}
+			c := cb.Build()
+
+			if perr := n.OnPodDeleted(c, pod, context.Background()); perr != nil {
+				t.Fatalf("OnPodDeleted error: %v", perr)
+			}
+
+			for key, want := range tt.wantPresent {
+				_, got := n.podAllocate[key]
+				if got != want {
+					t.Errorf("podAllocate[%q]: present=%v, want=%v", key, got, want)
+				}
+			}
+			for _, port := range tt.wantPortFreed {
+				if n.cache[nlbARN][port] {
+					t.Errorf("cache[%d]: still occupied, want freed", port)
+				}
+			}
+			for _, port := range tt.wantPortRetain {
+				if !n.cache[nlbARN][port] {
+					t.Errorf("cache[%d]: freed, want still occupied", port)
+				}
+			}
+		})
+	}
+}
+
+// TestGetOwnerReference covers the isFixed branch in getOwnerReference
+// (nlb.go: getOwnerReference). The two non-error branches are also docs §1.12's
+// pivot: Fixed=true makes Service/TG owner = GSS so they survive Pod deletion
+// (TC-02 retention behavior), Fixed=false makes them owner = Pod so K8s GC
+// cascades them away on Pod deletion (TC-04 release behavior).
+func TestGetOwnerReference(t *testing.T) {
+	const (
+		ns      = "default"
+		gssName = "gss-A"
+		podName = "gss-A-0"
+		gssUID  = "gss-uid-1234"
+		podUID  = "pod-uid-5678"
+	)
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: ns,
+			UID:       podUID,
+			Labels:    map[string]string{gamekruiseiov1alpha1.GameServerOwnerGssKey: gssName},
+		},
+	}
+	gss := &gamekruiseiov1alpha1.GameServerSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      gssName,
+			Namespace: ns,
+			UID:       gssUID,
+		},
+	}
+
+	tests := []struct {
+		name           string
+		isFixed        bool
+		gssInCluster   *gamekruiseiov1alpha1.GameServerSet
+		wantOwnerName  string
+		wantOwnerUID   types.UID
+	}{
+		{
+			name:          "Fixed=false uses Pod as owner",
+			isFixed:       false,
+			gssInCluster:  gss, // present but ignored — Fixed=false skips GSS lookup
+			wantOwnerName: podName,
+			wantOwnerUID:  podUID,
+		},
+		{
+			name:          "Fixed=true with GSS present uses GameServerSet as owner",
+			isFixed:       true,
+			gssInCluster:  gss,
+			wantOwnerName: gssName,
+			wantOwnerUID:  gssUID,
+		},
+		{
+			name:          "Fixed=true with GSS NotFound falls back to Pod owner",
+			isFixed:       true,
+			gssInCluster:  nil,
+			wantOwnerName: podName,
+			wantOwnerUID:  podUID,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cb := fake.NewClientBuilder().WithScheme(scheme)
+			if tt.gssInCluster != nil {
+				cb = cb.WithObjects(tt.gssInCluster)
+			}
+			c := cb.Build()
+
+			refs := getOwnerReference(c, context.Background(), pod, tt.isFixed)
+			if len(refs) != 1 {
+				t.Fatalf("expected exactly 1 OwnerReference, got %d: %#v", len(refs), refs)
+			}
+			ref := refs[0]
+			if ref.Name != tt.wantOwnerName {
+				t.Errorf("Name = %q, want %q", ref.Name, tt.wantOwnerName)
+			}
+			if ref.UID != tt.wantOwnerUID {
+				t.Errorf("UID = %q, want %q", ref.UID, tt.wantOwnerUID)
+			}
+			if ref.Controller == nil || !*ref.Controller {
+				t.Errorf("Controller = %v, want true", ref.Controller)
+			}
+			if ref.BlockOwnerDeletion == nil || !*ref.BlockOwnerDeletion {
+				t.Errorf("BlockOwnerDeletion = %v, want true", ref.BlockOwnerDeletion)
 			}
 		})
 	}
