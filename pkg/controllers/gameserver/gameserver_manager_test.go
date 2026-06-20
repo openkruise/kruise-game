@@ -1420,3 +1420,67 @@ func TestSyncPodToGs(t *testing.T) {
 		}
 	}
 }
+
+func TestLbReadinessGatesState(t *testing.T) {
+	gate := "target-health.elbv2.k8s.aws/gs-0-9001"
+	mkPod := func(gates []string, conds map[string]corev1.ConditionStatus) *corev1.Pod {
+		p := &corev1.Pod{}
+		for _, g := range gates {
+			p.Spec.ReadinessGates = append(p.Spec.ReadinessGates, corev1.PodReadinessGate{
+				ConditionType: corev1.PodConditionType(g)})
+		}
+		for t, s := range conds {
+			p.Status.Conditions = append(p.Status.Conditions, corev1.PodCondition{
+				Type: corev1.PodConditionType(t), Status: s})
+		}
+		return p
+	}
+	tests := []struct {
+		name string
+		pod  *corev1.Pod
+		want lbReadinessGateState
+	}{
+		{
+			name: "no LB gate declared -> gateNone (only Kruise gates)",
+			pod:  mkPod([]string{"InPlaceUpdateReady", "KruisePodReady"}, map[string]corev1.ConditionStatus{"Ready": corev1.ConditionTrue}),
+			want: gateNone,
+		},
+		{
+			name: "LB gate True -> gateAllTrue",
+			pod:  mkPod([]string{gate}, map[string]corev1.ConditionStatus{gate: corev1.ConditionTrue}),
+			want: gateAllTrue,
+		},
+		{
+			name: "LB gate False -> gateAnyFalse",
+			pod:  mkPod([]string{gate}, map[string]corev1.ConditionStatus{gate: corev1.ConditionFalse}),
+			want: gateAnyFalse,
+		},
+		{
+			name: "LB gate missing condition -> gateAnyFalse",
+			pod:  mkPod([]string{gate}, map[string]corev1.ConditionStatus{}),
+			want: gateAnyFalse,
+		},
+		{
+			// The S4/InPlace case: InPlaceUpdateReady flips False but the LB gate
+			// stays True -> we must report gateAllTrue (do NOT flap to NotReady).
+			name: "InPlace flips InPlaceUpdateReady False but LB gate True -> gateAllTrue",
+			pod: mkPod([]string{"InPlaceUpdateReady", gate}, map[string]corev1.ConditionStatus{
+				"InPlaceUpdateReady": corev1.ConditionFalse,
+				gate:                 corev1.ConditionTrue,
+			}),
+			want: gateAllTrue,
+		},
+		{
+			name: "nil pod -> gateNone",
+			pod:  nil,
+			want: gateNone,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := lbReadinessGatesState(tt.pod); got != tt.want {
+				t.Errorf("lbReadinessGatesState() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
