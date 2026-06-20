@@ -885,22 +885,24 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 		protocol := awsTargetGroupProtocol(config.backends[i].protocol)
 		targetPort := int64(config.backends[i].targetPort)
 		var targetTypeIP = string(ackv1alpha1.TargetTypeEnum_ip)
-		_, err := controllerutil.CreateOrUpdate(ctx, client, &ackv1alpha1.TargetGroup{
+		tg := &ackv1alpha1.TargetGroup{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:            targetGroupName,
-				Namespace:       pod.GetNamespace(),
-				OwnerReferences: ownerReference,
-				Labels: map[string]string{
-					ResourceTagKey:           ResourceTagValue,
-					SvcSelectorKey:           pod.GetName(),
-					AWSTargetGroupSyncStatus: "false",
-				},
-				Annotations: map[string]string{
-					NlbARNAnnoKey:  lbARN,
-					NlbPortAnnoKey: fmt.Sprintf("%d", ports[i]),
-				},
+				Name:      targetGroupName,
+				Namespace: pod.GetNamespace(),
 			},
-			Spec: ackv1alpha1.TargetGroupSpec{
+		}
+		_, err := controllerutil.CreateOrUpdate(ctx, client, tg, func() error {
+			tg.OwnerReferences = ownerReference
+			tg.Labels = map[string]string{
+				ResourceTagKey:           ResourceTagValue,
+				SvcSelectorKey:           pod.GetName(),
+				AWSTargetGroupSyncStatus: "false",
+			}
+			tg.Annotations = map[string]string{
+				NlbARNAnnoKey:  lbARN,
+				NlbPortAnnoKey: fmt.Sprintf("%d", ports[i]),
+			}
+			tg.Spec = ackv1alpha1.TargetGroupSpec{
 				HealthCheckEnabled:         config.healthCheck.healthCheckEnabled,
 				HealthCheckIntervalSeconds: config.healthCheck.healthCheckIntervalSeconds,
 				HealthCheckPath:            config.healthCheck.healthCheckPath,
@@ -916,8 +918,9 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 				TargetType:                 &targetTypeIP,
 				Tags: []*ackv1alpha1.Tag{{Key: ptr.To[string](ResourceTagKey),
 					Value: ptr.To[string](ResourceTagValue)}},
-			},
-		}, func() error { return nil })
+			}
+			return nil
+		})
 		if err != nil {
 			return err
 		}
@@ -931,25 +934,26 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 	for key, value := range config.annotations {
 		annotations[key] = value
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, client, &corev1.Service{
+	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            pod.GetName(),
-			Namespace:       pod.GetNamespace(),
-			Annotations:     annotations,
-			OwnerReferences: ownerReference,
-			Labels: map[string]string{
-				ResourceTagKey: ResourceTagValue,
-				SvcSelectorKey: pod.GetName(),
-			},
+			Name:      pod.GetName(),
+			Namespace: pod.GetNamespace(),
 		},
-		Spec: corev1.ServiceSpec{
-			Type: corev1.ServiceTypeClusterIP,
-			Selector: map[string]string{
-				SvcSelectorKey: pod.GetName(),
-			},
-			Ports: svcPorts,
-		},
-	}, func() error { return nil })
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, client, svc, func() error {
+		svc.Annotations = annotations
+		svc.OwnerReferences = ownerReference
+		svc.Labels = map[string]string{
+			ResourceTagKey: ResourceTagValue,
+			SvcSelectorKey: pod.GetName(),
+		}
+		svc.Spec.Type = corev1.ServiceTypeClusterIP
+		svc.Spec.Selector = map[string]string{
+			SvcSelectorKey: pod.GetName(),
+		}
+		svc.Spec.Ports = svcPorts
+		return nil
+	})
 	if err != nil {
 		return err
 	}
@@ -966,17 +970,19 @@ func syncListenerAndTargetGroupBinding(ctx context.Context, client client.Client
 	}
 	lbARN := tg.Annotations[NlbARNAnnoKey]
 	podName := tg.Labels[SvcSelectorKey]
-	_, err = controllerutil.CreateOrUpdate(ctx, client, &ackv1alpha1.Listener{
+	listener := &ackv1alpha1.Listener{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            tg.GetName(),
-			Namespace:       tg.GetNamespace(),
-			OwnerReferences: tg.GetOwnerReferences(),
-			Labels: map[string]string{
-				ResourceTagKey: ResourceTagValue,
-				SvcSelectorKey: podName,
-			},
+			Name:      tg.GetName(),
+			Namespace: tg.GetNamespace(),
 		},
-		Spec: ackv1alpha1.ListenerSpec{
+	}
+	_, err = controllerutil.CreateOrUpdate(ctx, client, listener, func() error {
+		listener.OwnerReferences = tg.GetOwnerReferences()
+		listener.Labels = map[string]string{
+			ResourceTagKey: ResourceTagValue,
+			SvcSelectorKey: podName,
+		}
+		listener.Spec = ackv1alpha1.ListenerSpec{
 			Protocol:        tg.Spec.Protocol,
 			Port:            &port,
 			LoadBalancerARN: &lbARN,
@@ -988,32 +994,36 @@ func syncListenerAndTargetGroupBinding(ctx context.Context, client client.Client
 			},
 			Tags: []*ackv1alpha1.Tag{{Key: ptr.To[string](ResourceTagKey),
 				Value: ptr.To[string](ResourceTagValue)}},
-		},
-	}, func() error { return nil })
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
 
 	var targetTypeIP = elbv2api.TargetTypeIP
-	_, err = controllerutil.CreateOrUpdate(ctx, client, &elbv2api.TargetGroupBinding{
+	tgb := &elbv2api.TargetGroupBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            tg.GetName(),
-			Namespace:       tg.GetNamespace(),
-			OwnerReferences: tg.GetOwnerReferences(),
-			Labels: map[string]string{
-				ResourceTagKey: ResourceTagValue,
-				SvcSelectorKey: podName,
-			},
+			Name:      tg.GetName(),
+			Namespace: tg.GetNamespace(),
 		},
-		Spec: elbv2api.TargetGroupBindingSpec{
+	}
+	_, err = controllerutil.CreateOrUpdate(ctx, client, tgb, func() error {
+		tgb.OwnerReferences = tg.GetOwnerReferences()
+		tgb.Labels = map[string]string{
+			ResourceTagKey: ResourceTagValue,
+			SvcSelectorKey: podName,
+		}
+		tgb.Spec = elbv2api.TargetGroupBindingSpec{
 			TargetGroupARN: *targetGroupARN,
 			TargetType:     &targetTypeIP,
 			ServiceRef: elbv2api.ServiceReference{
 				Name: podName,
 				Port: intstr.FromInt(int(port)),
 			},
-		},
-	}, func() error { return nil })
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
