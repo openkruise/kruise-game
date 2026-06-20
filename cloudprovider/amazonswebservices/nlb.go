@@ -464,6 +464,23 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 		}
 	}
 
+	// Default pass-through for an already-established pod: if the GameServer is
+	// already NetworkReady AND the network config is unchanged (same Service
+	// hash), this OnPodUpdated was triggered by something unrelated to network
+	// readiness — e.g. an InPlace update of pod annotations when an ARN is added
+	// to NlbARNs. Re-running the readiness gate here is harmful: the InPlace
+	// update transiently drives PodReady to False (the InPlaceUpdateReady gate
+	// flips False), so the gate check below would knock a healthy old pod to
+	// NetworkNotReady. Worse, recovery (gate True / PodReady True) is written via
+	// the pods/status subresource, which does NOT re-trigger this webhook, so the
+	// GameServer would stay NotReady indefinitely. The gate's job is to gate a
+	// pod BEFORE its first readiness; once a pod is Ready with config unchanged,
+	// leave it alone. (See docs/11 scenario S4.)
+	if networkStatus.CurrentNetworkState == gamekruiseiov1alpha1.NetworkReady &&
+		lbConfig.configHash() == svc.GetAnnotations()[NlbConfigHashKey] {
+		return pod, nil
+	}
+
 	// Readiness gating: the Service/TargetGroupBinding existing is NOT enough to
 	// declare the network ready — the NLB target may never become healthy (e.g.
 	// an IP reused while still draining in another TargetGroup leaves the target
