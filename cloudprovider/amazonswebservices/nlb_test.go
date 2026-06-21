@@ -15,6 +15,7 @@ package amazonswebservices
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	ackv1alpha1 "github.com/aws-controllers-k8s/elbv2-controller/apis/v1alpha1"
+	ackv1alpha1core "github.com/aws-controllers-k8s/runtime/apis/core/v1alpha1"
 	"github.com/kr/pretty"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -1188,4 +1190,836 @@ func TestGetOwnerReference(t *testing.T) {
 			}
 		})
 	}
+}
+
+
+// ---------------------------------------------------------------------------
+// Helpers used by the OnPodUpdated / sync* unit tests below.
+// ---------------------------------------------------------------------------
+
+// nlbTestScheme returns a runtime.Scheme registered with every API type
+// touched by OnPodUpdated and the sync* helpers (corev1 + elbv2 TGB +
+// ACK TargetGroup/Listener + OKG game.kruise.io v1alpha1).
+func nlbTestScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	s := runtime.NewScheme()
+	if err := corev1.AddToScheme(s); err != nil {
+		t.Fatalf("add corev1: %v", err)
+	}
+	if err := elbv2api.AddToScheme(s); err != nil {
+		t.Fatalf("add elbv2api: %v", err)
+	}
+	if err := ackv1alpha1.AddToScheme(s); err != nil {
+		t.Fatalf("add ackv1alpha1: %v", err)
+	}
+	if err := gamekruiseiov1alpha1.AddToScheme(s); err != nil {
+		t.Fatalf("add gamekruiseiov1alpha1: %v", err)
+	}
+	return s
+}
+
+// validNlbConf returns a minimal but valid NlbARNs+PortProtocols JSON network
+// conf string for use as a Pod annotation. validateLbConfig accepts it.
+func validNlbConf(arn string, ports string) string {
+	return fmt.Sprintf(
+		`[{"name":"NlbARNs","value":"%s"},`+
+			`{"name":"PortProtocols","value":"%s"},`+
+			`{"name":"NlbVPCId","value":"vpc-1"}]`,
+		arn, ports)
+}
+
+// mkNlbPod builds a Pod with OKG NLB annotations so utils.NewNetworkManager
+// returns a non-nil manager and parseLbConfig parses the conf.
+func mkNlbPod(name, ns, conf, status string) *corev1.Pod {
+	ann := map[string]string{
+		gamekruiseiov1alpha1.GameServerNetworkType: NlbNetwork,
+		gamekruiseiov1alpha1.GameServerNetworkConf: conf,
+	}
+	if status != "" {
+		ann[gamekruiseiov1alpha1.GameServerNetworkStatus] = status
+	}
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Namespace:   ns,
+			Annotations: ann,
+		},
+		Status: corev1.PodStatus{PodIP: "10.0.0.1"},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// generateNlbEndpoint: pure ARN -> hostname formatter. We test the happy path
+// (canonical ARN) and the malformed-ARN guard which returns "" instead of
+// panicking.
+// ---------------------------------------------------------------------------
+
+func TestGenerateNlbEndpoint(t *testing.T) {
+	tests := []struct {
+		name string
+		arn  string
+		want string
+	}{
+		{
+			name: "valid canonical ARN -> <name>-<id>.elb.<region>.amazonaws.com",
+			arn:  "arn:aws:elasticloadbalancing:us-east-1:888888888888:loadbalancer/net/aaa/3b332e6841f23870",
+			want: "aaa-3b332e6841f23870.elb.us-east-1.amazonaws.com",
+		},
+		{
+			name: "valid ARN in different region",
+			arn:  "arn:aws:elasticloadbalancing:eu-west-1:1:loadbalancer/net/my-nlb/abc",
+			want: "my-nlb-abc.elb.eu-west-1.amazonaws.com",
+		},
+		{
+			// Malformed ARN: not 6 colon-separated parts. Must return "" rather
+			// than panic, so callers can degrade gracefully.
+			name: "malformed ARN -> empty",
+			arn:  "garbage",
+			want: "",
+		},
+		{
+			name: "empty ARN -> empty",
+			arn:  "",
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := generateNlbEndpoint(tt.arn); got != tt.want {
+				t.Errorf("generateNlbEndpoint(%q) = %q, want %q", tt.arn, got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// getACKTargetGroupARN: error+success branches. Used by the watch handler to
+// surface the ARN AWS assigned to the ACK TargetGroup, so the listener and
+// TargetGroupBinding can reference it.
+// ---------------------------------------------------------------------------
+
+func TestGetACKTargetGroupARN(t *testing.T) {
+	arn := ackv1alpha1core.AWSResourceName("arn:aws:elasticloadbalancing:us-east-1:1:targetgroup/tg/abc")
+
+	t.Run("no conditions -> error", func(t *testing.T) {
+		_, err := getACKTargetGroupARN(&ackv1alpha1.TargetGroup{})
+		if err == nil {
+			t.Fatal("expected error when status has no conditions")
+		}
+	})
+
+	t.Run("first condition not True -> error", func(t *testing.T) {
+		tg := &ackv1alpha1.TargetGroup{
+			Status: ackv1alpha1.TargetGroupStatus{
+				Conditions: []*ackv1alpha1core.Condition{{
+					Status:  "False",
+					Message: ptr.To[string]("nope"),
+					Reason:  ptr.To[string]("rejected"),
+				}},
+			},
+		}
+		_, err := getACKTargetGroupARN(tg)
+		if err == nil {
+			t.Fatal("expected error when first condition is not True")
+		}
+	})
+
+	t.Run("True but ACKResourceMetadata nil -> error (status not ready)", func(t *testing.T) {
+		tg := &ackv1alpha1.TargetGroup{
+			Status: ackv1alpha1.TargetGroupStatus{
+				Conditions: []*ackv1alpha1core.Condition{{Status: "True"}},
+				// ACKResourceMetadata intentionally nil
+			},
+		}
+		_, err := getACKTargetGroupARN(tg)
+		if err == nil {
+			t.Fatal("expected error when ACKResourceMetadata is nil")
+		}
+	})
+
+	t.Run("True with ARN -> returns ARN", func(t *testing.T) {
+		tg := &ackv1alpha1.TargetGroup{
+			Status: ackv1alpha1.TargetGroupStatus{
+				Conditions: []*ackv1alpha1core.Condition{{Status: "True"}},
+				ACKResourceMetadata: &ackv1alpha1core.ResourceMetadata{
+					ARN: &arn,
+				},
+			},
+		}
+		got, err := getACKTargetGroupARN(tg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != string(arn) {
+			t.Errorf("ARN = %q, want %q", got, arn)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// OnPodUpdated covers the lion's share of the missing patch coverage. We
+// exercise each independent branch in isolation.
+// ---------------------------------------------------------------------------
+
+const testNlbARN = "arn:aws:elasticloadbalancing:us-east-1:1:loadbalancer/net/aaa/1"
+
+// Branch: validateLbConfig returns error -> OnPodUpdated must surface a
+// ParameterError without touching any cluster state.
+func TestOnPodUpdated_InvalidConfig_ParameterError(t *testing.T) {
+	scheme := nlbTestScheme(t)
+	// Missing NlbARNs -> validateLbConfig fails.
+	conf := `[{"name":"PortProtocols","value":"8080/TCP"}]`
+	pod := mkNlbPod("p0", "default", conf, `{"currentNetworkState":"NotReady"}`)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+
+	n := newNlbForPolicy()
+	_, perr := n.OnPodUpdated(c, pod, context.Background())
+	if perr == nil {
+		t.Fatalf("expected error for invalid config, got nil")
+	}
+	if perr.Type() != "parameterError" {
+		t.Errorf("error type = %q, want parameterError", perr.Type())
+	}
+}
+
+// Branch: networkStatus annotation absent -> OnPodUpdated writes
+// CurrentNetworkState=NotReady and returns. The pod's annotation should be
+// set so subsequent webhook calls have a starting point.
+func TestOnPodUpdated_NoNetworkStatusAnnotation_SetsNotReady(t *testing.T) {
+	scheme := nlbTestScheme(t)
+	conf := validNlbConf(testNlbARN, "8080/TCP")
+	pod := mkNlbPod("p0", "default", conf, "") // no NetworkStatus annotation
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+
+	n := newNlbForPolicy()
+	got, perr := n.OnPodUpdated(c, pod, context.Background())
+	if perr != nil {
+		t.Fatalf("OnPodUpdated error: %v", perr)
+	}
+	annStatus := got.Annotations[gamekruiseiov1alpha1.GameServerNetworkStatus]
+	if annStatus == "" {
+		t.Fatal("expected NetworkStatus annotation to be set")
+	}
+	if !contains(annStatus, "NotReady") {
+		t.Errorf("expected NotReady in annotation, got %q", annStatus)
+	}
+}
+
+// Branch: Service does not exist for the pod -> OnPodUpdated calls
+// syncTargetGroupAndService, which must:
+//   - allocate a port (or reuse podAllocate);
+//   - create the Service (ClusterIP) with the right annotations/labels;
+//   - create one TargetGroup per backend port.
+//
+// This single test exercises both OnPodUpdated's "svc not found" branch and
+// the entire syncTargetGroupAndService function (TG + Service creation).
+func TestOnPodUpdated_SvcNotFound_CreatesTargetGroupAndService(t *testing.T) {
+	scheme := nlbTestScheme(t)
+	conf := validNlbConf(testNlbARN, "8080/TCP,8081/UDP")
+	pod := mkNlbPod("gd-0", "default", conf, `{"currentNetworkState":"NotReady"}`)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+
+	n := newNlbForPolicy()
+	if _, perr := n.OnPodUpdated(c, pod, context.Background()); perr != nil {
+		t.Fatalf("OnPodUpdated error: %v", perr)
+	}
+
+	// Service must be created with NlbARN + ConfigHash annotations.
+	svc := &corev1.Service{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "gd-0", Namespace: "default"}, svc); err != nil {
+		t.Fatalf("Service not created: %v", err)
+	}
+	if svc.Annotations[NlbARNAnnoKey] != testNlbARN {
+		t.Errorf("svc.Annotations[%s] = %q, want %q", NlbARNAnnoKey, svc.Annotations[NlbARNAnnoKey], testNlbARN)
+	}
+	if svc.Annotations[NlbConfigHashKey] == "" {
+		t.Errorf("svc.Annotations[%s] should not be empty", NlbConfigHashKey)
+	}
+	if len(svc.Spec.Ports) != 2 {
+		t.Errorf("svc.Spec.Ports = %d, want 2", len(svc.Spec.Ports))
+	}
+	if svc.Labels[ResourceTagKey] != ResourceTagValue {
+		t.Errorf("svc.Labels[%s] = %q, want %q", ResourceTagKey, svc.Labels[ResourceTagKey], ResourceTagValue)
+	}
+
+	// One TargetGroup per backend port. Names are <pod>-<port>.
+	tgList := &ackv1alpha1.TargetGroupList{}
+	if err := c.List(context.Background(), tgList); err != nil {
+		t.Fatalf("list TargetGroups: %v", err)
+	}
+	if len(tgList.Items) != 2 {
+		t.Errorf("TargetGroup count = %d, want 2", len(tgList.Items))
+	}
+	for _, tg := range tgList.Items {
+		if tg.Annotations[NlbARNAnnoKey] != testNlbARN {
+			t.Errorf("TG %s missing NlbARN annotation", tg.GetName())
+		}
+		if tg.Labels[AWSTargetGroupSyncStatus] != "false" {
+			t.Errorf("TG %s sync label = %q, want false", tg.GetName(), tg.Labels[AWSTargetGroupSyncStatus])
+		}
+	}
+
+	// allocate must have pinned the port set in podAllocate so subsequent calls reuse it.
+	if alloc, ok := n.podAllocate["default/gd-0"]; !ok || len(alloc.ports) != 2 {
+		t.Errorf("podAllocate not pinned correctly: %#v", alloc)
+	}
+}
+
+// Branch: Service exists, networkStatus already Ready, hash matches ->
+// OnPodUpdated must short-circuit (no readiness-gate re-check, no resource
+// updates). This pins the S4/InPlace pass-through documented in nlb.go.
+func TestOnPodUpdated_PassThroughReadyAndHashMatch(t *testing.T) {
+	scheme := nlbTestScheme(t)
+	conf := validNlbConf(testNlbARN, "8080/TCP")
+	pod := mkNlbPod("gd-0", "default", conf,
+		`{"currentNetworkState":"Ready","externalAddresses":[{"endPoint":"x.elb"}]}`)
+
+	// Build the matching Service whose hash equals what configHash() will
+	// compute for the parsed conf, so OnPodUpdated takes the pass-through path.
+	parsed := parseLbConfig(parseConf(t, conf))
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gd-0",
+			Namespace: "default",
+			Annotations: map[string]string{
+				NlbARNAnnoKey:    testNlbARN,
+				NlbConfigHashKey: parsed.configHash(),
+			},
+			Labels: map[string]string{
+				ResourceTagKey: ResourceTagValue,
+				SvcSelectorKey: "gd-0",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:  corev1.ServiceTypeClusterIP,
+			Ports: []corev1.ServicePort{{Port: 951, TargetPort: intstr.FromInt(8080), Protocol: corev1.ProtocolTCP}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, svc).Build()
+
+	n := newNlbForPolicy()
+	got, perr := n.OnPodUpdated(c, pod, context.Background())
+	if perr != nil {
+		t.Fatalf("OnPodUpdated error: %v", perr)
+	}
+	// Pass-through: pod returned unchanged, no annotation rewrites.
+	annStatus := got.Annotations[gamekruiseiov1alpha1.GameServerNetworkStatus]
+	if annStatus != `{"currentNetworkState":"Ready","externalAddresses":[{"endPoint":"x.elb"}]}` {
+		t.Errorf("annotation should be unchanged in pass-through, got %q", annStatus)
+	}
+}
+
+// Branch: Service exists, networkStatus is NotReady, hash matches, pod is
+// NOT PodReady -> OnPodUpdated keeps NetworkNotReady (gate hasn't flipped).
+// The healStuckReadinessGates pass is invoked but does nothing (no stuck
+// gates declared on the pod), exercising the "ready=false" branch.
+func TestOnPodUpdated_PodNotReady_KeepsNetworkNotReady(t *testing.T) {
+	scheme := nlbTestScheme(t)
+	conf := validNlbConf(testNlbARN, "8080/TCP")
+	pod := mkNlbPod("gd-0", "default", conf, `{"currentNetworkState":"NotReady"}`)
+	pod.Status.Conditions = []corev1.PodCondition{
+		{Type: corev1.PodReady, Status: corev1.ConditionFalse},
+	}
+
+	parsed := parseLbConfig(parseConf(t, conf))
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gd-0",
+			Namespace: "default",
+			Annotations: map[string]string{
+				NlbARNAnnoKey:    testNlbARN,
+				NlbConfigHashKey: parsed.configHash(),
+			},
+			Labels: map[string]string{
+				ResourceTagKey: ResourceTagValue,
+				SvcSelectorKey: "gd-0",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:  corev1.ServiceTypeClusterIP,
+			Ports: []corev1.ServicePort{{Port: 951, TargetPort: intstr.FromInt(8080), Protocol: corev1.ProtocolTCP}},
+		},
+	}
+	// Add a TGB so the inventory matches svc.Spec.Ports (skips re-sync patch).
+	tgb := &elbv2api.TargetGroupBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gd-0-951",
+			Namespace: "default",
+			Labels: map[string]string{
+				ResourceTagKey: ResourceTagValue,
+				SvcSelectorKey: "gd-0",
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, svc, tgb).Build()
+
+	n := newNlbForPolicy()
+	got, perr := n.OnPodUpdated(c, pod, context.Background())
+	if perr != nil {
+		t.Fatalf("OnPodUpdated error: %v", perr)
+	}
+	annStatus := got.Annotations[gamekruiseiov1alpha1.GameServerNetworkStatus]
+	if !contains(annStatus, "NotReady") {
+		t.Errorf("expected NotReady, got %q", annStatus)
+	}
+	if contains(annStatus, `"Ready"`) && !contains(annStatus, "NotReady") {
+		t.Errorf("expected NotReady (not Ready), got %q", annStatus)
+	}
+}
+
+// Branch: Service exists, hash matches, pod IS PodReady -> OnPodUpdated
+// constructs the internal/external address lists from svc.Spec.Ports and
+// flips CurrentNetworkState to NetworkReady.
+func TestOnPodUpdated_PodReady_FillsExternalAddresses(t *testing.T) {
+	scheme := nlbTestScheme(t)
+	conf := validNlbConf(testNlbARN, "8080/TCP")
+	// networkStatus exists but is still NotReady (e.g. initial reconciliation).
+	pod := mkNlbPod("gd-0", "default", conf, `{"currentNetworkState":"NotReady"}`)
+	pod.Status = corev1.PodStatus{
+		PodIP:      "10.0.0.7",
+		Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+	}
+
+	parsed := parseLbConfig(parseConf(t, conf))
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gd-0",
+			Namespace: "default",
+			Annotations: map[string]string{
+				NlbARNAnnoKey:    testNlbARN,
+				NlbConfigHashKey: parsed.configHash(),
+			},
+			Labels: map[string]string{
+				ResourceTagKey: ResourceTagValue,
+				SvcSelectorKey: "gd-0",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:  corev1.ServiceTypeClusterIP,
+			Ports: []corev1.ServicePort{{Port: 951, TargetPort: intstr.FromInt(8080), Protocol: corev1.ProtocolTCP}},
+		},
+	}
+	tgb := &elbv2api.TargetGroupBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gd-0-951",
+			Namespace: "default",
+			Labels: map[string]string{
+				ResourceTagKey: ResourceTagValue,
+				SvcSelectorKey: "gd-0",
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, svc, tgb).Build()
+
+	n := newNlbForPolicy()
+	got, perr := n.OnPodUpdated(c, pod, context.Background())
+	if perr != nil {
+		t.Fatalf("OnPodUpdated error: %v", perr)
+	}
+	annStatus := got.Annotations[gamekruiseiov1alpha1.GameServerNetworkStatus]
+	// Must transition to Ready and populate external endpoint derived from ARN.
+	if !contains(annStatus, `"currentNetworkState":"Ready"`) {
+		t.Errorf("expected currentNetworkState Ready, got %q", annStatus)
+	}
+	wantEndpoint := "aaa-1.elb.us-east-1.amazonaws.com" // generateNlbEndpoint(testNlbARN)
+	if !contains(annStatus, wantEndpoint) {
+		t.Errorf("expected external endpoint %q in status, got %q", wantEndpoint, annStatus)
+	}
+	if !contains(annStatus, `"ip":"10.0.0.7"`) {
+		t.Errorf("expected internal IP 10.0.0.7 in status, got %q", annStatus)
+	}
+}
+
+// Branch: networkDisabled label set -> OnPodUpdated must DeleteAllOf
+// the pod's TargetGroupBindings (network shut off) and return without
+// reaching the readiness-gate code.
+func TestOnPodUpdated_NetworkDisabled_DeletesTGBs(t *testing.T) {
+	scheme := nlbTestScheme(t)
+	conf := validNlbConf(testNlbARN, "8080/TCP")
+	pod := mkNlbPod("gd-0", "default", conf, `{"currentNetworkState":"Ready"}`)
+	if pod.Labels == nil {
+		pod.Labels = map[string]string{}
+	}
+	pod.Labels[gamekruiseiov1alpha1.GameServerNetworkDisabled] = "true"
+
+	parsed := parseLbConfig(parseConf(t, conf))
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gd-0",
+			Namespace: "default",
+			Annotations: map[string]string{
+				NlbARNAnnoKey:    testNlbARN,
+				NlbConfigHashKey: parsed.configHash(),
+			},
+			Labels: map[string]string{
+				ResourceTagKey: ResourceTagValue,
+				SvcSelectorKey: "gd-0",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:  corev1.ServiceTypeClusterIP,
+			Ports: []corev1.ServicePort{{Port: 951, TargetPort: intstr.FromInt(8080), Protocol: corev1.ProtocolTCP}},
+		},
+	}
+	tgb := &elbv2api.TargetGroupBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gd-0-951",
+			Namespace: "default",
+			Labels: map[string]string{
+				ResourceTagKey: ResourceTagValue,
+				SvcSelectorKey: "gd-0",
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, svc, tgb).Build()
+
+	n := newNlbForPolicy()
+	if _, perr := n.OnPodUpdated(c, pod, context.Background()); perr != nil {
+		t.Fatalf("OnPodUpdated error: %v", perr)
+	}
+	// The TGB should be gone after disable.
+	got := &elbv2api.TargetGroupBinding{}
+	err := c.Get(context.Background(), types.NamespacedName{Name: "gd-0-951", Namespace: "default"}, got)
+	if !errors.IsNotFound(err) {
+		t.Errorf("expected TGB to be deleted, err=%v", err)
+	}
+}
+
+// Branch: SVC exists but its hash differs from the parsed conf -> OnPodUpdated
+// resets the network state to NotReady and re-runs syncTargetGroupAndService.
+// We assert the Service annotation is updated to the new hash.
+func TestOnPodUpdated_HashMismatch_ResyncsService(t *testing.T) {
+	scheme := nlbTestScheme(t)
+	conf := validNlbConf(testNlbARN, "8080/TCP")
+	pod := mkNlbPod("gd-0", "default", conf, `{"currentNetworkState":"Ready"}`)
+
+	// Pre-existing svc with a stale hash.
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gd-0",
+			Namespace: "default",
+			Annotations: map[string]string{
+				NlbARNAnnoKey:    testNlbARN,
+				NlbConfigHashKey: "stale-hash-doesnt-match",
+			},
+			Labels: map[string]string{
+				ResourceTagKey: ResourceTagValue,
+				SvcSelectorKey: "gd-0",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:  corev1.ServiceTypeClusterIP,
+			Ports: []corev1.ServicePort{{Port: 951, TargetPort: intstr.FromInt(8080), Protocol: corev1.ProtocolTCP}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, svc).Build()
+
+	n := newNlbForPolicy()
+	got, perr := n.OnPodUpdated(c, pod, context.Background())
+	if perr != nil {
+		t.Fatalf("OnPodUpdated error: %v", perr)
+	}
+	// Status moved to NotReady (we entered the resync branch).
+	if !contains(got.Annotations[gamekruiseiov1alpha1.GameServerNetworkStatus], "NotReady") {
+		t.Errorf("expected NotReady annotation after hash mismatch, got %q",
+			got.Annotations[gamekruiseiov1alpha1.GameServerNetworkStatus])
+	}
+	// Service annotation hash should now match the parsed conf hash.
+	parsed := parseLbConfig(parseConf(t, conf))
+	updatedSvc := &corev1.Service{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "gd-0", Namespace: "default"}, updatedSvc); err != nil {
+		t.Fatalf("get updated svc: %v", err)
+	}
+	if updatedSvc.Annotations[NlbConfigHashKey] != parsed.configHash() {
+		t.Errorf("svc hash = %q, want %q", updatedSvc.Annotations[NlbConfigHashKey], parsed.configHash())
+	}
+}
+
+// Branch: TGB inventory smaller than svc.Spec.Ports -> OnPodUpdated patches
+// each TG's sync label to "false" so the watch reconciler will re-create the
+// missing TGBs. This pins the heal-on-mismatch path inside OnPodUpdated.
+func TestOnPodUpdated_TgbCountMismatch_PatchesTGSyncLabel(t *testing.T) {
+	scheme := nlbTestScheme(t)
+	conf := validNlbConf(testNlbARN, "8080/TCP,8081/UDP")
+	pod := mkNlbPod("gd-0", "default", conf, `{"currentNetworkState":"NotReady"}`)
+	pod.Status.Conditions = []corev1.PodCondition{
+		{Type: corev1.PodReady, Status: corev1.ConditionFalse},
+	}
+
+	parsed := parseLbConfig(parseConf(t, conf))
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gd-0",
+			Namespace: "default",
+			Annotations: map[string]string{
+				NlbARNAnnoKey:    testNlbARN,
+				NlbConfigHashKey: parsed.configHash(),
+			},
+			Labels: map[string]string{
+				ResourceTagKey: ResourceTagValue,
+				SvcSelectorKey: "gd-0",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeClusterIP,
+			Ports: []corev1.ServicePort{
+				{Port: 951, TargetPort: intstr.FromInt(8080), Protocol: corev1.ProtocolTCP},
+				{Port: 952, TargetPort: intstr.FromInt(8081), Protocol: corev1.ProtocolUDP},
+			},
+		},
+	}
+	// Only ONE TGB exists for two svc ports -> mismatch path triggers.
+	tgb := &elbv2api.TargetGroupBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gd-0-951",
+			Namespace: "default",
+			Labels: map[string]string{
+				ResourceTagKey: ResourceTagValue,
+				SvcSelectorKey: "gd-0",
+			},
+		},
+	}
+	tg1 := &ackv1alpha1.TargetGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gd-0-951",
+			Namespace: "default",
+			Labels: map[string]string{
+				ResourceTagKey:           ResourceTagValue,
+				SvcSelectorKey:           "gd-0",
+				AWSTargetGroupSyncStatus: "true",
+			},
+		},
+	}
+	tg2 := &ackv1alpha1.TargetGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gd-0-952",
+			Namespace: "default",
+			Labels: map[string]string{
+				ResourceTagKey:           ResourceTagValue,
+				SvcSelectorKey:           "gd-0",
+				AWSTargetGroupSyncStatus: "true",
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, svc, tgb, tg1, tg2).Build()
+
+	n := newNlbForPolicy()
+	if _, perr := n.OnPodUpdated(c, pod, context.Background()); perr != nil {
+		t.Fatalf("OnPodUpdated error: %v", perr)
+	}
+	// Both TGs should now have sync=false so the watch handler re-creates the TGB.
+	for _, name := range []string{"gd-0-951", "gd-0-952"} {
+		got := &ackv1alpha1.TargetGroup{}
+		if err := c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "default"}, got); err != nil {
+			t.Fatalf("get TG %s: %v", name, err)
+		}
+		if got.Labels[AWSTargetGroupSyncStatus] != "false" {
+			t.Errorf("TG %s sync label = %q, want false", name, got.Labels[AWSTargetGroupSyncStatus])
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// syncListenerAndTargetGroupBinding: directly exercise the watch-driven
+// helper that creates/updates the Listener and TargetGroupBinding from a
+// ready TargetGroup. This drove most of the missing patch coverage outside
+// OnPodUpdated.
+// ---------------------------------------------------------------------------
+
+func TestSyncListenerAndTargetGroupBinding(t *testing.T) {
+	scheme := nlbTestScheme(t)
+	tg := &ackv1alpha1.TargetGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gd-0-951",
+			Namespace: "default",
+			Labels: map[string]string{
+				ResourceTagKey: ResourceTagValue,
+				SvcSelectorKey: "gd-0",
+			},
+			Annotations: map[string]string{
+				NlbARNAnnoKey:  testNlbARN,
+				NlbPortAnnoKey: "951",
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "v1", Kind: "Pod", Name: "gd-0", UID: "abc",
+				Controller: ptr.To[bool](true), BlockOwnerDeletion: ptr.To[bool](true),
+			}},
+		},
+		Spec: ackv1alpha1.TargetGroupSpec{
+			Protocol: ptr.To[string]("TCP"),
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tg).Build()
+	tgARN := "arn:aws:elasticloadbalancing:us-east-1:1:targetgroup/tg/x"
+
+	if err := syncListenerAndTargetGroupBinding(context.Background(), c, tg, &tgARN); err != nil {
+		t.Fatalf("syncListenerAndTargetGroupBinding: %v", err)
+	}
+
+	// Listener should now exist with the expected port and load balancer ARN.
+	l := &ackv1alpha1.Listener{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "gd-0-951", Namespace: "default"}, l); err != nil {
+		t.Fatalf("Listener not created: %v", err)
+	}
+	if l.Spec.Port == nil || *l.Spec.Port != 951 {
+		t.Errorf("Listener port = %v, want 951", l.Spec.Port)
+	}
+	if l.Spec.LoadBalancerARN == nil || *l.Spec.LoadBalancerARN != testNlbARN {
+		t.Errorf("Listener LB ARN = %v, want %q", l.Spec.LoadBalancerARN, testNlbARN)
+	}
+	if l.Labels[SvcSelectorKey] != "gd-0" {
+		t.Errorf("Listener svc-selector label = %q, want gd-0", l.Labels[SvcSelectorKey])
+	}
+
+	// TargetGroupBinding should reference the pod's Service by name + the listener port.
+	tgb := &elbv2api.TargetGroupBinding{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "gd-0-951", Namespace: "default"}, tgb); err != nil {
+		t.Fatalf("TGB not created: %v", err)
+	}
+	if tgb.Spec.TargetGroupARN != tgARN {
+		t.Errorf("TGB targetGroupARN = %q, want %q", tgb.Spec.TargetGroupARN, tgARN)
+	}
+	if tgb.Spec.ServiceRef.Name != "gd-0" {
+		t.Errorf("TGB service name = %q, want gd-0", tgb.Spec.ServiceRef.Name)
+	}
+	if tgb.Spec.ServiceRef.Port.IntValue() != 951 {
+		t.Errorf("TGB service port = %v, want 951", tgb.Spec.ServiceRef.Port)
+	}
+}
+
+// Malformed annotations -> the helper should surface the strconv error rather
+// than silently creating broken resources.
+func TestSyncListenerAndTargetGroupBinding_BadPortAnnotation(t *testing.T) {
+	scheme := nlbTestScheme(t)
+	tg := &ackv1alpha1.TargetGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gd-0-bad",
+			Namespace: "default",
+			Annotations: map[string]string{
+				NlbARNAnnoKey:  testNlbARN,
+				NlbPortAnnoKey: "not-a-number",
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tg).Build()
+	tgARN := "arn:aws:elasticloadbalancing:us-east-1:1:targetgroup/tg/x"
+	if err := syncListenerAndTargetGroupBinding(context.Background(), c, tg, &tgARN); err == nil {
+		t.Fatal("expected error for bad NlbPort annotation, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// healStuckReadinessGates: cover the not-found / TGB-missing branches that
+// the original test left at 0% (they're the warning-and-skip paths).
+// ---------------------------------------------------------------------------
+
+// All gates' TGBs are missing -> healStuckReadinessGates skips each and
+// returns 0 healed, without surfacing an error.
+func TestHealStuckReadinessGates_TGBNotFound(t *testing.T) {
+	scheme := nlbTestScheme(t)
+	now := metav1.Now()
+	stuck := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-9001")
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "gd-0", Namespace: "default"},
+		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{
+			{Type: stuck, Status: corev1.ConditionFalse,
+				LastTransitionTime: metav1.NewTime(now.Add(-300 * time.Second))},
+		}},
+	}
+	// No TGB exists for the gate -> Get returns NotFound -> branch skipped.
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	n := newNlbForPolicy()
+	healed := n.healStuckReadinessGates(context.Background(), c, pod, now.Unix())
+	if healed != 0 {
+		t.Errorf("expected 0 healed when TGB is NotFound, got %d", healed)
+	}
+}
+
+// TGB exists and is deleted, but the matching TG is missing -> the second Get
+// fails NotFound and the branch warns + continues without incrementing healed.
+// This pins the post-delete TG-NotFound branch.
+func TestHealStuckReadinessGates_TGNotFoundAfterTGBDeleted(t *testing.T) {
+	scheme := nlbTestScheme(t)
+	now := metav1.Now()
+	stuck := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-9001")
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "gd-0", Namespace: "default"},
+		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{
+			{Type: stuck, Status: corev1.ConditionFalse,
+				LastTransitionTime: metav1.NewTime(now.Add(-300 * time.Second))},
+		}},
+	}
+	tgb := &elbv2api.TargetGroupBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "gd-0-9001", Namespace: "default"},
+	}
+	// Note: no TG with the same name exists -> the second Get fails.
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, tgb).Build()
+	n := newNlbForPolicy()
+	healed := n.healStuckReadinessGates(context.Background(), c, pod, now.Unix())
+	if healed != 0 {
+		t.Errorf("expected 0 healed when TG is NotFound (post-delete), got %d", healed)
+	}
+	// TGB must still have been deleted.
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "gd-0-9001", Namespace: "default"}, &elbv2api.TargetGroupBinding{}); !errors.IsNotFound(err) {
+		t.Errorf("TGB should have been deleted before TG lookup, err=%v", err)
+	}
+}
+
+// Conditions whose Type doesn't match the LB readiness-gate prefix are
+// completely ignored (e.g. PodReady, custom user gates), no matter their
+// status or age. This pins the prefix guard.
+func TestHealStuckReadinessGates_NonLbConditionsIgnored(t *testing.T) {
+	scheme := nlbTestScheme(t)
+	now := metav1.Now()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "gd-0", Namespace: "default"},
+		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{
+			// Not an LB readiness gate -> must be skipped even though it is False
+			// and very old.
+			{Type: corev1.PodReady, Status: corev1.ConditionFalse,
+				LastTransitionTime: metav1.NewTime(now.Add(-1 * time.Hour))},
+		}},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	n := newNlbForPolicy()
+	healed := n.healStuckReadinessGates(context.Background(), c, pod, now.Unix())
+	if healed != 0 {
+		t.Errorf("non-LB conditions must be ignored, got healed=%d", healed)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tiny utilities used above. We don't pull in strings.Contains via the
+// already-imported strings package because nlb_test.go does not import it; a
+// local helper keeps the import set minimal.
+// ---------------------------------------------------------------------------
+
+func contains(haystack, needle string) bool {
+	return len(haystack) >= len(needle) && indexOf(haystack, needle) >= 0
+}
+
+func indexOf(haystack, needle string) int {
+	if len(needle) == 0 {
+		return 0
+	}
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return i
+		}
+	}
+	return -1
+}
+
+// parseConf unmarshals the JSON network-conf string into a
+// []NetworkConfParams the same way utils.NewNetworkManager does, without
+// pulling that whole scaffolding into the test path. The conf JSON shape is
+// pinned by GameServerNetworkConf consumers, so a direct json.Unmarshal is
+// sufficient and avoids a circular helper.
+func parseConf(t *testing.T, jsonStr string) []gamekruiseiov1alpha1.NetworkConfParams {
+	t.Helper()
+	var conf []gamekruiseiov1alpha1.NetworkConfParams
+	if err := json.Unmarshal([]byte(jsonStr), &conf); err != nil {
+		t.Fatalf("unmarshal conf %q: %v", jsonStr, err)
+	}
+	return conf
 }
