@@ -1420,3 +1420,192 @@ func TestSyncPodToGs(t *testing.T) {
 		}
 	}
 }
+
+func TestLbReadinessGatesState(t *testing.T) {
+	gate := "target-health.elbv2.k8s.aws/gs-0-9001"
+	mkPod := func(gates []string, conds map[string]corev1.ConditionStatus) *corev1.Pod {
+		p := &corev1.Pod{}
+		for _, g := range gates {
+			p.Spec.ReadinessGates = append(p.Spec.ReadinessGates, corev1.PodReadinessGate{
+				ConditionType: corev1.PodConditionType(g)})
+		}
+		for t, s := range conds {
+			p.Status.Conditions = append(p.Status.Conditions, corev1.PodCondition{
+				Type: corev1.PodConditionType(t), Status: s})
+		}
+		return p
+	}
+	tests := []struct {
+		name string
+		pod  *corev1.Pod
+		want lbReadinessGateState
+	}{
+		{
+			name: "no LB gate declared -> gateNone (only Kruise gates)",
+			pod:  mkPod([]string{"InPlaceUpdateReady", "KruisePodReady"}, map[string]corev1.ConditionStatus{"Ready": corev1.ConditionTrue}),
+			want: gateNone,
+		},
+		{
+			name: "LB gate True -> gateAllTrue",
+			pod:  mkPod([]string{gate}, map[string]corev1.ConditionStatus{gate: corev1.ConditionTrue}),
+			want: gateAllTrue,
+		},
+		{
+			name: "LB gate False -> gateAnyFalse",
+			pod:  mkPod([]string{gate}, map[string]corev1.ConditionStatus{gate: corev1.ConditionFalse}),
+			want: gateAnyFalse,
+		},
+		{
+			name: "LB gate missing condition -> gateAnyFalse",
+			pod:  mkPod([]string{gate}, map[string]corev1.ConditionStatus{}),
+			want: gateAnyFalse,
+		},
+		{
+			// The S4/InPlace case: InPlaceUpdateReady flips False but the LB gate
+			// stays True -> we must report gateAllTrue (do NOT flap to NotReady).
+			name: "InPlace flips InPlaceUpdateReady False but LB gate True -> gateAllTrue",
+			pod: mkPod([]string{"InPlaceUpdateReady", gate}, map[string]corev1.ConditionStatus{
+				"InPlaceUpdateReady": corev1.ConditionFalse,
+				gate:                 corev1.ConditionTrue,
+			}),
+			want: gateAllTrue,
+		},
+		{
+			name: "nil pod -> gateNone",
+			pod:  nil,
+			want: gateNone,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := lbReadinessGatesState(tt.pod); got != tt.want {
+				t.Errorf("lbReadinessGatesState() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSyncNetworkStatus_LbReadinessGate covers the patch added to
+// syncNetworkStatus that overrides the annotation-derived CurrentNetworkState
+// based on the authoritative LB-managed readiness-gate state.
+//
+// The pre-existing TestSyncNetworkStatus only exercises pods without any LB
+// readiness gate, so it stays in the gateNone branch (no override). This test
+// pins the two override branches:
+//
+//   - gateAllTrue  -> CurrentNetworkState forced to NetworkReady,
+//     even when the annotation lags behind (still says NotReady).
+//   - gateAnyFalse -> CurrentNetworkState forced to NetworkNotReady,
+//     even when the annotation lags behind (still says Ready).
+//
+// And the guard "only act once externalAddresses are non-empty":
+//
+//   - gate True but no external addresses yet -> no override (early phase).
+func TestSyncNetworkStatus_LbReadinessGate(t *testing.T) {
+	const lbGate = "target-health.elbv2.k8s.aws/gs-0-9001"
+	// network-status JSON helpers: with vs. without external addresses, with
+	// CurrentNetworkState=NotReady or Ready (to prove the override).
+	statusWithExternal := func(state string) string {
+		return `{"internalAddresses":[{"ip":"10.0.0.1","ports":[{"name":"80","protocol":"TCP","port":80}]}],` +
+			`"externalAddresses":[{"ip":"1.2.3.4","ports":[{"name":"80","protocol":"TCP","port":601}]}],` +
+			`"currentNetworkState":"` + state + `","createTime":null,"lastTransitionTime":null}`
+	}
+	statusNoExternal := func(state string) string {
+		return `{"internalAddresses":[{"ip":"10.0.0.1","ports":[{"name":"80","protocol":"TCP","port":80}]}],` +
+			`"currentNetworkState":"` + state + `","createTime":null,"lastTransitionTime":null}`
+	}
+
+	mkPod := func(annStatus string, gates []string, conds map[string]corev1.ConditionStatus) *corev1.Pod {
+		p := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Annotations: map[string]string{
+					gameKruiseV1alpha1.GameServerNetworkType:     "AmazonWebServices-NLB",
+					gameKruiseV1alpha1.GameServerNetworkConf:     `[{"name":"NlbARNs","value":"arn:foo"},{"name":"PortProtocols","value":"80"}]`,
+					gameKruiseV1alpha1.GameServerNetworkDisabled: "false",
+					gameKruiseV1alpha1.GameServerNetworkStatus:   annStatus,
+				},
+			},
+		}
+		for _, g := range gates {
+			p.Spec.ReadinessGates = append(p.Spec.ReadinessGates, corev1.PodReadinessGate{
+				ConditionType: corev1.PodConditionType(g),
+			})
+		}
+		for typ, st := range conds {
+			p.Status.Conditions = append(p.Status.Conditions, corev1.PodCondition{
+				Type: corev1.PodConditionType(typ), Status: st,
+			})
+		}
+		return p
+	}
+
+	// Build a minimal GameServer whose existing NetworkStatus is non-empty so
+	// syncNetworkStatus skips its "init" branch and reaches the override.
+	mkGs := func() *gameKruiseV1alpha1.GameServer {
+		return &gameKruiseV1alpha1.GameServer{
+			Status: gameKruiseV1alpha1.GameServerStatus{
+				NetworkStatus: gameKruiseV1alpha1.NetworkStatus{
+					NetworkType:         "AmazonWebServices-NLB",
+					DesiredNetworkState: gameKruiseV1alpha1.NetworkReady,
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name      string
+		annStatus string
+		gates     []string
+		conds     map[string]corev1.ConditionStatus
+		want      gameKruiseV1alpha1.NetworkState
+	}{
+		{
+			// Annotation lags as NotReady (kubelet flipped the gate True via
+			// pods/status, which doesn't re-trigger the mutating webhook). The
+			// override must lift CurrentNetworkState back to Ready.
+			name:      "gateAllTrue with external addresses overrides lagging NotReady -> Ready",
+			annStatus: statusWithExternal("NotReady"),
+			gates:     []string{lbGate},
+			conds:     map[string]corev1.ConditionStatus{lbGate: corev1.ConditionTrue},
+			want:      gameKruiseV1alpha1.NetworkReady,
+		},
+		{
+			// Annotation lags as Ready while the LB gate is now False (target
+			// went unhealthy). The override must drop CurrentNetworkState back
+			// to NotReady.
+			name:      "gateAnyFalse with external addresses overrides lagging Ready -> NotReady",
+			annStatus: statusWithExternal("Ready"),
+			gates:     []string{lbGate},
+			conds:     map[string]corev1.ConditionStatus{lbGate: corev1.ConditionFalse},
+			want:      gameKruiseV1alpha1.NetworkNotReady,
+		},
+		{
+			// Early phase: external addresses not yet populated. The override
+			// must NOT fire — we keep the annotation-derived value untouched
+			// even if the (gameless) LB gate happens to be True.
+			name:      "gateAllTrue but no external addresses -> no override",
+			annStatus: statusNoExternal("NotReady"),
+			gates:     []string{lbGate},
+			conds:     map[string]corev1.ConditionStatus{lbGate: corev1.ConditionTrue},
+			want:      gameKruiseV1alpha1.NetworkNotReady,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gs := mkGs()
+			pod := mkPod(tt.annStatus, tt.gates, tt.conds)
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gs, pod).Build()
+			manager := &GameServerManager{
+				client:     c,
+				gameServer: gs,
+				pod:        pod,
+				logger:     testr.New(t),
+			}
+			got := manager.syncNetworkStatus()
+			if got.CurrentNetworkState != tt.want {
+				t.Errorf("CurrentNetworkState = %q, want %q", got.CurrentNetworkState, tt.want)
+			}
+		})
+	}
+}
