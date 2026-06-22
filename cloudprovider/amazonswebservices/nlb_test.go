@@ -18,10 +18,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"strconv"
 	"sync"
 	"testing"
-	"time"
 
 	ackv1alpha1 "github.com/aws-controllers-k8s/elbv2-controller/apis/v1alpha1"
 	ackv1alpha1core "github.com/aws-controllers-k8s/runtime/apis/core/v1alpha1"
@@ -668,146 +666,6 @@ func TestSamePortDifferentNLBs(t *testing.T) {
 }
 
 // OnPodAdded 应提前分配端口并预置 readiness gate, gate 名 == TGB 名(target-health.elbv2.k8s.aws/<pod>-<port>)。
-func TestOnPodAddedInjectsReadinessGate(t *testing.T) {
-	arn := "arn:aws:elasticloadbalancing:us-east-1:1:loadbalancer/net/aaa/1"
-	n := newNlbForPolicy()
-	conf := `[{"name":"NlbARNs","value":"` + arn + `"},{"name":"PortProtocols","value":"8601/TCP"},{"name":"NlbVPCId","value":"vpc-1"}]`
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        "gd-0",
-			Namespace:   "default",
-			Annotations: map[string]string{
-				gamekruiseiov1alpha1.GameServerNetworkType: NlbNetwork,
-				gamekruiseiov1alpha1.GameServerNetworkConf: conf,
-			},
-		},
-	}
-	got, perr := n.OnPodAdded(nil, pod, nil)
-	if perr != nil {
-		t.Fatalf("OnPodAdded error: %v", perr)
-	}
-	// 端口已分配并 pin 到 podAllocate
-	alloc, ok := n.podAllocate["default/gd-0"]
-	if !ok || alloc == nil || len(alloc.ports) != 1 {
-		t.Fatalf("expected 1 port allocated for gd-0, got %#v", alloc)
-	}
-	wantGate := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-" + intToStr(alloc.ports[0]))
-	found := false
-	for _, g := range got.Spec.ReadinessGates {
-		if g.ConditionType == wantGate {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected readiness gate %q injected, got %#v", wantGate, got.Spec.ReadinessGates)
-	}
-	// 幂等: 再调一次不应重复注入(podAllocate 已存在 → 复用, gate 不重复)
-	got2, _ := n.OnPodAdded(nil, got, nil)
-	cnt := 0
-	for _, g := range got2.Spec.ReadinessGates {
-		if g.ConditionType == wantGate {
-			cnt++
-		}
-	}
-	if cnt != 1 {
-		t.Errorf("readiness gate should be injected exactly once (idempotent), got %d", cnt)
-	}
-}
-
-func intToStr(p int32) string {
-	return strconv.Itoa(int(p))
-}
-
-// 自愈: gate False 超过阈值的 TGB 被删除并重置 TG sync 标签; 未超时的不动。
-func TestHealStuckReadinessGates(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	_ = elbv2api.AddToScheme(scheme)
-	_ = ackv1alpha1.AddToScheme(scheme)
-
-	now := metav1.Now()
-	stuckGate := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-9001") // False 已久 → 应被治
-	freshGate := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-9002") // False 但很新 → 不动
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "gd-0", Namespace: "default"},
-		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{
-			{Type: stuckGate, Status: corev1.ConditionFalse,
-				LastTransitionTime: metav1.NewTime(now.Add(-300 * time.Second))},
-			{Type: freshGate, Status: corev1.ConditionFalse,
-				LastTransitionTime: metav1.NewTime(now.Add(-5 * time.Second))},
-		}},
-	}
-	mkTGB := func(name string) *elbv2api.TargetGroupBinding {
-		return &elbv2api.TargetGroupBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
-	}
-	mkTG := func(name string) *ackv1alpha1.TargetGroup {
-		return &ackv1alpha1.TargetGroup{ObjectMeta: metav1.ObjectMeta{
-			Name: name, Namespace: "default",
-			Labels: map[string]string{AWSTargetGroupSyncStatus: "true"}}}
-	}
-	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(pod, mkTGB("gd-0-9001"), mkTG("gd-0-9001"), mkTGB("gd-0-9002"), mkTG("gd-0-9002")).Build()
-
-	n := newNlbForPolicy()
-	healed := n.healStuckReadinessGates(context.Background(), c, pod, now.Unix())
-	if healed != 1 {
-		t.Fatalf("expected 1 gate healed (only the stuck one), got %d", healed)
-	}
-	// stuck 的 TGB 被删
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "gd-0-9001", Namespace: "default"}, &elbv2api.TargetGroupBinding{}); !errors.IsNotFound(err) {
-		t.Errorf("stuck TGB gd-0-9001 should be deleted, err=%v", err)
-	}
-	// stuck 的 TG sync 标签被重置为 false
-	tg := &ackv1alpha1.TargetGroup{}
-	_ = c.Get(context.Background(), types.NamespacedName{Name: "gd-0-9001", Namespace: "default"}, tg)
-	if tg.Labels[AWSTargetGroupSyncStatus] != "false" {
-		t.Errorf("stuck TG sync label should be reset to false, got %q", tg.Labels[AWSTargetGroupSyncStatus])
-	}
-	// fresh 的 TGB 不动
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "gd-0-9002", Namespace: "default"}, &elbv2api.TargetGroupBinding{}); err != nil {
-		t.Errorf("fresh TGB gd-0-9002 should NOT be deleted, err=%v", err)
-	}
-}
-
-// 一个 pod 多端口 → 每个 listener 端口一个 readiness gate, 名各对应自己的 TGB。
-func TestOnPodAddedMultiPortGates(t *testing.T) {
-	arn := "arn:aws:elasticloadbalancing:us-east-1:1:loadbalancer/net/aaa/1"
-	n := newNlbForPolicy()
-	conf := `[{"name":"NlbARNs","value":"` + arn + `"},{"name":"PortProtocols","value":"8601/TCP,8602/UDP,8603/TCP"},{"name":"NlbVPCId","value":"vpc-1"}]`
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "gd-0",
-			Namespace: "default",
-			Annotations: map[string]string{
-				gamekruiseiov1alpha1.GameServerNetworkType: NlbNetwork,
-				gamekruiseiov1alpha1.GameServerNetworkConf: conf,
-			},
-		},
-	}
-	got, perr := n.OnPodAdded(nil, pod, nil)
-	if perr != nil {
-		t.Fatalf("OnPodAdded error: %v", perr)
-	}
-	alloc := n.podAllocate["default/gd-0"]
-	if alloc == nil || len(alloc.ports) != 3 {
-		t.Fatalf("expected 3 ports allocated, got %#v", alloc)
-	}
-	// 每个分配端口都应有一个对应 gate, 且 gate 数量恰等于端口数(不多不少)。
-	if len(got.Spec.ReadinessGates) != 3 {
-		t.Fatalf("expected 3 readiness gates, got %d: %#v", len(got.Spec.ReadinessGates), got.Spec.ReadinessGates)
-	}
-	have := map[corev1.PodConditionType]bool{}
-	for _, g := range got.Spec.ReadinessGates {
-		have[g.ConditionType] = true
-	}
-	for _, port := range alloc.ports {
-		want := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-" + intToStr(port))
-		if !have[want] {
-			t.Errorf("missing readiness gate %q for port %d", want, port)
-		}
-	}
-}
-
 // 无 NLB 网络注解的 pod: OnPodAdded 原样返回, 不分配端口、不注入 gate。
 func TestOnPodAddedNonNlbPodUntouched(t *testing.T) {
 	n := newNlbForPolicy()
@@ -823,43 +681,6 @@ func TestOnPodAddedNonNlbPodUntouched(t *testing.T) {
 	}
 	if _, ok := n.podAllocate["default/plain-0"]; ok {
 		t.Errorf("non-NLB pod should not allocate ports")
-	}
-}
-
-// 自愈的负向分支: True 的 gate / 零 LastTransitionTime 的 gate / TGB 已不存在, 都不应判为卡死, healed=0 且无副作用。
-func TestHealStuckReadinessGatesNoFalsePositive(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	_ = elbv2api.AddToScheme(scheme)
-	_ = ackv1alpha1.AddToScheme(scheme)
-
-	now := metav1.Now()
-	trueGate := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-9001")  // 已 True → 健康, 不治
-	zeroGate := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-9002")  // False 但 LastTransitionTime 为零 → 刚注入, 不治
-	noTgbGate := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-9003") // False 已久但 TGB 已不存在 → 安全跳过
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "gd-0", Namespace: "default"},
-		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{
-			{Type: trueGate, Status: corev1.ConditionTrue,
-				LastTransitionTime: metav1.NewTime(now.Add(-300 * time.Second))},
-			{Type: zeroGate, Status: corev1.ConditionFalse}, // LastTransitionTime 零值
-			{Type: noTgbGate, Status: corev1.ConditionFalse,
-				LastTransitionTime: metav1.NewTime(now.Add(-300 * time.Second))},
-		}},
-	}
-	// True gate 的 TGB 存在(不该被删), noTgbGate 的 TGB 不存在。
-	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(pod, &elbv2api.TargetGroupBinding{
-			ObjectMeta: metav1.ObjectMeta{Name: "gd-0-9001", Namespace: "default"}}).Build()
-
-	n := newNlbForPolicy()
-	healed := n.healStuckReadinessGates(context.Background(), c, pod, now.Unix())
-	if healed != 0 {
-		t.Fatalf("expected 0 healed (no false positive), got %d", healed)
-	}
-	// True gate 的 TGB 必须仍在。
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "gd-0-9001", Namespace: "default"}, &elbv2api.TargetGroupBinding{}); err != nil {
-		t.Errorf("healthy(True) gate's TGB must not be deleted, err=%v", err)
 	}
 }
 
@@ -1509,64 +1330,6 @@ func TestOnPodUpdated_PassThroughReadyAndHashMatch(t *testing.T) {
 	}
 }
 
-// Branch: Service exists, networkStatus is NotReady, hash matches, pod is
-// NOT PodReady -> OnPodUpdated keeps NetworkNotReady (gate hasn't flipped).
-// The healStuckReadinessGates pass is invoked but does nothing (no stuck
-// gates declared on the pod), exercising the "ready=false" branch.
-func TestOnPodUpdated_PodNotReady_KeepsNetworkNotReady(t *testing.T) {
-	scheme := nlbTestScheme(t)
-	conf := validNlbConf(testNlbARN, "8080/TCP")
-	pod := mkNlbPod("gd-0", "default", conf, `{"currentNetworkState":"NotReady"}`)
-	pod.Status.Conditions = []corev1.PodCondition{
-		{Type: corev1.PodReady, Status: corev1.ConditionFalse},
-	}
-
-	parsed := parseLbConfig(parseConf(t, conf))
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "gd-0",
-			Namespace: "default",
-			Annotations: map[string]string{
-				NlbARNAnnoKey:    testNlbARN,
-				NlbConfigHashKey: parsed.configHash(),
-			},
-			Labels: map[string]string{
-				ResourceTagKey: ResourceTagValue,
-				SvcSelectorKey: "gd-0",
-			},
-		},
-		Spec: corev1.ServiceSpec{
-			Type:  corev1.ServiceTypeClusterIP,
-			Ports: []corev1.ServicePort{{Port: 951, TargetPort: intstr.FromInt(8080), Protocol: corev1.ProtocolTCP}},
-		},
-	}
-	// Add a TGB so the inventory matches svc.Spec.Ports (skips re-sync patch).
-	tgb := &elbv2api.TargetGroupBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "gd-0-951",
-			Namespace: "default",
-			Labels: map[string]string{
-				ResourceTagKey: ResourceTagValue,
-				SvcSelectorKey: "gd-0",
-			},
-		},
-	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, svc, tgb).Build()
-
-	n := newNlbForPolicy()
-	got, perr := n.OnPodUpdated(c, pod, context.Background())
-	if perr != nil {
-		t.Fatalf("OnPodUpdated error: %v", perr)
-	}
-	annStatus := got.Annotations[gamekruiseiov1alpha1.GameServerNetworkStatus]
-	if !contains(annStatus, "NotReady") {
-		t.Errorf("expected NotReady, got %q", annStatus)
-	}
-	if contains(annStatus, `"Ready"`) && !contains(annStatus, "NotReady") {
-		t.Errorf("expected NotReady (not Ready), got %q", annStatus)
-	}
-}
-
 // Branch: Service exists, hash matches, pod IS PodReady -> OnPodUpdated
 // constructs the internal/external address lists from svc.Spec.Ports and
 // flips CurrentNetworkState to NetworkReady.
@@ -1905,86 +1668,6 @@ func TestSyncListenerAndTargetGroupBinding_BadPortAnnotation(t *testing.T) {
 	tgARN := "arn:aws:elasticloadbalancing:us-east-1:1:targetgroup/tg/x"
 	if err := syncListenerAndTargetGroupBinding(context.Background(), c, tg, &tgARN); err == nil {
 		t.Fatal("expected error for bad NlbPort annotation, got nil")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// healStuckReadinessGates: cover the not-found / TGB-missing branches that
-// the original test left at 0% (they're the warning-and-skip paths).
-// ---------------------------------------------------------------------------
-
-// All gates' TGBs are missing -> healStuckReadinessGates skips each and
-// returns 0 healed, without surfacing an error.
-func TestHealStuckReadinessGates_TGBNotFound(t *testing.T) {
-	scheme := nlbTestScheme(t)
-	now := metav1.Now()
-	stuck := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-9001")
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "gd-0", Namespace: "default"},
-		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{
-			{Type: stuck, Status: corev1.ConditionFalse,
-				LastTransitionTime: metav1.NewTime(now.Add(-300 * time.Second))},
-		}},
-	}
-	// No TGB exists for the gate -> Get returns NotFound -> branch skipped.
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
-	n := newNlbForPolicy()
-	healed := n.healStuckReadinessGates(context.Background(), c, pod, now.Unix())
-	if healed != 0 {
-		t.Errorf("expected 0 healed when TGB is NotFound, got %d", healed)
-	}
-}
-
-// TGB exists and is deleted, but the matching TG is missing -> the second Get
-// fails NotFound and the branch warns + continues without incrementing healed.
-// This pins the post-delete TG-NotFound branch.
-func TestHealStuckReadinessGates_TGNotFoundAfterTGBDeleted(t *testing.T) {
-	scheme := nlbTestScheme(t)
-	now := metav1.Now()
-	stuck := corev1.PodConditionType(ReadinessGatePrefix + "gd-0-9001")
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "gd-0", Namespace: "default"},
-		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{
-			{Type: stuck, Status: corev1.ConditionFalse,
-				LastTransitionTime: metav1.NewTime(now.Add(-300 * time.Second))},
-		}},
-	}
-	tgb := &elbv2api.TargetGroupBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "gd-0-9001", Namespace: "default"},
-	}
-	// Note: no TG with the same name exists -> the second Get fails.
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, tgb).Build()
-	n := newNlbForPolicy()
-	healed := n.healStuckReadinessGates(context.Background(), c, pod, now.Unix())
-	if healed != 0 {
-		t.Errorf("expected 0 healed when TG is NotFound (post-delete), got %d", healed)
-	}
-	// TGB must still have been deleted.
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "gd-0-9001", Namespace: "default"}, &elbv2api.TargetGroupBinding{}); !errors.IsNotFound(err) {
-		t.Errorf("TGB should have been deleted before TG lookup, err=%v", err)
-	}
-}
-
-// Conditions whose Type doesn't match the LB readiness-gate prefix are
-// completely ignored (e.g. PodReady, custom user gates), no matter their
-// status or age. This pins the prefix guard.
-func TestHealStuckReadinessGates_NonLbConditionsIgnored(t *testing.T) {
-	scheme := nlbTestScheme(t)
-	now := metav1.Now()
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "gd-0", Namespace: "default"},
-		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{
-			// Not an LB readiness gate -> must be skipped even though it is False
-			// and very old.
-			{Type: corev1.PodReady, Status: corev1.ConditionFalse,
-				LastTransitionTime: metav1.NewTime(now.Add(-1 * time.Hour))},
-		}},
-	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
-	n := newNlbForPolicy()
-	healed := n.healStuckReadinessGates(context.Background(), c, pod, now.Unix())
-	if healed != 0 {
-		t.Errorf("non-LB conditions must be ignored, got healed=%d", healed)
 	}
 }
 

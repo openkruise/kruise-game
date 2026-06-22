@@ -60,29 +60,10 @@ const (
 	NlbPortAnnoKey           = "service.beta.kubernetes.io/aws-load-balancer-nlb-port"
 	AWSTargetGroupSyncStatus = "aws-load-balancer-nlb-target-group-synced"
 	SvcSelectorKey           = "statefulset.kubernetes.io/pod-name"
-	// ReadinessGatePrefix is the prefix the AWS Load Balancer Controller uses for
-	// the pod readiness-gate condition it manages per TargetGroupBinding. The full
-	// condition type is ReadinessGatePrefix+<TargetGroupBinding name>, and the
-	// controller only sets it True once the corresponding NLB target is healthy.
-	// We pre-inject this gate in OnPodAdded so GameServer readiness reflects real
-	// NLB reachability rather than just "Service/TargetGroupBinding created".
-	ReadinessGatePrefix = "target-health.elbv2.k8s.aws/"
-	NlbConfigHashKey    = "game.kruise.io/network-config-hash"
-	ResourceTagKey      = "managed-by"
-	ResourceTagValue    = "game.kruise.io"
+	NlbConfigHashKey         = "game.kruise.io/network-config-hash"
+	ResourceTagKey           = "managed-by"
+	ResourceTagValue         = "game.kruise.io"
 )
-
-// ghostRegistrationStuckSeconds is how long a readiness gate may stay False
-// before we treat it as a stuck "ghost registration" and self-heal it.
-//
-// When a pod IP is reused while still draining in another TargetGroup, the AWS
-// Load Balancer Controller registers the target but AWS leaves it draining and
-// later drops it, so the gate stays False forever and the controller never
-// retries (the TargetGroupBinding spec hash is unchanged). A normal target goes
-// initial->healthy within the health-check window; anything stuck False well
-// beyond that is the bug. 90s comfortably covers a default health check
-// (interval*healthyThreshold) plus registration latency.
-const ghostRegistrationStuckSeconds = 90
 
 const (
 	healthCheckEnabled         = "healthCheckEnabled"
@@ -319,19 +300,22 @@ func (n *NlbPlugin) initLbCache(svcList []corev1.Service) {
 	}
 }
 
-// OnPodAdded allocates the NLB ports up-front and pre-injects the AWS Load
-// Balancer Controller pod readiness gates, one per allocated listener port.
+// OnPodAdded allocates the NLB ports up-front so the port is known at
+// pod-creation time. The allocation is pinned in podAllocate and reused by
+// syncTargetGroupAndService in OnPodUpdated, so no double allocation.
 //
-// Why allocate here (not lazily in OnPodUpdated): the readiness-gate condition
-// type must equal the TargetGroupBinding name (<pod>-<port>), so the port must
-// be known at pod-creation time. The allocation is pinned in podAllocate and
-// reused by syncTargetGroupAndService in OnPodUpdated, so no double allocation.
-//
-// Why gates at all: without them the GameServer is marked Ready as soon as the
-// Service/TargetGroupBinding exist — even when the NLB target never becomes
-// healthy (e.g. an IP reused while still draining in another TargetGroup).
-// The controller only flips this gate True once the target is actually healthy,
-// so pod (hence GameServer) readiness reflects real reachability.
+// NOTE: This plugin intentionally does NOT inject the AWS Load Balancer
+// Controller readiness gate (target-health.elbv2.k8s.aws/<tgb>) onto the pod.
+// Injecting it folds NLB target health into the pod's aggregate Ready condition,
+// which couples the GameServer's NetworkState to backend reachability. That
+// creates a deadlock for applications that wait for NetworkState=Ready before
+// they start listening: the app never listens -> the health check never passes
+// -> the target stays unhealthy -> the gate stays False -> the pod is never
+// Ready -> NetworkState stays NotReady -> the app never starts. Following the
+// alibabacloud/nlb baseline, NetworkState reflects "LB resources provisioned"
+// (Service/TargetGroupBinding created), not data-plane health. Target health is
+// left to the NLB's own health checks to gate traffic, without feeding back into
+// NetworkState.
 func (n *NlbPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
 	networkManager := utils.NewNetworkManager(pod, c)
 	if networkManager == nil {
@@ -343,26 +327,11 @@ func (n *NlbPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Con
 	}
 
 	podKey := pod.GetNamespace() + "/" + pod.GetName()
-	allocatedPorts, exist := n.podAllocate[podKey]
-	if !exist {
-		allocatedPorts = n.allocate(conf.loadBalancerARNs, len(conf.backends), podKey, conf.allocatePolicy)
+	if _, exist := n.podAllocate[podKey]; !exist {
+		allocatedPorts := n.allocate(conf.loadBalancerARNs, len(conf.backends), podKey, conf.allocatePolicy)
 		if allocatedPorts == nil {
 			return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError,
 				fmt.Sprintf("no NLB has %d enough available ports for %s", len(conf.backends), podKey))
-		}
-	}
-
-	// One readiness gate per listener port; condition type == TargetGroupBinding name.
-	existing := make(map[corev1.PodConditionType]bool, len(pod.Spec.ReadinessGates))
-	for _, g := range pod.Spec.ReadinessGates {
-		existing[g.ConditionType] = true
-	}
-	for _, port := range allocatedPorts.ports {
-		condType := corev1.PodConditionType(ReadinessGatePrefix + fmt.Sprintf("%s-%d", pod.GetName(), port))
-		if !existing[condType] {
-			pod.Spec.ReadinessGates = append(pod.Spec.ReadinessGates, corev1.PodReadinessGate{
-				ConditionType: condType,
-			})
 		}
 	}
 	return pod, nil
@@ -481,39 +450,16 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 		return pod, nil
 	}
 
-	// Readiness gating: the Service/TargetGroupBinding existing is NOT enough to
-	// declare the network ready — the NLB target may never become healthy (e.g.
-	// an IP reused while still draining in another TargetGroup leaves the target
-	// stuck/empty). The pod readiness gates injected in OnPodAdded are flipped
-	// True by the AWS Load Balancer Controller only once the targets are healthy,
-	// which is reflected in the aggregate PodReady condition. Until PodReady is
-	// True, keep the GameServer NetworkNotReady so its state reflects real
-	// reachability rather than just "resources created".
-	//
-	// IMPORTANT: refresh pod status from the API server before checking PodReady.
-	// OnPodUpdated runs only inside the mutating admission webhook for the `pods`
-	// resource. The kubelet writes the pod readiness condition through the
-	// `pods/status` subresource, which does NOT trigger this webhook. So the
-	// pod object the webhook decoded from the request body can carry a stale
-	// Status (PodReady=False) even when the live pod is already PodReady=True.
-	// Reading stale Status here pins GameServer NetworkState to NotReady forever
-	// (no further `pods` UPDATE will retrigger the check). Fetch the latest pod
-	// directly so the readiness gate decision uses authoritative state.
-	freshPod := &corev1.Pod{}
-	if err := c.Get(ctx, types.NamespacedName{Name: pod.GetName(), Namespace: pod.GetNamespace()}, freshPod); err == nil {
-		pod.Status = freshPod.Status
-	}
-	_, readyCondition := util.GetPodConditionFromList(pod.Status.Conditions, corev1.PodReady)
-	if readyCondition == nil || readyCondition.Status != corev1.ConditionTrue {
-		// Not ready yet. If a readiness gate has been stuck False well past the
-		// health-check window, it is a ghost registration that never self-heals;
-		// delete + re-sync the affected TargetGroupBinding(s) so the target
-		// registers cleanly. Scoped to this pod only.
-		n.healStuckReadinessGates(ctx, c, pod, metav1.Now().Unix())
-		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
-		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
-		return pod, cperrors.ToPluginError(err, cperrors.InternalError)
-	}
+	// NetworkState reflects "LB resources provisioned" (Service + TargetGroup +
+	// Listener + TargetGroupBinding created), NOT data-plane target health. We do
+	// NOT gate on pod readiness / NLB target health here: doing so couples
+	// NetworkState to backend reachability and deadlocks applications that wait
+	// for NetworkState=Ready before they start listening (the app never listens
+	// -> the health check never passes -> the target stays unhealthy -> the pod
+	// is never Ready -> NetworkState stays NotReady -> the app never starts).
+	// This matches the alibabacloud/nlb baseline, where the network is Ready once
+	// the LB Service exists. Target health remains the NLB's own concern for
+	// gating traffic and does not feed back into NetworkState.
 
 	// network ready
 	internalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
@@ -1133,68 +1079,6 @@ func syncListenerAndTargetGroupBinding(ctx context.Context, client client.Client
 	}
 
 	return nil
-}
-
-// healStuckReadinessGates self-heals "ghost registration": pod readiness gates
-// that have been False far longer than a healthy target should take. Such a
-// target is stuck draining/empty in AWS and the controller will never retry on
-// its own because the TargetGroupBinding spec hash is unchanged.
-//
-// The fix (validated): delete the stuck TargetGroupBinding and re-trigger a
-// fresh sync (reset the TargetGroup sync label to "false", which makes
-// handleTargetGroupEvent recreate the Listener + a brand-new TargetGroupBinding).
-// A brand-new TGB is reconciled from scratch — by which point the reused IP's
-// prior draining has finished — so the target registers cleanly.
-//
-// Scoped to a single pod's own TGBs (named <pod>-<port>), so it cannot disturb
-// other GameServers. Returns the number of TGBs healed.
-func (n *NlbPlugin) healStuckReadinessGates(ctx context.Context, c client.Client, pod *corev1.Pod, nowUnix int64) int {
-	healed := 0
-	for _, cond := range pod.Status.Conditions {
-		if !strings.HasPrefix(string(cond.Type), ReadinessGatePrefix) {
-			continue
-		}
-		if cond.Status == corev1.ConditionTrue {
-			continue
-		}
-		// Stuck only if it has been False long enough to rule out normal
-		// initial->healthy registration.
-		if cond.LastTransitionTime.IsZero() ||
-			nowUnix-cond.LastTransitionTime.Unix() < ghostRegistrationStuckSeconds {
-			continue
-		}
-		tgbName := strings.TrimPrefix(string(cond.Type), ReadinessGatePrefix)
-
-		// Delete the stuck TargetGroupBinding.
-		tgb := &elbv2api.TargetGroupBinding{}
-		if err := c.Get(ctx, types.NamespacedName{Name: tgbName, Namespace: pod.GetNamespace()}, tgb); err != nil {
-			if !errors.IsNotFound(err) {
-				log.Warningf("[%s] heal: get TGB %s/%s error %v", NlbNetwork, pod.GetNamespace(), tgbName, err)
-			}
-			continue
-		}
-		if err := c.Delete(ctx, tgb); err != nil && !errors.IsNotFound(err) {
-			log.Warningf("[%s] heal: delete TGB %s/%s error %v", NlbNetwork, pod.GetNamespace(), tgbName, err)
-			continue
-		}
-
-		// Re-trigger a fresh sync via the matching TargetGroup (same name).
-		tg := &ackv1alpha1.TargetGroup{}
-		if err := c.Get(ctx, types.NamespacedName{Name: tgbName, Namespace: pod.GetNamespace()}, tg); err != nil {
-			log.Warningf("[%s] heal: get TG %s/%s error %v", NlbNetwork, pod.GetNamespace(), tgbName, err)
-			continue
-		}
-		patch := client.RawPatch(types.MergePatchType,
-			[]byte(fmt.Sprintf(`{"metadata":{"labels":{"%s":"false"}}}`, AWSTargetGroupSyncStatus)))
-		if err := c.Patch(ctx, tg, patch); err != nil {
-			log.Warningf("[%s] heal: patch TG %s/%s sync=false error %v", NlbNetwork, pod.GetNamespace(), tgbName, err)
-			continue
-		}
-		log.Infof("[%s] heal: stuck readiness gate %s (False %ds) -> deleted TGB + re-synced",
-			NlbNetwork, cond.Type, nowUnix-cond.LastTransitionTime.Unix())
-		healed++
-	}
-	return healed
 }
 
 func getPorts(ports []corev1.ServicePort) []int32 {
