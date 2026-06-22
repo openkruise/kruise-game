@@ -528,102 +528,12 @@ func (manager GameServerManager) syncNetworkStatus() gameKruiseV1alpha1.NetworkS
 	gsNetworkStatus.ExternalAddresses = podNetworkStatus.ExternalAddresses
 	gsNetworkStatus.CurrentNetworkState = podNetworkStatus.CurrentNetworkState
 
-	// Fix A: the pod's network-status annotation is only written by the mutating
-	// webhook (OnPodUpdated), which is NOT triggered by pods/status subresource
-	// writes. A cloud LB controller flips its readiness gate (and the kubelet the
-	// PodReady condition) through pods/status, so the annotation can lag behind:
-	// it may still say NotReady long after the gate became True (or vice versa).
-	// This reconciler IS triggered by pod updates (it watches Pods), so correct
-	// the lagging annotation value using the authoritative readiness-gate state.
-	//
-	// We look at the LB-managed readiness gates declared on the pod (e.g.
-	// target-health.elbv2.k8s.aws/<tgb>) rather than the aggregate PodReady,
-	// because aggregate PodReady also folds in InPlaceUpdateReady, which flips
-	// False during an in-place pod update (e.g. when an ARN is added to NlbARNs)
-	// and would otherwise flap an already-reachable GameServer. The LB gates
-	// reflect real backend reachability and are unaffected by in-place updates.
-	//
-	// Only act once the network has actually been provisioned (external
-	// addresses exist), so we never override the early "resources not created
-	// yet" phase.
-	if len(podNetworkStatus.ExternalAddresses) > 0 {
-		switch lbReadinessGatesState(manager.pod) {
-		case gateAllTrue:
-			gsNetworkStatus.CurrentNetworkState = gameKruiseV1alpha1.NetworkReady
-		case gateAnyFalse:
-			gsNetworkStatus.CurrentNetworkState = gameKruiseV1alpha1.NetworkNotReady
-		case gateNone:
-			// No LB readiness gate on this pod (e.g. provider doesn't use gates) —
-			// keep the annotation-derived value untouched.
-		}
-	}
-
 	if gsNetworkStatus.DesiredNetworkState != desiredNetworkState(nm.GetNetworkDisabled()) {
 		gsNetworkStatus.DesiredNetworkState = desiredNetworkState(nm.GetNetworkDisabled())
 		gsNetworkStatus.LastTransitionTime = metav1.Now()
 	}
 
 	return gsNetworkStatus
-}
-
-// lbReadinessGateState summarises the cloud-LB-managed readiness gates on a pod.
-type lbReadinessGateState int
-
-const (
-	gateNone     lbReadinessGateState = iota // pod declares no LB readiness gate
-	gateAllTrue                              // all LB readiness gates are True
-	gateAnyFalse                             // at least one LB readiness gate is not True
-)
-
-// lbReadinessGatePrefixes are the readiness-gate condition-type prefixes used by
-// cloud load-balancer controllers to signal real backend reachability. These are
-// what cloud providers (e.g. the AWS Load Balancer Controller) flip True only once
-// the LB target is actually healthy. We deliberately exclude Kruise's own
-// InPlaceUpdateReady / KruisePodReady gates, which flip during in-place pod updates
-// and do not reflect backend reachability.
-var lbReadinessGatePrefixes = []string{
-	"target-health.elbv2.k8s.aws/",        // AWS Load Balancer Controller
-	"service.readiness.alibabacloud.com/", // Alibaba Cloud (auto_nlbs / multi_nlbs)
-}
-
-func isLbReadinessGate(t corev1.PodConditionType) bool {
-	for _, p := range lbReadinessGatePrefixes {
-		if strings.HasPrefix(string(t), p) {
-			return true
-		}
-	}
-	return false
-}
-
-// lbReadinessGatesState inspects the pod's declared readiness gates and their
-// current conditions, returning whether the LB-managed gates are all True, any
-// not-True, or absent. Only gates declared in pod.Spec.ReadinessGates are
-// considered, so providers that don't use gates yield gateNone.
-func lbReadinessGatesState(pod *corev1.Pod) lbReadinessGateState {
-	if pod == nil {
-		return gateNone
-	}
-	// Collect the LB readiness gates the pod declares.
-	declared := make(map[corev1.PodConditionType]bool)
-	for _, g := range pod.Spec.ReadinessGates {
-		if isLbReadinessGate(g.ConditionType) {
-			declared[g.ConditionType] = true
-		}
-	}
-	if len(declared) == 0 {
-		return gateNone
-	}
-	// Index the pod's current conditions.
-	condStatus := make(map[corev1.PodConditionType]corev1.ConditionStatus, len(pod.Status.Conditions))
-	for _, c := range pod.Status.Conditions {
-		condStatus[c.Type] = c.Status
-	}
-	for t := range declared {
-		if condStatus[t] != corev1.ConditionTrue {
-			return gateAnyFalse
-		}
-	}
-	return gateAllTrue
 }
 
 func desiredNetworkState(disabled bool) gameKruiseV1alpha1.NetworkState {
