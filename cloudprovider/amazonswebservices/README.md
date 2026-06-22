@@ -84,15 +84,7 @@ Official deployment documentation: https://docs.aws.amazon.com/eks/latest/usergu
 #### NlbARNs
 - Meaning: Fill in the ARN of the nlb, you can fill in multiple, and nlb needs to be created in AWS in advance.
 - Format: Separate each nlbARN with a comma. For example: arn:aws:elasticloadbalancing:us-east-1:888888888888:loadbalancer/net/aaa/3b332e6841f23870,arn:aws:elasticloadbalancing:us-east-1:000000000000:loadbalancer/net/bbb/5fe74944d794d27e
-- Support for change: Yes. Adding or replacing an ARN at runtime does NOT reconfigure already-allocated pods (they keep their pinned ARN/ports); only newly created pods will pick up the updated ARN list. This lets you grow capacity past the AWS hard limit of 50 listeners per NLB by appending another NLB ARN without disturbing existing game servers.
-
-#### AllocatePolicy
-- Meaning: How to allocate ports across multiple NLBs listed in `NlbARNs`. Only takes effect when `NlbARNs` contains more than one ARN.
-- Format:
-  - `default` — first-fit / spillover: iterate ARNs in order and fill the first NLB until it has no free ports left, then move on to the next ARN. This is the historical behavior.
-  - `balanced` — pick the NLB with the most free ports, spreading game servers across NLBs for fault-domain isolation.
-- Default: `default` (any unrecognized value, including empty, falls back to `default`).
-- Support for change: Yes — only affects subsequent allocations; already-allocated pods keep their pinned NLB.
+- Support for change: Yes
 
 #### NlbVPCId
 

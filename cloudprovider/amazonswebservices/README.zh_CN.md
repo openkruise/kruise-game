@@ -83,15 +83,7 @@ TargetGroupBinding的CRD及控制器：https://github.com/kubernetes-sigs/aws-lo
 #### NlbARNs
 - 含义：填写nlb的arn，可填写多个，需要现在【AWS】中创建好nlb。
 - 填写格式：各个nlbARN用,分割。例如：arn:aws:elasticloadbalancing:us-east-1:888888888888:loadbalancer/net/aaa/3b332e6841f23870,arn:aws:elasticloadbalancing:us-east-1:000000000000:loadbalancer/net/bbb/5fe74944d794d27e
-- 是否支持变更：是。运行时新增或替换 ARN 不会重新配置已分配的 pod（仍保留各自原有的 ARN 与端口），只有新创建的 pod 会使用更新后的 ARN 列表。这样可以在不打扰已有游戏服的前提下，通过追加新的 NLB ARN 突破 AWS"单 NLB 最多 50 个 listener"的硬性上限实现扩容。
-
-#### AllocatePolicy
-- 含义：当 `NlbARNs` 配置了多个 NLB 时，新 pod 的端口分配策略。仅在 `NlbARNs` 包含多个 ARN 时生效。
-- 填写格式：
-  - `default`：first-fit 溢出策略，按 `NlbARNs` 列表顺序，先把第一个 NLB 填满再使用下一个。这是历史默认行为。
-  - `balanced`：均衡策略，选择当前剩余空闲端口最多的 NLB，让游戏服跨 NLB 摊平做故障域隔离。
-- 默认值：`default`（未填写或无法识别的值都按 `default` 处理）。
-- 是否支持变更：是。仅影响后续新分配的 pod，已分配的 pod 保留原有的 NLB 绑定。
+- 是否支持变更：是
 
 #### NlbVPCId
 

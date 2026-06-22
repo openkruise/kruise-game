@@ -116,7 +116,6 @@ rules:
   - targetgroupbindings
   verbs:
   - create
-  - delete
   - get
   - list
   - patch
