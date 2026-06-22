@@ -20,8 +20,7 @@ COPY cloudprovider/ cloudprovider/
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -ldflags "${LDFLAGS}" -o manager main.go
 
 # Use distroless as minimal base images to package the manager binary
-# Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM alpine:3.14
+FROM alpine:3.20
 WORKDIR /
 COPY --from=builder /workspace/manager .
 

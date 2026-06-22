@@ -50,6 +50,7 @@ import (
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/cloudprovider"
 	aliv1beta1 "github.com/openkruise/kruise-game/cloudprovider/alibabacloud/apis/v1beta1"
+	alibabacloudplugin "github.com/openkruise/kruise-game/cloudprovider/alibabacloud"
 	cpmanager "github.com/openkruise/kruise-game/cloudprovider/manager"
 	kruisegameclientset "github.com/openkruise/kruise-game/pkg/client/clientset/versioned"
 	kruisegamevisions "github.com/openkruise/kruise-game/pkg/client/informers/externalversions"
@@ -88,6 +89,9 @@ func init() {
 	// Register NLB and EIP CRD schemes for AutoNLBs-V2
 	utilruntime.Must(nlbv1.SchemeBuilder.AddToScheme(scheme))
 	utilruntime.Must(eipv1.AddToScheme(scheme))
+
+	// Register PortAllocation CRD scheme for AlibabaCloud-AutoNLBs-V3
+	utilruntime.Must(alibabacloudplugin.AddNLBPoolToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 

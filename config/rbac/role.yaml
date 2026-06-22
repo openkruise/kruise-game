@@ -200,3 +200,21 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - nlbpool.alibabacloud.com
+  resources:
+  - portallocations
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - nlbpool.alibabacloud.com
+  resources:
+  - portallocations/status
+  verbs:
+  - get
+  - list
+  - watch

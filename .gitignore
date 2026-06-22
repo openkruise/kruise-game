@@ -7,7 +7,10 @@
 *.dylib
 *.DS_Store
 bin
+bin/
+manager
 testbin/*
+test/e2e/e2e-artifacts/
 
 # Test binary, build with `go test -c`
 *.test
@@ -29,6 +32,9 @@ testbin/*
 
 # Temporary kustomize overlay for tracing
 config/.tracing-overlay-temp/
+
+# controller-gen generated empty CRD placeholder
+config/crd/bases/_.yaml
 
 # Coverage and test artifacts
 coverage.out
