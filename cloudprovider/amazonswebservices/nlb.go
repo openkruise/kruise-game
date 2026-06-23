@@ -50,6 +50,7 @@ const (
 	NlbNetwork               = "AmazonWebServices-NLB"
 	AliasNlb                 = "NLB-Network"
 	NlbARNsConfigName        = "NlbARNs"
+	AllocatePolicyConfigName = "AllocatePolicy"
 	NlbVPCIdConfigName       = "NlbVPCId"
 	NlbHealthCheckConfigName = "NlbHealthCheck"
 	PortProtocolsConfigName  = "PortProtocols"
@@ -74,6 +75,14 @@ const (
 	healthyThresholdCount      = "healthyThresholdCount"
 	unhealthyThresholdCount    = "unhealthyThresholdCount"
 	listenerActionType         = "forward"
+)
+
+const (
+	// allocatePolicyDefault: first-fit 溢出——按 ARN 列表顺序, 第一个够用就用, 填满前一个才用下一个。
+	allocatePolicyDefault = "default"
+	// allocatePolicyBalanced: 均衡——选当前剩余空闲端口最多的 NLB, 把游戏服摊平到各 NLB(故障域隔离)。
+	// 移植自 cloudprovider/alibabacloud/multi_nlbs.go 的 "balanced" 策略。
+	allocatePolicyBalanced = "balanced"
 )
 
 // ProtocolTCPUDP is a synthetic protocol value indicating that a target
@@ -119,11 +128,35 @@ type healthCheck struct {
 
 type nlbConfig struct {
 	loadBalancerARNs []string
+	allocatePolicy   string
 	healthCheck      *healthCheck
 	vpcID            string
 	backends         []*backend
 	isFixed          bool
 	annotations      map[string]string
+}
+
+// configHash returns the hash used to detect whether a pod's network must be
+// reconfigured. It intentionally EXCLUDES loadBalancerARNs.
+//
+// Which NLB a pod uses is decided once at allocation time and then pinned in
+// the podAllocate cache and the per-pod Service/TargetGroup/Listener objects
+// (named after the pod). Adding or removing an ARN in NlbARNs must NOT force
+// already-allocated pods to reconfigure: doing so re-runs port allocation
+// against a freshly-added NLB whose port cache is empty, causing double
+// allocation, orphan listeners and a non-self-healing deadlock (servers that
+// were healthy get knocked to NotReady). By hashing everything EXCEPT the ARN
+// list, a change to NlbARNs leaves existing pods untouched (they keep their
+// pinned ARN/ports), while only NEW pods pick up the newly added ARN via
+// allocate(). Other config changes (health check, ports, protocols, fixed,
+// annotations) still change the hash and trigger a legitimate reconfigure.
+func (c *nlbConfig) configHash() string {
+	if c == nil {
+		return ""
+	}
+	view := *c
+	view.loadBalancerARNs = nil
+	return util.GetHash(view)
 }
 
 func startWatchTargetGroup(ctx context.Context) error {
@@ -267,7 +300,40 @@ func (n *NlbPlugin) initLbCache(svcList []corev1.Service) {
 	}
 }
 
+// OnPodAdded allocates the NLB ports up-front so the port is known at
+// pod-creation time. The allocation is pinned in podAllocate and reused by
+// syncTargetGroupAndService in OnPodUpdated, so no double allocation.
+//
+// NOTE: This plugin intentionally does NOT inject the AWS Load Balancer
+// Controller readiness gate (target-health.elbv2.k8s.aws/<tgb>) onto the pod.
+// Injecting it folds NLB target health into the pod's aggregate Ready condition,
+// which couples the GameServer's NetworkState to backend reachability. That
+// creates a deadlock for applications that wait for NetworkState=Ready before
+// they start listening: the app never listens -> the health check never passes
+// -> the target stays unhealthy -> the gate stays False -> the pod is never
+// Ready -> NetworkState stays NotReady -> the app never starts. Following the
+// alibabacloud/nlb baseline, NetworkState reflects "LB resources provisioned"
+// (Service/TargetGroupBinding created), not data-plane health. Target health is
+// left to the NLB's own health checks to gate traffic, without feeding back into
+// NetworkState.
 func (n *NlbPlugin) OnPodAdded(c client.Client, pod *corev1.Pod, ctx context.Context) (*corev1.Pod, cperrors.PluginError) {
+	networkManager := utils.NewNetworkManager(pod, c)
+	if networkManager == nil {
+		return pod, nil
+	}
+	conf := parseLbConfig(networkManager.GetNetworkConfig())
+	if conf == nil || len(conf.loadBalancerARNs) == 0 || len(conf.backends) == 0 {
+		return pod, nil
+	}
+
+	podKey := pod.GetNamespace() + "/" + pod.GetName()
+	if _, exist := n.podAllocate[podKey]; !exist {
+		allocatedPorts := n.allocate(conf.loadBalancerARNs, len(conf.backends), podKey, conf.allocatePolicy)
+		if allocatedPorts == nil {
+			return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError,
+				fmt.Sprintf("no NLB has %d enough available ports for %s", len(conf.backends), podKey))
+		}
+	}
 	return pod, nil
 }
 
@@ -280,6 +346,9 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	}
 	networkConfig := networkManager.GetNetworkConfig()
 	lbConfig := parseLbConfig(networkConfig)
+	if err := validateLbConfig(lbConfig); err != nil {
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, err.Error())
+	}
 	if networkStatus == nil {
 		pod, err := networkManager.UpdateNetworkStatus(gamekruiseiov1alpha1.NetworkStatus{
 			CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady,
@@ -301,7 +370,10 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 	}
 
 	// update svc
-	if util.GetHash(lbConfig) != svc.GetAnnotations()[NlbConfigHashKey] {
+	// Use configHash (excludes loadBalancerARNs) so that adding/removing an ARN
+	// in NlbARNs does NOT trigger a reconfigure of already-allocated pods —
+	// avoiding the full-reset + port-collision deadlock (see configHash doc).
+	if lbConfig.configHash() != svc.GetAnnotations()[NlbConfigHashKey] {
 		networkStatus.CurrentNetworkState = gamekruiseiov1alpha1.NetworkNotReady
 		pod, err = networkManager.UpdateNetworkStatus(*networkStatus, pod)
 		if err != nil {
@@ -360,6 +432,34 @@ func (n *NlbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 			}
 		}
 	}
+
+	// Default pass-through for an already-established pod: if the GameServer is
+	// already NetworkReady AND the network config is unchanged (same Service
+	// hash), this OnPodUpdated was triggered by something unrelated to network
+	// readiness — e.g. an InPlace update of pod annotations when an ARN is added
+	// to NlbARNs. Re-running the readiness gate here is harmful: the InPlace
+	// update transiently drives PodReady to False (the InPlaceUpdateReady gate
+	// flips False), so the gate check below would knock a healthy old pod to
+	// NetworkNotReady. Worse, recovery (gate True / PodReady True) is written via
+	// the pods/status subresource, which does NOT re-trigger this webhook, so the
+	// GameServer would stay NotReady indefinitely. The gate's job is to gate a
+	// pod BEFORE its first readiness; once a pod is Ready with config unchanged,
+	// leave it alone. (See docs/11 scenario S4.)
+	if networkStatus.CurrentNetworkState == gamekruiseiov1alpha1.NetworkReady &&
+		lbConfig.configHash() == svc.GetAnnotations()[NlbConfigHashKey] {
+		return pod, nil
+	}
+
+	// NetworkState reflects "LB resources provisioned" (Service + TargetGroup +
+	// Listener + TargetGroupBinding created), NOT data-plane target health. We do
+	// NOT gate on pod readiness / NLB target health here: doing so couples
+	// NetworkState to backend reachability and deadlocks applications that wait
+	// for NetworkState=Ready before they start listening (the app never listens
+	// -> the health check never passes -> the target stays unhealthy -> the pod
+	// is never Ready -> NetworkState stays NotReady -> the app never starts).
+	// This matches the alibabacloud/nlb baseline, where the network is Ready once
+	// the LB Service exists. Target health remains the NLB's own concern for
+	// gating traffic and does not feed back into NetworkState.
 
 	// network ready
 	internalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
@@ -442,7 +542,7 @@ func (n *NlbPlugin) OnPodDeleted(client client.Client, pod *corev1.Pod, ctx cont
 	return nil
 }
 
-func (n *NlbPlugin) allocate(lbARNs []string, num int, nsName string) *nlbPorts {
+func (n *NlbPlugin) allocate(lbARNs []string, num int, nsName string, policy string) *nlbPorts {
 	n.mutex.Lock()
 	defer n.mutex.Unlock()
 
@@ -451,8 +551,8 @@ func (n *NlbPlugin) allocate(lbARNs []string, num int, nsName string) *nlbPorts 
 		n.initCache(nlbARN)
 	}
 
-	// Find lbARN with enough free ports
-	selectedARN := n.findLbWithFreePorts(lbARNs, num)
+	// Find lbARN with enough free ports according to the allocate policy
+	selectedARN := n.findLbWithFreePorts(lbARNs, num, policy)
 	if selectedARN == "" {
 		return nil
 	}
@@ -465,7 +565,34 @@ func (n *NlbPlugin) allocate(lbARNs []string, num int, nsName string) *nlbPorts 
 	return &nlbPorts{arn: selectedARN, ports: ports}
 }
 
-func (n *NlbPlugin) findLbWithFreePorts(lbARNs []string, num int) string {
+// findLbWithFreePorts selects a NLB ARN that has at least num free ports.
+//   - "default" (first-fit / 溢出): iterate ARNs in order, return the first one
+//     with enough free ports — fills the earlier NLB before spilling to the next.
+//   - "balanced": pick the NLB with the MOST free ports, spreading game servers
+//     across NLBs (fault-domain isolation). Ported from the alibabacloud plugin.
+func (n *NlbPlugin) findLbWithFreePorts(lbARNs []string, num int, policy string) string {
+	if policy == allocatePolicyBalanced {
+		bestARN := ""
+		maxFree := 0
+		for _, nlbARN := range lbARNs {
+			freePorts := 0
+			for i := n.minPort; i <= n.maxPort; i++ {
+				if !n.cache[nlbARN][i] {
+					freePorts++
+				}
+			}
+			if freePorts > maxFree {
+				maxFree = freePorts
+				bestARN = nlbARN
+			}
+		}
+		if maxFree >= num {
+			return bestARN
+		}
+		return ""
+	}
+
+	// default: first-fit / 溢出
 	for _, nlbARN := range lbARNs {
 		freePorts := 0
 		for i := n.minPort; i <= n.maxPort && freePorts < num; i++ {
@@ -527,6 +654,7 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *nlbConfig {
 	backends := make([]*backend, 0)
 	isFixed := false
 	annotations := map[string]string{}
+	allocatePolicy := allocatePolicyDefault
 	for _, c := range conf {
 		switch c.Name {
 		case NlbARNsConfigName:
@@ -534,6 +662,10 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *nlbConfig {
 				if nlbARN != "" {
 					lbARNs = append(lbARNs, nlbARN)
 				}
+			}
+		case AllocatePolicyConfigName:
+			if c.Value == allocatePolicyBalanced {
+				allocatePolicy = allocatePolicyBalanced
 			}
 		case NlbHealthCheckConfigName:
 			for _, healthCheckConf := range strings.Split(c.Value, ",") {
@@ -620,12 +752,83 @@ func parseLbConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) *nlbConfig {
 	}
 	return &nlbConfig{
 		loadBalancerARNs: lbARNs,
+		allocatePolicy:   allocatePolicy,
 		healthCheck:      &hc,
 		vpcID:            vpcId,
 		backends:         backends,
 		isFixed:          isFixed,
 		annotations:      annotations,
 	}
+}
+
+// validateLbConfig rejects network configurations that AWS would reject (or that
+// would otherwise stall silently) when the plugin creates the Service / target
+// group / listener, surfacing a clear error early instead of failing deep in an
+// AWS API call or leaving the GameServer stuck in NotReady. All limits follow
+// the AWS ELBv2 API (see CreateTargetGroup / Health checks for NLB target
+// groups). The NLB plugin always uses target type "ip".
+func validateLbConfig(config *nlbConfig) error {
+	if config == nil {
+		return nil
+	}
+
+	// NlbARNs is required: without a load balancer ARN the plugin cannot
+	// allocate a frontend port.
+	if len(config.loadBalancerARNs) == 0 {
+		return fmt.Errorf("%s is required: at least one NLB ARN must be provided", NlbARNsConfigName)
+	}
+
+	// PortProtocols is required and each entry must be a valid port/protocol.
+	if len(config.backends) == 0 {
+		return fmt.Errorf("%s is required: at least one port/protocol must be provided", PortProtocolsConfigName)
+	}
+	for _, b := range config.backends {
+		if b.targetPort < 1 || b.targetPort > 65535 {
+			return fmt.Errorf("%s port %d is invalid: must be in [1,65535]", PortProtocolsConfigName, b.targetPort)
+		}
+		switch b.protocol {
+		case corev1.ProtocolTCP, corev1.ProtocolUDP, ProtocolTCPUDP:
+		default:
+			return fmt.Errorf("%s protocol %q is invalid: must be one of TCP, UDP, TCPUDP", PortProtocolsConfigName, b.protocol)
+		}
+	}
+
+	hc := config.healthCheck
+	if hc == nil {
+		return nil
+	}
+
+	// Target type "ip" requires health checks to be always enabled and they
+	// cannot be disabled. healthCheckEnabled=false makes ack-elbv2 fail to sync
+	// the target group ("Health check enabled must be true with groups with
+	// target type ip"), silently stalling listener creation.
+	if hc.healthCheckEnabled != nil && !*hc.healthCheckEnabled {
+		return fmt.Errorf("%s healthCheckEnabled=false is not allowed: the plugin creates target groups with target type \"ip\", for which AWS requires health checks to be always enabled; remove healthCheckEnabled or set it to true", NlbHealthCheckConfigName)
+	}
+
+	// For NLB, only TCP/HTTP/HTTPS health-check protocols are supported;
+	// UDP/TCP_UDP/TLS/GENEVE are not valid health-check protocols.
+	if hc.healthCheckProtocol != nil {
+		p := strings.ToUpper(*hc.healthCheckProtocol)
+		switch p {
+		case "TCP", "HTTP", "HTTPS":
+		default:
+			return fmt.Errorf("%s healthCheckProtocol %q is invalid: NLB health checks support only TCP, HTTP or HTTPS", NlbHealthCheckConfigName, *hc.healthCheckProtocol)
+		}
+	}
+	if hc.healthCheckIntervalSeconds != nil && (*hc.healthCheckIntervalSeconds < 5 || *hc.healthCheckIntervalSeconds > 300) {
+		return fmt.Errorf("%s healthCheckIntervalSeconds %d is invalid: must be in [5,300]", NlbHealthCheckConfigName, *hc.healthCheckIntervalSeconds)
+	}
+	if hc.healthCheckTimeoutSeconds != nil && (*hc.healthCheckTimeoutSeconds < 2 || *hc.healthCheckTimeoutSeconds > 120) {
+		return fmt.Errorf("%s healthCheckTimeoutSeconds %d is invalid: must be in [2,120]", NlbHealthCheckConfigName, *hc.healthCheckTimeoutSeconds)
+	}
+	if hc.healthyThresholdCount != nil && (*hc.healthyThresholdCount < 2 || *hc.healthyThresholdCount > 10) {
+		return fmt.Errorf("%s healthyThresholdCount %d is invalid: must be in [2,10]", NlbHealthCheckConfigName, *hc.healthyThresholdCount)
+	}
+	if hc.unhealthyThresholdCount != nil && (*hc.unhealthyThresholdCount < 2 || *hc.unhealthyThresholdCount > 10) {
+		return fmt.Errorf("%s unhealthyThresholdCount %d is invalid: must be in [2,10]", NlbHealthCheckConfigName, *hc.unhealthyThresholdCount)
+	}
+	return nil
 }
 
 // consSvcPorts builds the ServicePort list for the backing ClusterIP Service.
@@ -718,7 +921,7 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 	podKey := pod.GetNamespace() + "/" + pod.GetName()
 	allocatedPorts, exist := n.podAllocate[podKey]
 	if !exist {
-		allocatedPorts = n.allocate(config.loadBalancerARNs, len(config.backends), podKey)
+		allocatedPorts = n.allocate(config.loadBalancerARNs, len(config.backends), podKey, config.allocatePolicy)
 		if allocatedPorts == nil {
 			return fmt.Errorf("no NLB has %d enough available ports for %s", len(config.backends), podKey)
 		}
@@ -732,22 +935,24 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 		protocol := awsTargetGroupProtocol(config.backends[i].protocol)
 		targetPort := int64(config.backends[i].targetPort)
 		var targetTypeIP = string(ackv1alpha1.TargetTypeEnum_ip)
-		_, err := controllerutil.CreateOrUpdate(ctx, client, &ackv1alpha1.TargetGroup{
+		tg := &ackv1alpha1.TargetGroup{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:            targetGroupName,
-				Namespace:       pod.GetNamespace(),
-				OwnerReferences: ownerReference,
-				Labels: map[string]string{
-					ResourceTagKey:           ResourceTagValue,
-					SvcSelectorKey:           pod.GetName(),
-					AWSTargetGroupSyncStatus: "false",
-				},
-				Annotations: map[string]string{
-					NlbARNAnnoKey:  lbARN,
-					NlbPortAnnoKey: fmt.Sprintf("%d", ports[i]),
-				},
+				Name:      targetGroupName,
+				Namespace: pod.GetNamespace(),
 			},
-			Spec: ackv1alpha1.TargetGroupSpec{
+		}
+		_, err := controllerutil.CreateOrUpdate(ctx, client, tg, func() error {
+			tg.OwnerReferences = ownerReference
+			tg.Labels = map[string]string{
+				ResourceTagKey:           ResourceTagValue,
+				SvcSelectorKey:           pod.GetName(),
+				AWSTargetGroupSyncStatus: "false",
+			}
+			tg.Annotations = map[string]string{
+				NlbARNAnnoKey:  lbARN,
+				NlbPortAnnoKey: fmt.Sprintf("%d", ports[i]),
+			}
+			tg.Spec = ackv1alpha1.TargetGroupSpec{
 				HealthCheckEnabled:         config.healthCheck.healthCheckEnabled,
 				HealthCheckIntervalSeconds: config.healthCheck.healthCheckIntervalSeconds,
 				HealthCheckPath:            config.healthCheck.healthCheckPath,
@@ -763,8 +968,9 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 				TargetType:                 &targetTypeIP,
 				Tags: []*ackv1alpha1.Tag{{Key: ptr.To[string](ResourceTagKey),
 					Value: ptr.To[string](ResourceTagValue)}},
-			},
-		}, func() error { return nil })
+			}
+			return nil
+		})
 		if err != nil {
 			return err
 		}
@@ -773,30 +979,31 @@ func (n *NlbPlugin) syncTargetGroupAndService(config *nlbConfig,
 	svcPorts := consSvcPorts(config.backends, ports)
 	annotations := map[string]string{
 		NlbARNAnnoKey:    lbARN,
-		NlbConfigHashKey: util.GetHash(config),
+		NlbConfigHashKey: config.configHash(),
 	}
 	for key, value := range config.annotations {
 		annotations[key] = value
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, client, &corev1.Service{
+	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            pod.GetName(),
-			Namespace:       pod.GetNamespace(),
-			Annotations:     annotations,
-			OwnerReferences: ownerReference,
-			Labels: map[string]string{
-				ResourceTagKey: ResourceTagValue,
-				SvcSelectorKey: pod.GetName(),
-			},
+			Name:      pod.GetName(),
+			Namespace: pod.GetNamespace(),
 		},
-		Spec: corev1.ServiceSpec{
-			Type: corev1.ServiceTypeClusterIP,
-			Selector: map[string]string{
-				SvcSelectorKey: pod.GetName(),
-			},
-			Ports: svcPorts,
-		},
-	}, func() error { return nil })
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, client, svc, func() error {
+		svc.Annotations = annotations
+		svc.OwnerReferences = ownerReference
+		svc.Labels = map[string]string{
+			ResourceTagKey: ResourceTagValue,
+			SvcSelectorKey: pod.GetName(),
+		}
+		svc.Spec.Type = corev1.ServiceTypeClusterIP
+		svc.Spec.Selector = map[string]string{
+			SvcSelectorKey: pod.GetName(),
+		}
+		svc.Spec.Ports = svcPorts
+		return nil
+	})
 	if err != nil {
 		return err
 	}
@@ -813,17 +1020,19 @@ func syncListenerAndTargetGroupBinding(ctx context.Context, client client.Client
 	}
 	lbARN := tg.Annotations[NlbARNAnnoKey]
 	podName := tg.Labels[SvcSelectorKey]
-	_, err = controllerutil.CreateOrUpdate(ctx, client, &ackv1alpha1.Listener{
+	listener := &ackv1alpha1.Listener{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            tg.GetName(),
-			Namespace:       tg.GetNamespace(),
-			OwnerReferences: tg.GetOwnerReferences(),
-			Labels: map[string]string{
-				ResourceTagKey: ResourceTagValue,
-				SvcSelectorKey: podName,
-			},
+			Name:      tg.GetName(),
+			Namespace: tg.GetNamespace(),
 		},
-		Spec: ackv1alpha1.ListenerSpec{
+	}
+	_, err = controllerutil.CreateOrUpdate(ctx, client, listener, func() error {
+		listener.OwnerReferences = tg.GetOwnerReferences()
+		listener.Labels = map[string]string{
+			ResourceTagKey: ResourceTagValue,
+			SvcSelectorKey: podName,
+		}
+		listener.Spec = ackv1alpha1.ListenerSpec{
 			Protocol:        tg.Spec.Protocol,
 			Port:            &port,
 			LoadBalancerARN: &lbARN,
@@ -835,32 +1044,36 @@ func syncListenerAndTargetGroupBinding(ctx context.Context, client client.Client
 			},
 			Tags: []*ackv1alpha1.Tag{{Key: ptr.To[string](ResourceTagKey),
 				Value: ptr.To[string](ResourceTagValue)}},
-		},
-	}, func() error { return nil })
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
 
 	var targetTypeIP = elbv2api.TargetTypeIP
-	_, err = controllerutil.CreateOrUpdate(ctx, client, &elbv2api.TargetGroupBinding{
+	tgb := &elbv2api.TargetGroupBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            tg.GetName(),
-			Namespace:       tg.GetNamespace(),
-			OwnerReferences: tg.GetOwnerReferences(),
-			Labels: map[string]string{
-				ResourceTagKey: ResourceTagValue,
-				SvcSelectorKey: podName,
-			},
+			Name:      tg.GetName(),
+			Namespace: tg.GetNamespace(),
 		},
-		Spec: elbv2api.TargetGroupBindingSpec{
+	}
+	_, err = controllerutil.CreateOrUpdate(ctx, client, tgb, func() error {
+		tgb.OwnerReferences = tg.GetOwnerReferences()
+		tgb.Labels = map[string]string{
+			ResourceTagKey: ResourceTagValue,
+			SvcSelectorKey: podName,
+		}
+		tgb.Spec = elbv2api.TargetGroupBindingSpec{
 			TargetGroupARN: *targetGroupARN,
 			TargetType:     &targetTypeIP,
 			ServiceRef: elbv2api.ServiceReference{
 				Name: podName,
 				Port: intstr.FromInt(int(port)),
 			},
-		},
-	}, func() error { return nil })
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
