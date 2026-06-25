@@ -1,5 +1,52 @@
 # Change Log
 
+## v1.1.0
+> Change log since v1.0.0
+
+### Features & Enhancements
+- feat: add AlibabaCloud-AutoNLBs-V3 network plugin #335
+- feat(aws-nlb): multi-NLB dynamic ARN & AllocatePolicy #363
+- feat: aws nlb tcpudp protocol support #355
+- feat(autoscaler): add wtdbThreshold parameter #346
+- feat: add --pprof-bind-address flag #342
+- feat: add namespace prefix to NLB LoadBalancerName #331
+- feat(hostport): implement port-reuse with least-used allocation strategy #327
+- feat: add nodeName label to GameServer #328
+- feat: add gs-updating-containers annotation #317
+- feat: add SecurityProtectionTypes support for Auto-NLBs-V2 #305
+- feat: Add token authentication support for OTLP gRPC endpoints #306
+- feat: decouple OTLP logs from traces and add export logging #308
+- feat: add new network plugin named AlibabaCloud-AutoNLBs-V2 #296
+- feat(observability): implement full OpenTelemetry stack #294
+- feat: add template variable support for ServiceQuality #289
+- feat(logging): JSON logs and unified logging pipeline #276
+- feat: add ready & network ready duration for gameserver #277
+- feat: add balanced AllocatePolicy for AlibabaCloud-Multi-NLBs #275
+- feat: set service proxy name to dummy #273
+- feat: enable leader election #255
+- add huawei cloud EIP support, enhanced support for ELB #261
+
+### Bug Fixes
+- fix: remove minAvailable floor in scale-down priority branch #356
+- fix: correct NLB service prewarming when ReserveNlbNum=0 #333
+- fix: capture Run() error in metrics controller goroutine #330
+- fix: add scheduling check in NodePort plugin #320
+- fix: handle net.Listen error in gRPC ExternalScaler #324
+- fix: deep copy labels and annotations in SyncPodToGs #329
+- fix: correct typos and improve clarity #310
+- fix(gameserver): patch spec minimally #283
+- fix: svc ports name should allow RFC-1123 #284
+- Fix/network manager bugs and tests #315
+
+### Deps
+- deps: update e2e kruise version to 1.8 #265
+- deps: update codecov version for github workflow #263
+- ci(e2e): Add E2E workflow for Kubernetes 1.34 #287
+- GameServerSet: prevent stale-cache overwrites #286
+- Enhance GameServerSet Unit Test Coverage #271
+- Harden and Optimize CI Workflow #268
+- Add unit tests for SetupWithManager #274, #269
+
 ## v1.0.0
 > Change log since v0.10.0
 
