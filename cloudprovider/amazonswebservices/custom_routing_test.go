@@ -892,3 +892,87 @@ func TestCustomRoutingFixedIgnored(t *testing.T) {
 		t.Errorf("expected Deny even with Fixed=true, got %#v", fake.denyCalls)
 	}
 }
+
+// TestCustomRoutingTCPUDPProtocol verifies that Protocol=TCPUDP fans the
+// NetworkStatus out to two NetworkPort entries (TCP + UDP) per anycast IP,
+// sharing the same accelerator port. The data plane only needs one Allow
+// call (AGA itself carries both protocols on the same (IP, port) when the
+// EG destination-configurations include both).
+func TestCustomRoutingTCPUDPProtocol(t *testing.T) {
+	fake := newFakeAGA()
+	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
+
+	pod := newTestPod(testPodIP)
+	conf := []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
+		{Name: CustomRoutingGamePortConfigName, Value: "7777"},
+		{Name: CustomRoutingProtocolConfigName, Value: "TCPUDP"},
+		{Name: CustomRoutingEndpointIdConfigName, Value: testSubnet},
+	}
+	confBytes, _ := json.Marshal(conf)
+	pod.Annotations[gamekruiseiov1alpha1.GameServerNetworkConf] = string(confBytes)
+
+	out, perr := p.OnPodAdded(nil, pod, context.Background())
+	if perr != nil {
+		t.Fatalf("OnPodAdded error: %v", perr)
+	}
+	if len(fake.allowCalls) != 1 {
+		t.Errorf("Protocol=TCPUDP must NOT double-call Allow (AGA covers both protocols per (IP,port)); got %#v", fake.allowCalls)
+	}
+
+	ns := getNetworkStatus(t, out)
+	if ns == nil || ns.CurrentNetworkState != gamekruiseiov1alpha1.NetworkReady {
+		t.Fatalf("expected Ready, got %#v", ns)
+	}
+	if len(ns.ExternalAddresses) != 1 {
+		t.Fatalf("expected exactly 1 external anycast IP, got %d", len(ns.ExternalAddresses))
+	}
+	gotProtocols := map[corev1.Protocol]int32{}
+	for _, port := range ns.ExternalAddresses[0].Ports {
+		gotProtocols[port.Protocol] = int32(port.Port.IntValue())
+	}
+	if len(gotProtocols) != 2 {
+		t.Errorf("expected TCP+UDP fan-out under one anycast IP, got %#v", gotProtocols)
+	}
+	if gotProtocols[corev1.ProtocolTCP] != gotProtocols[corev1.ProtocolUDP] || gotProtocols[corev1.ProtocolTCP] == 0 {
+		t.Errorf("TCP and UDP must share the same accelerator port, got %#v", gotProtocols)
+	}
+
+	// Internal addresses must also fan out to TCP + UDP.
+	if len(ns.InternalAddresses) != 1 || len(ns.InternalAddresses[0].Ports) != 2 {
+		t.Errorf("expected internalAddresses to fan out to TCP+UDP, got %#v", ns.InternalAddresses)
+	}
+	gotInternalProtocols := map[corev1.Protocol]bool{}
+	for _, port := range ns.InternalAddresses[0].Ports {
+		gotInternalProtocols[port.Protocol] = true
+	}
+	if !gotInternalProtocols[corev1.ProtocolTCP] || !gotInternalProtocols[corev1.ProtocolUDP] {
+		t.Errorf("internalAddresses missing TCP or UDP: %#v", gotInternalProtocols)
+	}
+
+	// Port names must be unique within the Ports slice (game-tcp / game-udp).
+	seenNames := map[string]bool{}
+	for _, port := range ns.ExternalAddresses[0].Ports {
+		if seenNames[port.Name] {
+			t.Errorf("duplicate port name %q under one NetworkAddress", port.Name)
+		}
+		seenNames[port.Name] = true
+	}
+}
+
+// TestParseCustomRoutingConfigTCPUDP confirms the parser accepts TCPUDP and
+// rejects unrelated values.
+func TestParseCustomRoutingConfigTCPUDP(t *testing.T) {
+	c, err := parseCustomRoutingConfig([]gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
+		{Name: CustomRoutingGamePortConfigName, Value: "7777"},
+		{Name: CustomRoutingProtocolConfigName, Value: "tcpudp"},
+		{Name: CustomRoutingEndpointIdConfigName, Value: testSubnet},
+	})
+	if err != nil {
+		t.Fatalf("expected TCPUDP to parse, got error: %v", err)
+	}
+	if c.protocol != ProtocolTCPUDP {
+		t.Errorf("expected ProtocolTCPUDP, got %q", c.protocol)
+	}
+}

@@ -518,10 +518,38 @@ func (p *CustomRoutingPlugin) reconcile(c client.Client, pod *corev1.Pod, ctx co
 	return p.publishReady(networkManager, pod, conf, podIP, externalAddresses)
 }
 
+// expandProtocols returns the list of concrete protocols a customRoutingConfig
+// translates to when emitting NetworkStatus entries. ProtocolTCPUDP (synthetic
+// "both TCP and UDP on the same port", mirrored from the NLB plugin) expands
+// to {TCP, UDP}; anything else returns itself. The AGA control plane treats
+// (subnet IP, destination port) as a single mapping unit regardless of
+// protocol — the protocol is selected by the EG's destination-configurations
+// at EG creation time — so one AllowCustomRoutingTraffic call covers both
+// protocols simultaneously. We only fan out at the NetworkStatus layer so
+// game clients can read an unambiguous per-protocol view.
+func expandProtocols(p corev1.Protocol) []corev1.Protocol {
+	if p == ProtocolTCPUDP {
+		return []corev1.Protocol{corev1.ProtocolTCP, corev1.ProtocolUDP}
+	}
+	return []corev1.Protocol{p}
+}
+
+// gamePortNameFor returns the NetworkPort.Name for a given protocol. Single-
+// protocol GSS keep the historical "game" name; ProtocolTCPUDP-derived entries
+// disambiguate as "game-tcp" and "game-udp" so they remain uniquely named
+// inside a single NetworkAddress.Ports list.
+func gamePortNameFor(declared, concrete corev1.Protocol) string {
+	if declared == ProtocolTCPUDP {
+		return gamePortName + "-" + strings.ToLower(string(concrete))
+	}
+	return gamePortName
+}
+
 // lookupExternalAddresses queries the deterministic port mappings for podIP and
 // builds one ExternalAddress per accelerator static IP / mapped port, paging
 // through all results.
 func (p *CustomRoutingPlugin) lookupExternalAddresses(ctx context.Context, aga customRoutingAPI, conf *customRoutingConfig, podIP string) ([]gamekruiseiov1alpha1.NetworkAddress, error) {
+	concreteProtocols := expandProtocols(conf.protocol)
 	externalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
 	var nextToken *string
 	for {
@@ -547,15 +575,22 @@ func (p *CustomRoutingPlugin) lookupExternalAddresses(ctx context.Context, aga c
 					continue
 				}
 				mappedPort := intstr.FromInt(int(*sa.Port))
+				// Emit one NetworkPort per concrete protocol the GSS declares.
+				// For ProtocolTCPUDP this fans out to TCP+UDP entries that
+				// share the same accelerator IP/port — matching the real AGA
+				// data plane where (IP, port) carries both protocols.
+				ports := make([]gamekruiseiov1alpha1.NetworkPort, 0, len(concreteProtocols))
+				for _, proto := range concreteProtocols {
+					p := mappedPort
+					ports = append(ports, gamekruiseiov1alpha1.NetworkPort{
+						Name:     gamePortNameFor(conf.protocol, proto),
+						Protocol: proto,
+						Port:     &p,
+					})
+				}
 				externalAddresses = append(externalAddresses, gamekruiseiov1alpha1.NetworkAddress{
-					IP: *sa.IpAddress,
-					Ports: []gamekruiseiov1alpha1.NetworkPort{
-						{
-							Name:     gamePortName,
-							Protocol: conf.protocol,
-							Port:     &mappedPort,
-						},
-					},
+					IP:    *sa.IpAddress,
+					Ports: ports,
 				})
 			}
 		}
@@ -589,17 +624,23 @@ func (p *CustomRoutingPlugin) publishNotReady(networkManager *utils.NetworkManag
 func (p *CustomRoutingPlugin) publishReady(networkManager *utils.NetworkManager, pod *corev1.Pod,
 	conf *customRoutingConfig, podIP string, externalAddresses []gamekruiseiov1alpha1.NetworkAddress) (*corev1.Pod, cperrors.PluginError) {
 	gamePort := intstr.FromInt(int(conf.gamePort))
+	// Internal addresses mirror the protocol fan-out used for externalAddresses
+	// so business code reading either gets a consistent multi-protocol view.
+	internalProtocols := expandProtocols(conf.protocol)
+	internalPorts := make([]gamekruiseiov1alpha1.NetworkPort, 0, len(internalProtocols))
+	for _, proto := range internalProtocols {
+		p := gamePort
+		internalPorts = append(internalPorts, gamekruiseiov1alpha1.NetworkPort{
+			Name:     gamePortNameFor(conf.protocol, proto),
+			Protocol: proto,
+			Port:     &p,
+		})
+	}
 	networkStatus := gamekruiseiov1alpha1.NetworkStatus{
 		InternalAddresses: []gamekruiseiov1alpha1.NetworkAddress{
 			{
-				IP: podIP,
-				Ports: []gamekruiseiov1alpha1.NetworkPort{
-					{
-						Name:     gamePortName,
-						Protocol: conf.protocol,
-						Port:     &gamePort,
-					},
-				},
+				IP:    podIP,
+				Ports: internalPorts,
 			},
 		},
 		ExternalAddresses:   externalAddresses,
@@ -753,8 +794,8 @@ func parseCustomRoutingConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*c
 	if c.endpointId == "" {
 		return nil, fmt.Errorf("%s is required", CustomRoutingEndpointIdConfigName)
 	}
-	if c.protocol != corev1.ProtocolTCP && c.protocol != corev1.ProtocolUDP {
-		return nil, fmt.Errorf("%s must be TCP or UDP", CustomRoutingProtocolConfigName)
+	if c.protocol != corev1.ProtocolTCP && c.protocol != corev1.ProtocolUDP && c.protocol != ProtocolTCPUDP {
+		return nil, fmt.Errorf("%s must be TCP, UDP, or TCPUDP", CustomRoutingProtocolConfigName)
 	}
 	return c, nil
 }
