@@ -129,11 +129,12 @@ Adjust `IpProtocol` and `FromPort/ToPort` to match your `Protocol` and `GamePort
 
 ### 3. IAM
 
-The controller's pod must be able to call three Global Accelerator APIs:
+The controller's pod must be able to call four Global Accelerator APIs:
 
 - `globalaccelerator:AllowCustomRoutingTraffic`
 - `globalaccelerator:DenyCustomRoutingTraffic`
 - `globalaccelerator:ListCustomRoutingPortMappingsByDestination`
+- `globalaccelerator:ListCustomRoutingPortMappings` (used at controller startup for orphan cleanup — see `Init` in the Lifecycle table)
 
 **Recommended policy** (attach to the role assumed by the controller pod):
 
@@ -147,7 +148,8 @@ The controller's pod must be able to call three Global Accelerator APIs:
       "Action": [
         "globalaccelerator:AllowCustomRoutingTraffic",
         "globalaccelerator:DenyCustomRoutingTraffic",
-        "globalaccelerator:ListCustomRoutingPortMappingsByDestination"
+        "globalaccelerator:ListCustomRoutingPortMappingsByDestination",
+        "globalaccelerator:ListCustomRoutingPortMappings"
       ],
       "Resource": "*"
     }
@@ -156,6 +158,8 @@ The controller's pod must be able to call three Global Accelerator APIs:
 ```
 
 > Custom routing accelerators do not support resource-level IAM policies on the Allow/Deny APIs; `Resource: "*"` is the only working scope. Tighten exposure with separate AWS accounts / OUs if needed.
+
+> **Production recommendation: IRSA (Option B below)** — it binds the AWS identity to the controller's ServiceAccount, instead of letting every Pod on the node share the node instance profile. Node-profile-based auth still works (Pod hop-limit 2 + node role policy) but is documented only as a fallback for legacy clusters.
 
 The plugin uses [`aws-sdk-go-v2`'s default credential chain](https://aws.github.io/aws-sdk-go-v2/docs/configuring-sdk/), so **both EKS auth methods work without code changes**:
 

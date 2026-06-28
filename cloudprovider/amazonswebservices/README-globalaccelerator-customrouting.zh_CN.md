@@ -130,11 +130,12 @@ aws ec2 authorize-security-group-ingress \
 
 ### 3. IAM
 
-Controller pod 需能调用三个 Global Accelerator API：
+Controller pod 需能调用四个 Global Accelerator API：
 
 - `globalaccelerator:AllowCustomRoutingTraffic`
 - `globalaccelerator:DenyCustomRoutingTraffic`
 - `globalaccelerator:ListCustomRoutingPortMappingsByDestination`
+- `globalaccelerator:ListCustomRoutingPortMappings`（控制器启动 Init 时做孤儿清理用——详见 Lifecycle 表中的 `Init`）
 
 **推荐 policy**（挂到 controller pod 拿的 IAM role 上）：
 
@@ -148,7 +149,8 @@ Controller pod 需能调用三个 Global Accelerator API：
       "Action": [
         "globalaccelerator:AllowCustomRoutingTraffic",
         "globalaccelerator:DenyCustomRoutingTraffic",
-        "globalaccelerator:ListCustomRoutingPortMappingsByDestination"
+        "globalaccelerator:ListCustomRoutingPortMappingsByDestination",
+        "globalaccelerator:ListCustomRoutingPortMappings"
       ],
       "Resource": "*"
     }
@@ -157,6 +159,8 @@ Controller pod 需能调用三个 Global Accelerator API：
 ```
 
 > Custom routing 的 Allow/Deny API 不支持资源级 IAM，`Resource: "*"` 是唯一可行范围。需隔离请用 AWS 账号 / OU 级分隔。
+
+> **生产推荐:IRSA(下文 方式 B)** —— 它把 AWS 凭证粒度收敛到 ServiceAccount,而不是把权限"溢"到节点 instance profile(节点上**所有** Pod 共享)。节点 IAM 角色 + IMDS hop limit=2 的旧做法虽然仍能工作,但仅作为不支持 OIDC 的旧集群兜底方案。
 
 插件用 [`aws-sdk-go-v2` 默认 credential chain](https://aws.github.io/aws-sdk-go-v2/docs/configuring-sdk/)，**EKS 两种身份方式都原生支持，不需代码改动**：
 
