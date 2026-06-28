@@ -344,6 +344,51 @@ networkStatus:
 
 客户端连任一 anycast IP 都能到达同一 Pod 的同一映射端口。解析 accelerator 的 DNS 名会返回两条 A 记录，常规做法是直接发布 DNS 名让 DNS（或客户端 getaddrinfo 循环）处理 failover；游戏服也可以把两个字面 IP 一起上报给客户端做硬编码冗余。
 
+### 变体 1 — 同端口同时承载 TCP **和** UDP
+
+游戏协议在**同一端口号**上 UDP 传数据 / TCP 传控制（典型如某些 VoIP、游戏服框架）时，只需要改 `Protocol` 与容器 `ports` 声明：
+
+```yaml
+spec:
+  network:
+    networkConf:
+      - {name: Protocol, value: "TCPUDP"}      # 合成的双协议值
+      # 其余不变
+  gameServerTemplate:
+    spec:
+      containers:
+      - name: game
+        ports:
+        - {containerPort: 7777, protocol: TCP}
+        - {containerPort: 7777, protocol: UDP}
+```
+
+`networkStatus` 会在每个 anycast IP 下展示两条 `NetworkPort`（`game-tcp` + `game-udp`），共享同一个 accelerator port。AGA 数据面在该 `(podIP, gamePort)` 上同时承载两种协议，所以**只发起一次 Allow 调用**。
+
+### 变体 2 — 一个 GameServerSet 跨多个子网（多 AZ）
+
+用 `EndpointIds`（复数）让一个 GSS 覆盖 EG 里所有 AZ 的子网。插件解析每个 Pod 的 IP，按 CIDR 与每个 entry 匹配，第一个命中的 subnet 就是该 Pod 的 `EndpointId`，被用于 Allow / Deny / 映射查询。
+
+```yaml
+spec:
+  network:
+    networkConf:
+      - name: EndpointIds
+        value: "subnet-aaa=10.0.11.0/24,subnet-bbb=10.0.12.0/24,subnet-ccc=10.0.13.0/24"
+      # 其余不变；不要同时设置单数 EndpointId
+  gameServerTemplate:
+    spec:
+      # 让调度器把副本散到不同 AZ
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels: {app: <your-app>}
+```
+
+所有列出的子网必须已经注册到同一个 endpoint group（`add-custom-routing-endpoints`）。子网创建后 CIDR 不变 —— 一次性 `aws ec2 describe-subnets --subnet-ids ... --query 'Subnets[].[SubnetId,CidrBlock]'` 拿到粘到 YAML 里即可。
+
 ## 限制与 quota
 
 需重点关注的 AWS Global Accelerator quota（默认值，最新及可调项以[官方 quota 页面](https://docs.aws.amazon.com/global-accelerator/latest/dg/limits-global-accelerator.html)为准）：

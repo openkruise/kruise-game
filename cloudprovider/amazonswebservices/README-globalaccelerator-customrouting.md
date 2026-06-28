@@ -341,6 +341,51 @@ networkStatus:
 
 Clients can connect to either anycast IP — both reach the same Pod through the same mapped port. Resolving the accelerator's DNS name returns both A records, so the standard pattern is to publish the DNS name and let DNS (or the client's getaddrinfo loop) handle failover; alternatively the game server can self-report both literal IPs to clients for hardcoded redundancy.
 
+### Variant 1 — same port carries TCP **and** UDP
+
+Game protocols that use UDP for the data plane and TCP for control on the **same** port number (e.g. some VoIP and game-server frameworks) only differ in the `Protocol` value and the container's `ports` declaration:
+
+```yaml
+spec:
+  network:
+    networkConf:
+      - {name: Protocol, value: "TCPUDP"}      # synthetic dual-protocol value
+      # rest unchanged
+  gameServerTemplate:
+    spec:
+      containers:
+      - name: game
+        ports:
+        - {containerPort: 7777, protocol: TCP}
+        - {containerPort: 7777, protocol: UDP}
+```
+
+The resulting `networkStatus` reports two `NetworkPort` entries (`game-tcp` and `game-udp`) under each anycast IP, sharing the same accelerator port. AGA's data plane carries both protocols on the single `(podIP, gamePort)` allocation, so only one Allow call is issued.
+
+### Variant 2 — one GameServerSet across multiple subnets (multi-AZ)
+
+Use `EndpointIds` (plural) to let a single GSS span every AZ in the endpoint group. The plugin parses each Pod's IP and matches it against the CIDR of every entry; the first matching subnet is used as that Pod's `EndpointId` for Allow / Deny / mapping lookup.
+
+```yaml
+spec:
+  network:
+    networkConf:
+      - name: EndpointIds
+        value: "subnet-aaa=10.0.11.0/24,subnet-bbb=10.0.12.0/24,subnet-ccc=10.0.13.0/24"
+      # rest unchanged; do NOT also set the singular EndpointId
+  gameServerTemplate:
+    spec:
+      # let the scheduler spread across AZs (or pin via topology spread)
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels: {app: <your-app>}
+```
+
+All listed subnets must already be registered to the same endpoint group (`add-custom-routing-endpoints`). CIDRs are static once a subnet is created — pull them once with `aws ec2 describe-subnets --subnet-ids ... --query 'Subnets[].[SubnetId,CidrBlock]'` and paste into the YAML.
+
 ## Limits and quotas
 
 Key AWS Global Accelerator quotas to plan around (defaults shown; see the [official quotas page](https://docs.aws.amazon.com/global-accelerator/latest/dg/limits-global-accelerator.html) for the current list and which quotas are adjustable):
