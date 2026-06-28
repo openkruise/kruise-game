@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,8 +49,15 @@ const (
 	CustomRoutingGamePortConfigName         = "GamePort"
 	CustomRoutingProtocolConfigName         = "Protocol"
 	CustomRoutingEndpointIdConfigName       = "EndpointId"
-	CustomRoutingRegionConfigName           = "Region"
-	CustomRoutingFixedConfigName            = "Fixed"
+	// CustomRoutingEndpointIdsConfigName is the multi-AZ alternative to
+	// EndpointId: a comma-separated list of "subnetID=CIDR" pairs. The plugin
+	// matches each Pod's IP against the CIDR of every entry and uses the
+	// matching subnet as the EndpointId when calling Allow / Deny. Mutually
+	// exclusive with the singular EndpointId. Example:
+	//   EndpointIds: "subnet-aaa=10.0.11.0/24,subnet-bbb=10.0.12.0/24,subnet-ccc=10.0.13.0/24"
+	CustomRoutingEndpointIdsConfigName = "EndpointIds"
+	CustomRoutingRegionConfigName      = "Region"
+	CustomRoutingFixedConfigName       = "Fixed"
 
 	// gamePortName is the NetworkPort name used in the published NetworkStatus.
 	gamePortName = "game"
@@ -77,14 +85,24 @@ type customRoutingAPI interface {
 	ListCustomRoutingPortMappings(ctx context.Context, params *globalaccelerator.ListCustomRoutingPortMappingsInput, optFns ...func(*globalaccelerator.Options)) (*globalaccelerator.ListCustomRoutingPortMappingsOutput, error)
 }
 
+// subnetMatch is one entry in customRoutingConfig.subnets. cidr is nil only
+// for the legacy single-subnet form (EndpointId), where the user explicitly
+// pinned the GSS to one subnet and no Pod-IP-to-subnet matching is needed.
+type subnetMatch struct {
+	id   string
+	cidr *net.IPNet
+}
+
 // customRoutingConfig is the parsed per-GameServerSet networkConf.
 type customRoutingConfig struct {
 	endpointGroupArn string
 	gamePort         int32
 	protocol         corev1.Protocol
-	// endpointId is the VPC subnet ID the Pod lands in. The user supplies it
-	// explicitly; the plugin never guesses by trial-and-error.
-	endpointId string
+	// subnets carries the candidate VPC subnet endpoints. For the legacy
+	// EndpointId form it holds exactly one entry with cidr=nil. For the
+	// multi-subnet EndpointIds form it holds N entries each with a parsed
+	// CIDR so reconcile can match Pod IP -> subnet.
+	subnets []subnetMatch
 	// region overrides the AGA control-plane region (default us-west-2).
 	region string
 	// fixed is accepted for parity with the NLB plugin's networkConf surface
@@ -95,14 +113,34 @@ type customRoutingConfig struct {
 	fixed bool
 }
 
-// configKey is the per-pod identity that, if changed across reconciles, requires
-// Deny on the OLD (egArn, endpointId, IP, port) and Allow on the NEW one. It
-// plays the role of nlb.go's configHash, scoped down to the inputs that
-// actually drive AGA control-plane calls. The Pod IP is NOT part of the key
-// because changing the Pod IP is handled separately (deny-old/allow-new on the
-// same EG) and the diff there is observed via cached.podIP != podIP.
-func (c *customRoutingConfig) configKey() string {
-	return strings.Join([]string{c.endpointGroupArn, c.endpointId, strconv.Itoa(int(c.gamePort)), string(c.protocol)}, "|")
+// resolveSubnet returns the EndpointId (subnet ID) that contains podIP.
+//
+//   - Legacy single-subnet form (EndpointId): there is exactly one entry with
+//     a nil CIDR; that subnet is returned unconditionally (the user has
+//     already pinned the GSS to one subnet via nodeAffinity / topology spread).
+//   - Multi-subnet form (EndpointIds): the Pod IP is parsed and matched
+//     against every entry's CIDR; the first match is returned. If no entry
+//     matches, an error is returned (typically meaning the Pod was scheduled
+//     into a node whose subnet is not declared in EndpointIds — usually a
+//     misconfiguration the user must fix).
+func (c *customRoutingConfig) resolveSubnet(podIP string) (string, error) {
+	if len(c.subnets) == 1 && c.subnets[0].cidr == nil {
+		return c.subnets[0].id, nil
+	}
+	ip := net.ParseIP(podIP)
+	if ip == nil {
+		return "", fmt.Errorf("invalid pod IP %q", podIP)
+	}
+	for _, s := range c.subnets {
+		if s.cidr != nil && s.cidr.Contains(ip) {
+			return s.id, nil
+		}
+	}
+	ids := make([]string, 0, len(c.subnets))
+	for _, s := range c.subnets {
+		ids = append(ids, s.id)
+	}
+	return "", fmt.Errorf("pod IP %s does not fall within any of the configured EndpointIds %v", podIP, ids)
 }
 
 // allocatedEndpoint caches the resolved state for a pod so that OnPodUpdated can
@@ -208,10 +246,20 @@ func (p *CustomRoutingPlugin) Init(c client.Client, options cloudprovider.CloudP
 			// No IP yet; reconcile() will pick it up later.
 			continue
 		}
+		resolvedSubnet, err := conf.resolveSubnet(pod.Status.PodIP)
+		if err != nil {
+			// Pod is scheduled on a node whose subnet is not in the configured
+			// list. The next reconcile will surface the same error; skip Init
+			// recovery for this pod so we don't allocate against the wrong
+			// subnet.
+			log.Warningf("[%s] init: skip pod %s/%s — %v",
+				GlobalAcceleratorCustomRoutingNetwork, pod.Namespace, pod.Name, err)
+			continue
+		}
 		podKey := pod.Namespace + "/" + pod.Name
 		p.cache[podKey] = &allocatedEndpoint{
 			endpointGroupArn: conf.endpointGroupArn,
-			endpointId:       conf.endpointId,
+			endpointId:       resolvedSubnet,
 			podIP:            pod.Status.PodIP,
 			gamePort:         conf.gamePort,
 			protocol:         conf.protocol,
@@ -220,7 +268,7 @@ func (p *CustomRoutingPlugin) Init(c client.Client, options cloudprovider.CloudP
 			// next OnPodUpdated reconcile via ListCustomRoutingPortMappingsByDestination.
 		}
 		recovered++
-		k := egKey{conf.endpointGroupArn, conf.endpointId, conf.region}
+		k := egKey{conf.endpointGroupArn, resolvedSubnet, conf.region}
 		if live[k] == nil {
 			live[k] = map[string]bool{}
 		}
@@ -435,12 +483,30 @@ func (p *CustomRoutingPlugin) reconcile(c client.Client, pod *corev1.Pod, ctx co
 		return p.publishNotReady(networkManager, pod)
 	}
 
+	// Resolve which configured subnet this Pod's IP belongs to. For the legacy
+	// single-EndpointId form this is the user-supplied subnet directly; for
+	// EndpointIds (multi-subnet) the Pod IP is matched against each entry's
+	// CIDR. A mismatch (Pod scheduled into a subnet not in EndpointIds) is a
+	// genuine user-side configuration error — surface it as a ParameterError
+	// so OKG events show the cause.
+	resolvedSubnet, rerr := conf.resolveSubnet(podIP)
+	if rerr != nil {
+		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ParameterError, rerr.Error())
+	}
+	// configKey is computed from the RESOLVED subnet (per-Pod), not the
+	// possibly-multi-subnet list, so a Pod that stays inside its resolved
+	// subnet across config edits is treated as unchanged.
+	configKey := func(egArn, subnetId string, port int32, proto corev1.Protocol) string {
+		return strings.Join([]string{egArn, subnetId, strconv.Itoa(int(port)), string(proto)}, "|")
+	}
+	currentConfigKey := configKey(conf.endpointGroupArn, resolvedSubnet, conf.gamePort, conf.protocol)
+
 	cached := p.getCache(podKey)
 
 	// FAST PATH: nothing has changed and we already know the answer.
 	if cached != nil &&
 		cached.podIP == podIP &&
-		cached.configKey() == conf.configKey() &&
+		cached.configKey() == currentConfigKey &&
 		len(cached.externalAddresses) > 0 {
 		return p.publishReady(networkManager, pod, conf, podIP, cached.externalAddresses)
 	}
@@ -454,7 +520,7 @@ func (p *CustomRoutingPlugin) reconcile(c client.Client, pod *corev1.Pod, ctx co
 	// free the (limited) per-EG mapping capacity.
 	if cached != nil {
 		switch {
-		case cached.configKey() != conf.configKey():
+		case cached.configKey() != currentConfigKey:
 			// Config changed (EG, subnet, port, protocol). Deny on the OLD
 			// destination, which may live on a different EG / subnet entirely.
 			if cached.podIP != "" && cached.endpointGroupArn != "" && cached.endpointId != "" {
@@ -468,25 +534,25 @@ func (p *CustomRoutingPlugin) reconcile(c client.Client, pod *corev1.Pod, ctx co
 			}
 		case cached.podIP != "" && cached.podIP != podIP:
 			// Pod IP changed but everything else identical; same-EG Deny is enough.
-			if err := p.denyTraffic(ctx, aga, conf.endpointGroupArn, conf.endpointId, cached.podIP, conf.gamePort); err != nil {
+			if err := p.denyTraffic(ctx, aga, conf.endpointGroupArn, resolvedSubnet, cached.podIP, conf.gamePort); err != nil {
 				log.Warningf("[%s] failed to deny stale ip %s on %s/%s: %v",
-					GlobalAcceleratorCustomRoutingNetwork, cached.podIP, conf.endpointGroupArn, conf.endpointId, awsErrMessage(err))
+					GlobalAcceleratorCustomRoutingNetwork, cached.podIP, conf.endpointGroupArn, resolvedSubnet, awsErrMessage(err))
 			}
 		}
 	}
 
-	// Allow traffic to the Pod IP on the user-specified subnet endpoint.
+	// Allow traffic to the Pod IP on the resolved subnet endpoint.
 	if _, err := aga.AllowCustomRoutingTraffic(ctx, &globalaccelerator.AllowCustomRoutingTrafficInput{
 		EndpointGroupArn:     aws.String(conf.endpointGroupArn),
-		EndpointId:           aws.String(conf.endpointId),
+		EndpointId:           aws.String(resolvedSubnet),
 		DestinationAddresses: []string{podIP},
 		DestinationPorts:     []int32{conf.gamePort},
 	}); err != nil {
 		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError,
-			fmt.Sprintf("failed to allow custom routing traffic for %s on %s: %v", podIP, conf.endpointId, awsErrMessage(err)))
+			fmt.Sprintf("failed to allow custom routing traffic for %s on %s: %v", podIP, resolvedSubnet, awsErrMessage(err)))
 	}
 
-	externalAddresses, err := p.lookupExternalAddresses(ctx, aga, conf, podIP)
+	externalAddresses, err := p.lookupExternalAddresses(ctx, aga, conf, resolvedSubnet, podIP)
 	if err != nil {
 		return pod, cperrors.NewPluginErrorWithMessage(cperrors.ApiCallError,
 			fmt.Sprintf("failed to list custom routing port mappings for %s: %v", podIP, awsErrMessage(err)))
@@ -496,7 +562,7 @@ func (p *CustomRoutingPlugin) reconcile(c client.Client, pod *corev1.Pod, ctx co
 		// state so OnPodDeleted can still Deny, then publish NotReady.
 		p.setCache(podKey, &allocatedEndpoint{
 			endpointGroupArn: conf.endpointGroupArn,
-			endpointId:       conf.endpointId,
+			endpointId:       resolvedSubnet,
 			podIP:            podIP,
 			gamePort:         conf.gamePort,
 			protocol:         conf.protocol,
@@ -507,7 +573,7 @@ func (p *CustomRoutingPlugin) reconcile(c client.Client, pod *corev1.Pod, ctx co
 
 	p.setCache(podKey, &allocatedEndpoint{
 		endpointGroupArn:  conf.endpointGroupArn,
-		endpointId:        conf.endpointId,
+		endpointId:        resolvedSubnet,
 		podIP:             podIP,
 		gamePort:          conf.gamePort,
 		protocol:          conf.protocol,
@@ -545,17 +611,17 @@ func gamePortNameFor(declared, concrete corev1.Protocol) string {
 	return gamePortName
 }
 
-// lookupExternalAddresses queries the deterministic port mappings for podIP and
-// builds one ExternalAddress per accelerator static IP / mapped port, paging
-// through all results.
-func (p *CustomRoutingPlugin) lookupExternalAddresses(ctx context.Context, aga customRoutingAPI, conf *customRoutingConfig, podIP string) ([]gamekruiseiov1alpha1.NetworkAddress, error) {
+// lookupExternalAddresses queries the deterministic port mappings for podIP on
+// the resolved subnet and builds one ExternalAddress per accelerator static IP /
+// mapped port, paging through all results.
+func (p *CustomRoutingPlugin) lookupExternalAddresses(ctx context.Context, aga customRoutingAPI, conf *customRoutingConfig, endpointId, podIP string) ([]gamekruiseiov1alpha1.NetworkAddress, error) {
 	concreteProtocols := expandProtocols(conf.protocol)
 	externalAddresses := make([]gamekruiseiov1alpha1.NetworkAddress, 0)
 	var nextToken *string
 	for {
 		out, err := aga.ListCustomRoutingPortMappingsByDestination(ctx,
 			&globalaccelerator.ListCustomRoutingPortMappingsByDestinationInput{
-				EndpointId:         aws.String(conf.endpointId),
+				EndpointId:         aws.String(endpointId),
 				DestinationAddress: aws.String(podIP),
 				NextToken:          nextToken,
 			})
@@ -684,8 +750,19 @@ func (p *CustomRoutingPlugin) OnPodDeleted(c client.Client, pod *corev1.Pod, ctx
 				if egArn == "" {
 					egArn = conf.endpointGroupArn
 				}
-				if endpointId == "" {
-					endpointId = conf.endpointId
+				if endpointId == "" && podIP != "" {
+					// Try to resolve from Pod IP first (multi-subnet case).
+					if rs, rerr := conf.resolveSubnet(podIP); rerr == nil {
+						endpointId = rs
+					}
+				}
+				if endpointId == "" && pod.Status.PodIP != "" {
+					if rs, rerr := conf.resolveSubnet(pod.Status.PodIP); rerr == nil {
+						endpointId = rs
+					}
+				}
+				if endpointId == "" && len(conf.subnets) == 1 {
+					endpointId = conf.subnets[0].id
 				}
 				if port == 0 {
 					port = conf.gamePort
@@ -760,6 +837,7 @@ func parseCustomRoutingConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*c
 		protocol: corev1.ProtocolUDP,
 		region:   defaultAGARegion,
 	}
+	var singleEndpointId string
 	for _, kv := range conf {
 		switch kv.Name {
 		case CustomRoutingEndpointGroupArnConfigName:
@@ -773,7 +851,29 @@ func parseCustomRoutingConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*c
 		case CustomRoutingProtocolConfigName:
 			c.protocol = corev1.Protocol(strings.ToUpper(strings.TrimSpace(kv.Value)))
 		case CustomRoutingEndpointIdConfigName:
-			c.endpointId = strings.TrimSpace(kv.Value)
+			singleEndpointId = strings.TrimSpace(kv.Value)
+		case CustomRoutingEndpointIdsConfigName:
+			if v := strings.TrimSpace(kv.Value); v != "" {
+				for _, raw := range strings.Split(v, ",") {
+					entry := strings.TrimSpace(raw)
+					if entry == "" {
+						continue
+					}
+					parts := strings.SplitN(entry, "=", 2)
+					if len(parts) != 2 {
+						return nil, fmt.Errorf(`%s entry %q must be "subnet-id=cidr"`,
+							CustomRoutingEndpointIdsConfigName, entry)
+					}
+					sid := strings.TrimSpace(parts[0])
+					cidrStr := strings.TrimSpace(parts[1])
+					_, ipnet, err := net.ParseCIDR(cidrStr)
+					if err != nil {
+						return nil, fmt.Errorf("invalid CIDR %q for subnet %q in %s: %v",
+							cidrStr, sid, CustomRoutingEndpointIdsConfigName, err)
+					}
+					c.subnets = append(c.subnets, subnetMatch{id: sid, cidr: ipnet})
+				}
+			}
 		case CustomRoutingRegionConfigName:
 			if v := strings.TrimSpace(kv.Value); v != "" {
 				c.region = v
@@ -791,8 +891,19 @@ func parseCustomRoutingConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*c
 	if c.gamePort <= 0 || c.gamePort > 65535 {
 		return nil, fmt.Errorf("%s must be in [1,65535]", CustomRoutingGamePortConfigName)
 	}
-	if c.endpointId == "" {
-		return nil, fmt.Errorf("%s is required", CustomRoutingEndpointIdConfigName)
+	// Reconcile EndpointId / EndpointIds. They are mutually exclusive: a single
+	// pinned subnet (legacy form, no CIDR needed) vs. a list of candidate
+	// subnets with CIDR for Pod-IP-to-subnet resolution.
+	if singleEndpointId != "" && len(c.subnets) > 0 {
+		return nil, fmt.Errorf("specify either %s or %s, not both",
+			CustomRoutingEndpointIdConfigName, CustomRoutingEndpointIdsConfigName)
+	}
+	if singleEndpointId != "" {
+		c.subnets = []subnetMatch{{id: singleEndpointId, cidr: nil}}
+	}
+	if len(c.subnets) == 0 {
+		return nil, fmt.Errorf("either %s or %s is required",
+			CustomRoutingEndpointIdConfigName, CustomRoutingEndpointIdsConfigName)
 	}
 	if c.protocol != corev1.ProtocolTCP && c.protocol != corev1.ProtocolUDP && c.protocol != ProtocolTCPUDP {
 		return nil, fmt.Errorf("%s must be TCP, UDP, or TCPUDP", CustomRoutingProtocolConfigName)

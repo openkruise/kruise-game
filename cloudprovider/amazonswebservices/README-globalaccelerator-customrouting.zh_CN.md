@@ -273,7 +273,8 @@ Custom routing 原生没有健康检查 / 故障转移——确定性投递不�
 | `CustomRoutingEndpointGroupArn` | 是 | 预先创建好的 custom routing endpoint group ARN。 |
 | `GamePort` | 是 | 游戏服监听的目标端口（`1`–`65535`）。 |
 | `Protocol` | 否 | `TCP`、`UDP` 或 `TCPUDP`，默认 `UDP`。`TCPUDP` 是合成值（对齐 `AmazonWebServices-NLB` 插件的 `ProtocolTCPUDP`），声明 GameServer 在**同一端口**同时承载 TCP 与 UDP。AGA Custom Routing 数据面在 endpoint group 的 destination-configurations 包含两种协议时会用同一个 `(podIP, gamePort)` 分配同时承载两种协议，所以 `TCPUDP` 不会发起两次 Allow——它只是把发布到 `networkStatus.{internal,external}Addresses` 的端口扩展成两条 `NetworkPort`（`game-tcp` + `game-udp` 共享同一个 accelerator port）。 |
-| `EndpointId` | 是 | Pod 所在的、已注册到 endpoint group 的 VPC **子网 ID**（即 custom routing endpoint ID）。**由用户显式填写，插件不会试错猜测**。多 AZ 场景下，每个 GameServerSet 应通过 nodeSelector / affinity 钉到对应 AZ 的子网——一个 GameServerSet 对应一个子网。 |
+| `EndpointId` | EndpointId / EndpointIds 二选一 | Pod 所在的、已注册到 endpoint group 的 VPC **子网 ID**（即 custom routing endpoint ID）。**单子网部署**用此字段（单 AZ，或每 AZ 一个 GameServerSet）；插件不试错猜测。 |
+| `EndpointIds` | EndpointId / EndpointIds 二选一 | 让**一个** GameServerSet 跨多个子网（典型场景:多 AZ）的形式：逗号分隔的 `subnet-id=CIDR` 列表。reconcile 时插件用 Pod IP 与每个 entry 的 CIDR 做匹配，第一个匹配的 subnet 就被用作该 Pod 的 AGA `EndpointId` 来调 Allow / Deny。例：`subnet-aaa=10.0.11.0/24,subnet-bbb=10.0.12.0/24,subnet-ccc=10.0.13.0/24`。所有列出的子网必须已经注册到同一个 endpoint group。与 `EndpointId` 互斥。 |
 | `Region` | 否 | Global Accelerator **控制面**所在的 AWS 区域，默认 `us-west-2`。所有 Allow/Deny/ListPortMappings 调用都打到这里，与集群自身所在区域无关。仅在其他 partition / 未来新增控制面区域时覆盖。 |
 | `Fixed` | 否 | 为与 `AmazonWebServices-NLB` 插件的 `networkConf` 字段保持对称而接受，但**在 custom routing 中无任何效果**：给定目的 IP 的 accelerator port 是 AGA 在 endpoint group 创建时静态生成的（子网 IP × 目的端口 × 协议全枚举），插件无 "pin" 可做。设 `Fixed=true` 会被解析、打 WARNING 日志后忽略。 |
 

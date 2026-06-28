@@ -16,6 +16,7 @@ package amazonswebservices
 import (
 	"context"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -258,7 +259,7 @@ func TestParseCustomRoutingConfig(t *testing.T) {
 				endpointGroupArn: testEGArn,
 				gamePort:         7777,
 				protocol:         corev1.ProtocolTCP,
-				endpointId:       "subnet-a",
+				subnets:          []subnetMatch{{id: "subnet-a"}},
 				region:           defaultAGARegion,
 			},
 		},
@@ -273,7 +274,7 @@ func TestParseCustomRoutingConfig(t *testing.T) {
 				endpointGroupArn: testEGArn,
 				gamePort:         8000,
 				protocol:         corev1.ProtocolUDP,
-				endpointId:       testSubnet,
+				subnets:          []subnetMatch{{id: testSubnet}},
 				region:           defaultAGARegion,
 			},
 		},
@@ -289,7 +290,7 @@ func TestParseCustomRoutingConfig(t *testing.T) {
 				endpointGroupArn: testEGArn,
 				gamePort:         7777,
 				protocol:         corev1.ProtocolUDP,
-				endpointId:       testSubnet,
+				subnets:          []subnetMatch{{id: testSubnet}},
 				region:           "us-east-1",
 			},
 		},
@@ -974,5 +975,138 @@ func TestParseCustomRoutingConfigTCPUDP(t *testing.T) {
 	}
 	if c.protocol != ProtocolTCPUDP {
 		t.Errorf("expected ProtocolTCPUDP, got %q", c.protocol)
+	}
+}
+
+// TestCustomRoutingMultipleEndpointIdsResolvedByCIDR verifies that the
+// EndpointIds (plural) form picks the right subnet by CIDR matching the Pod IP.
+// Two candidates are configured; the Pod IP falls within the second one.
+func TestCustomRoutingMultipleEndpointIdsResolvedByCIDR(t *testing.T) {
+	fake := newFakeAGA()
+	// Pod IP 10.0.12.50 falls into 10.0.12.0/24 (subnet-B), not 10.0.11.0/24.
+	const subnetA, subnetB = "subnet-aaa", "subnet-bbb"
+	fake.mappings["10.0.12.50"] = []accSock{{accIP: "75.2.1.1", accPort: 50100}}
+	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
+
+	pod := newTestPod("10.0.12.50")
+	conf := []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
+		{Name: CustomRoutingGamePortConfigName, Value: "7777"},
+		{Name: CustomRoutingProtocolConfigName, Value: "UDP"},
+		{Name: CustomRoutingEndpointIdsConfigName,
+			Value: subnetA + "=10.0.11.0/24, " + subnetB + "=10.0.12.0/24"},
+	}
+	confBytes, _ := json.Marshal(conf)
+	pod.Annotations[gamekruiseiov1alpha1.GameServerNetworkConf] = string(confBytes)
+
+	out, perr := p.OnPodAdded(nil, pod, context.Background())
+	if perr != nil {
+		t.Fatalf("OnPodAdded error: %v", perr)
+	}
+
+	// Allow MUST land on subnetB, not subnetA.
+	if len(fake.allowCalls) != 1 || fake.allowCalls[0] != subnetB+"/10.0.12.50" {
+		t.Errorf("expected Allow on %s, got %#v", subnetB, fake.allowCalls)
+	}
+
+	ns := getNetworkStatus(t, out)
+	if ns == nil || ns.CurrentNetworkState != gamekruiseiov1alpha1.NetworkReady {
+		t.Fatalf("expected Ready, got %#v", ns)
+	}
+
+	cached := p.getCache("default/game-0")
+	if cached == nil || cached.endpointId != subnetB {
+		t.Errorf("cache must store resolved subnet %s, got %#v", subnetB, cached)
+	}
+
+	// OnPodDeleted must Deny on the resolved subnet (subnetB), not any other.
+	if perr := p.OnPodDeleted(nil, pod, context.Background()); perr != nil {
+		t.Fatalf("OnPodDeleted error: %v", perr)
+	}
+	if len(fake.denyCalls) != 1 || fake.denyCalls[0] != subnetB+"/10.0.12.50" {
+		t.Errorf("expected Deny on %s, got %#v", subnetB, fake.denyCalls)
+	}
+}
+
+// TestCustomRoutingMultipleEndpointIdsRejectsUnmatched verifies that a Pod IP
+// falling outside every configured CIDR yields a clean ParameterError and does
+// NOT make any AGA call (no allow leak, no spurious deny).
+func TestCustomRoutingMultipleEndpointIdsRejectsUnmatched(t *testing.T) {
+	fake := newFakeAGA()
+	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
+
+	pod := newTestPod("10.99.99.99") // not in any configured CIDR
+	conf := []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
+		{Name: CustomRoutingGamePortConfigName, Value: "7777"},
+		{Name: CustomRoutingProtocolConfigName, Value: "UDP"},
+		{Name: CustomRoutingEndpointIdsConfigName,
+			Value: "subnet-aaa=10.0.11.0/24,subnet-bbb=10.0.12.0/24"},
+	}
+	confBytes, _ := json.Marshal(conf)
+	pod.Annotations[gamekruiseiov1alpha1.GameServerNetworkConf] = string(confBytes)
+
+	_, perr := p.OnPodAdded(nil, pod, context.Background())
+	if perr == nil {
+		t.Fatalf("expected ParameterError on unmatched Pod IP")
+	}
+	if perr.Type() != cperrors.ParameterError {
+		t.Errorf("expected ParameterError, got %v: %v", perr.Type(), perr.Error())
+	}
+	if len(fake.allowCalls) != 0 || len(fake.denyCalls) != 0 {
+		t.Errorf("must not call AGA on unresolved Pod IP, got allow=%#v deny=%#v",
+			fake.allowCalls, fake.denyCalls)
+	}
+}
+
+// TestParseCustomRoutingConfigEndpointIdAndIdsMutex enforces that both
+// EndpointId and EndpointIds cannot be supplied at once.
+func TestParseCustomRoutingConfigEndpointIdAndIdsMutex(t *testing.T) {
+	_, err := parseCustomRoutingConfig([]gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
+		{Name: CustomRoutingGamePortConfigName, Value: "7777"},
+		{Name: CustomRoutingEndpointIdConfigName, Value: "subnet-aaa"},
+		{Name: CustomRoutingEndpointIdsConfigName, Value: "subnet-bbb=10.0.12.0/24"},
+	})
+	if err == nil {
+		t.Fatalf("expected error when both EndpointId and EndpointIds are set")
+	}
+	if !strings.Contains(err.Error(), "either") {
+		t.Errorf("error should hint mutual exclusion, got: %v", err)
+	}
+}
+
+// TestParseCustomRoutingConfigEndpointIdsValid parses a multi-subnet form and
+// confirms each entry's CIDR is correctly populated.
+func TestParseCustomRoutingConfigEndpointIdsValid(t *testing.T) {
+	c, err := parseCustomRoutingConfig([]gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
+		{Name: CustomRoutingGamePortConfigName, Value: "7777"},
+		{Name: CustomRoutingEndpointIdsConfigName,
+			Value: "subnet-aaa=10.0.11.0/24, subnet-bbb=10.0.12.0/24"},
+	})
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	if len(c.subnets) != 2 {
+		t.Fatalf("expected 2 subnets, got %d", len(c.subnets))
+	}
+	if c.subnets[0].id != "subnet-aaa" || c.subnets[0].cidr == nil || c.subnets[0].cidr.String() != "10.0.11.0/24" {
+		t.Errorf("subnet[0] wrong: %#v", c.subnets[0])
+	}
+	if c.subnets[1].id != "subnet-bbb" || c.subnets[1].cidr == nil || c.subnets[1].cidr.String() != "10.0.12.0/24" {
+		t.Errorf("subnet[1] wrong: %#v", c.subnets[1])
+	}
+}
+
+// TestParseCustomRoutingConfigEndpointIdsBadCIDR rejects malformed CIDR strings.
+func TestParseCustomRoutingConfigEndpointIdsBadCIDR(t *testing.T) {
+	_, err := parseCustomRoutingConfig([]gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
+		{Name: CustomRoutingGamePortConfigName, Value: "7777"},
+		{Name: CustomRoutingEndpointIdsConfigName, Value: "subnet-aaa=not-a-cidr"},
+	})
+	if err == nil {
+		t.Fatalf("expected CIDR parse error")
 	}
 }
