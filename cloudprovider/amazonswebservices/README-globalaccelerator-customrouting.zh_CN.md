@@ -229,14 +229,15 @@ Custom routing 原生没有健康检查 / 故障转移——确定性投递不�
 | `Protocol` | 否 | `TCP` 或 `UDP`，默认 `UDP`。 |
 | `EndpointId` | 是 | Pod 所在的、已注册到 endpoint group 的 VPC **子网 ID**（即 custom routing endpoint ID）。**由用户显式填写，插件不会试错猜测**。多 AZ 场景下，每个 GameServerSet 应通过 nodeSelector / affinity 钉到对应 AZ 的子网——一个 GameServerSet 对应一个子网。 |
 | `Region` | 否 | Global Accelerator **控制面**所在的 AWS 区域，默认 `us-west-2`。所有 Allow/Deny/ListPortMappings 调用都打到这里，与集群自身所在区域无关。仅在其他 partition / 未来新增控制面区域时覆盖。 |
+| `Fixed` | 否 | 为与 `AmazonWebServices-NLB` 插件的 `networkConf` 字段保持对称而接受，但**在 custom routing 中无任何效果**：给定目的 IP 的 accelerator port 是 AGA 在 endpoint group 创建时静态生成的（子网 IP × 目的端口 × 协议全枚举），插件无 "pin" 可做。设 `Fixed=true` 会被解析、打 WARNING 日志后忽略。 |
 
 ## 生命周期
 
 | 插件 hook | 行为 |
 | --- | --- |
-| `Init` | 初始化内存缓存。Global Accelerator 客户端（aws-sdk-go-v2，默认 AWS 凭证链，区域钉到 AGA 控制面）首次使用时懒加载。插件不创建 accelerator / listener / 子网。 |
-| `OnPodAdded` / `OnPodUpdated` | 取 `pod.Status.PodIP`；在用户指定的 `EndpointId` 上调 `AllowCustomRoutingTraffic`（目的 `podIP:GamePort`）；调 `ListCustomRoutingPortMappingsByDestination`（分页）拿到 **所有** AGA 静态 anycast IP（一般两个）和映射端口；为每个 anycast IP 在 `NetworkStatus.ExternalAddresses` 写一条（共享同一映射端口），并把 `InternalAddresses` 设为 Pod IP，置状态 `Ready`。Pod IP 还没下来或映射尚不可见时，发布 `NetworkNotReady` 并返回 `(pod, nil)`（mutating webhook 路径上不抛 error）。幂等：Pod IP 不变是 no-op。Pod IP 改变（重调度）时先 `Deny` 旧 IP 再 Allow 新 IP，避免泄漏映射容量。 |
-| `OnPodDeleted` | 调 `DenyCustomRoutingTraffic`（目的 `podIP:GamePort`）排空该 Pod。 |
+| `Init` | (1) **集群状态恢复** —— 列出所有 Pod，过滤出携带 `metadata.annotations[game.kruise.io/network-type] == AmazonWebServices-GlobalAcceleratorCustomRouting` 的 Pod，重建内存缓存 `(podKey → endpointGroupArn, endpointId, podIP, gamePort, protocol)`。这样后续 `OnPodDeleted` 即便 GameServerSet 已被删除也能正确发出匹配的 `DenyCustomRoutingTraffic`。(2) **孤儿清理** —— 对每个仍被存活 Pod 引用的 `(endpointGroupArn, endpointId)` 二元组，分页调 `ListCustomRoutingPortMappings`，过滤 `DestinationTrafficState=ALLOW`，把不在存活集里的目的 IP 一一 `DenyCustomRoutingTraffic`。用于清理控制器在 OKG Pod-delete 事件与 Deny 之间崩溃留下的残留。该步骤是 best-effort：调不到 AGA 仅打日志，`Init` 仍成功（懒路径会最终对齐）。Global Accelerator 客户端（aws-sdk-go-v2，默认 AWS 凭证链，区域钉到 AGA 控制面）首次使用时懒加载。插件不创建 accelerator / listener / 子网。 |
+| `OnPodAdded` / `OnPodUpdated` | 幂等对账。(i) **FAST PATH** —— Pod IP 不变 + `(EG ARN, EndpointId, GamePort, Protocol)` 与缓存一致、且缓存已含已解析的 anycast 地址 → 直接 republish `NetworkReady`，零 AGA 调用。(ii) 检测过渡 —— `(EG, EndpointId, GamePort, Protocol)` 变化时先在**旧** EG 上 `Deny`（可能完全是另一个 EG / 子网）；否则若只是 `podIP` 变化，则在同一 EG 上 `Deny` 旧 IP。(iii) 在新 `(EndpointId, podIP, GamePort)` 上 `AllowCustomRoutingTraffic`。(iv) 分页 `ListCustomRoutingPortMappingsByDestination` 拿全部 AGA 静态 anycast IP（一般两个）与映射端口；为每个 anycast IP 在 `networkStatus.externalAddresses` 写一条（共享同一映射端口）；`internalAddresses` 设为 Pod IP；状态置 `Ready`。Pod IP 尚未分配或映射尚未可见（最终一致性）时，发布 `NetworkNotReady` 并返回 `(pod, nil)` —— 不向 mutating webhook 路径抛 error。 |
+| `OnPodDeleted` | 调 `DenyCustomRoutingTraffic` 与先前 `Allow` 一一对应。来源优先级：内存缓存（由 `reconcile` 或 `Init` 恢复填充）；缓存为空时退回到解析 Pod 的 `networkConf` annotation。两者都不够 → 跳过 Deny 仅打 WARNING，下一次控制器重启的 `Init` 孤儿清理会兜底。AWS 错误以可重试的 `ApiCallError` 形式上抛。 |
 
 ## GameServerSet 示例
 

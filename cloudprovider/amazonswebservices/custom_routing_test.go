@@ -25,12 +25,23 @@ import (
 	smithy "github.com/aws/smithy-go"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/json"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	gamekruiseiov1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	cperrors "github.com/openkruise/kruise-game/cloudprovider/errors"
 )
+
+// fakeClient builds a controller-runtime fake client preloaded with the given
+// objects. Used by Init recovery / orphan cleanup tests.
+func fakeClient(objs ...client.Object) client.Client {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	return ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+}
 
 const (
 	testEGArn  = "arn:aws:globalaccelerator::123456789012:accelerator/abcd/listener/1234/endpoint-group/5678"
@@ -55,6 +66,11 @@ type fakeAGA struct {
 
 	// pageSize, when > 1, splits the mapping list across paginated responses.
 	pageSize int
+
+	// portMappings, when set, drives the EG-wide ListCustomRoutingPortMappings
+	// response. Used by Init orphan-cleanup tests; left nil for the rest.
+	portMappings    []gatypes.PortMapping
+	portMappingsErr error
 }
 
 type accSock struct {
@@ -125,6 +141,15 @@ func (f *fakeAGA) ListCustomRoutingPortMappingsByDestination(ctx context.Context
 		out.NextToken = aws.String(encodeToken(end))
 	}
 	return out, nil
+}
+
+func (f *fakeAGA) ListCustomRoutingPortMappings(ctx context.Context, in *globalaccelerator.ListCustomRoutingPortMappingsInput, optFns ...func(*globalaccelerator.Options)) (*globalaccelerator.ListCustomRoutingPortMappingsOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.portMappingsErr != nil {
+		return nil, f.portMappingsErr
+	}
+	return &globalaccelerator.ListCustomRoutingPortMappingsOutput{PortMappings: f.portMappings}, nil
 }
 
 func encodeToken(i int) string {
@@ -386,6 +411,9 @@ func TestCustomRoutingOnPodAddedNoPodIP(t *testing.T) {
 
 // M2: mapping not visible yet must publish NotReady and return (pod, nil) — no
 // error escapes the webhook path (otherwise the status write is swallowed).
+// The cache MUST be populated with the partial state (without externalAddresses)
+// so that a subsequent OnPodDeleted can still issue the matching Deny — the
+// Allow API call has already been issued at this point, so we must not "forget".
 func TestCustomRoutingOnPodAddedMappingNotFound(t *testing.T) {
 	fake := newFakeAGA()
 	fake.mappings = map[string][]accSock{} // no mapping yet
@@ -400,8 +428,12 @@ func TestCustomRoutingOnPodAddedMappingNotFound(t *testing.T) {
 	if ns == nil || ns.CurrentNetworkState != gamekruiseiov1alpha1.NetworkNotReady {
 		t.Fatalf("expected NetworkNotReady, got %#v", ns)
 	}
-	if p.getCache("default/game-0") != nil {
-		t.Errorf("cache should not be populated when mapping not found")
+	cached := p.getCache("default/game-0")
+	if cached == nil || cached.podIP != testPodIP || cached.endpointId != testSubnet {
+		t.Errorf("partial-state cache expected after Allow even when mapping invisible, got %#v", cached)
+	}
+	if len(cached.externalAddresses) != 0 {
+		t.Errorf("externalAddresses must be empty when mapping invisible, got %#v", cached.externalAddresses)
 	}
 }
 
@@ -647,5 +679,216 @@ func TestCustomRoutingAliasAndName(t *testing.T) {
 	}
 	if got, want := p.Alias(), AliasCustomRouting; got != want {
 		t.Errorf("Alias() = %q, want %q", got, want)
+	}
+}
+
+// TestCustomRoutingInitRecoversFromExistingPods covers Phase 0.2 P0-1:
+// controller restart must rebuild the in-memory cache from cluster state.
+// We seed two live pods (one with our plugin's networkType, one with a
+// different one) and verify Init populates the cache for only the matching
+// pod, with the full endpoint identity needed for a subsequent Deny.
+func TestCustomRoutingInitRecoversFromExistingPods(t *testing.T) {
+	fake := newFakeAGA()
+	p := &CustomRoutingPlugin{
+		aga:          fake,
+		cache:        make(map[string]*allocatedEndpoint),
+		newAGAClient: func(ctx context.Context, region string) (customRoutingAPI, error) { return fake, nil },
+	}
+
+	// pod-A: belongs to this plugin, has an IP -> should be recovered.
+	podA := newTestPod(testPodIP)
+	podA.Name = "game-A"
+	// pod-B: same shape but a different networkType -> must be ignored.
+	podB := newTestPod("10.0.2.99")
+	podB.Name = "game-B"
+	podB.Annotations[gamekruiseiov1alpha1.GameServerNetworkType] = "AmazonWebServices-NLB"
+	// pod-C: belongs to this plugin but has no IP yet -> skipped at Init.
+	podC := newTestPod("")
+	podC.Name = "game-C"
+	// pod-D: same shape, has a deletion timestamp -> skipped at Init.
+	podD := newTestPod("10.0.3.55")
+	podD.Name = "game-D"
+	now := metav1.Now()
+	podD.DeletionTimestamp = &now
+	podD.Finalizers = []string{"keep"}
+
+	c := fakeClient(podA, podB, podC, podD)
+	if err := p.Init(c, nil, context.Background()); err != nil {
+		t.Fatalf("Init error: %v", err)
+	}
+
+	got := p.getCache("default/game-A")
+	if got == nil {
+		t.Fatalf("expected pod-A to be recovered")
+	}
+	if got.endpointGroupArn != testEGArn || got.endpointId != testSubnet || got.podIP != testPodIP || got.gamePort != 7777 {
+		t.Errorf("partial recovery, got %+v", got)
+	}
+	if p.getCache("default/game-B") != nil {
+		t.Errorf("pod-B (different plugin) must NOT be recovered")
+	}
+	if p.getCache("default/game-C") != nil {
+		t.Errorf("pod-C (no IP) must NOT be recovered yet")
+	}
+	if p.getCache("default/game-D") != nil {
+		t.Errorf("pod-D (being deleted) must NOT be recovered")
+	}
+}
+
+// TestCustomRoutingInitOrphanCleanup covers Phase 0.2 P0-1 (second half):
+// after rebuilding the cache from live pods, Init compares against AGA's
+// ALLOW set and Denies anything not in the live set. Simulates a controller
+// crash that missed a single OnPodDeleted.
+func TestCustomRoutingInitOrphanCleanup(t *testing.T) {
+	fake := newFakeAGA()
+	// AGA still has TWO allowed destinations: the live one + an orphan.
+	fake.portMappings = []gatypes.PortMapping{
+		{
+			EndpointGroupArn:         aws.String(testEGArn),
+			EndpointId:               aws.String(testSubnet),
+			DestinationSocketAddress: &gatypes.SocketAddress{IpAddress: aws.String(testPodIP), Port: aws.Int32(7777)},
+			DestinationTrafficState:  gatypes.CustomRoutingDestinationTrafficStateAllow,
+		},
+		{
+			EndpointGroupArn:         aws.String(testEGArn),
+			EndpointId:               aws.String(testSubnet),
+			DestinationSocketAddress: &gatypes.SocketAddress{IpAddress: aws.String("10.0.9.99"), Port: aws.Int32(7777)},
+			DestinationTrafficState:  gatypes.CustomRoutingDestinationTrafficStateAllow,
+		},
+		{
+			// A DENY entry on a live IP MUST NOT be considered an orphan.
+			EndpointGroupArn:         aws.String(testEGArn),
+			EndpointId:               aws.String(testSubnet),
+			DestinationSocketAddress: &gatypes.SocketAddress{IpAddress: aws.String("10.0.10.10"), Port: aws.Int32(7777)},
+			DestinationTrafficState:  gatypes.CustomRoutingDestinationTrafficStateDeny,
+		},
+	}
+	p := &CustomRoutingPlugin{
+		aga:          fake,
+		cache:        make(map[string]*allocatedEndpoint),
+		newAGAClient: func(ctx context.Context, region string) (customRoutingAPI, error) { return fake, nil },
+	}
+
+	pod := newTestPod(testPodIP)
+	c := fakeClient(pod)
+	if err := p.Init(c, nil, context.Background()); err != nil {
+		t.Fatalf("Init error: %v", err)
+	}
+
+	// Exactly one orphan must have been denied — the 10.0.9.99 entry.
+	if len(fake.denyCalls) != 1 || fake.denyCalls[0] != testSubnet+"/10.0.9.99" {
+		t.Errorf("expected exactly one orphan deny for 10.0.9.99, got %#v", fake.denyCalls)
+	}
+}
+
+// TestCustomRoutingOnPodDeletedFallbackToConf covers Phase 0.2 P0-2: when the
+// in-memory cache is cold (e.g. cluster restart edge that never re-reconciled
+// this Pod) but the Pod's networkConf annotation is still parseable, the
+// plugin must still issue the Deny rather than silently dropping the cleanup.
+func TestCustomRoutingOnPodDeletedFallbackToConf(t *testing.T) {
+	fake := newFakeAGA()
+	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)} // cold cache
+
+	pod := newTestPod(testPodIP)
+	if perr := p.OnPodDeleted(nil, pod, context.Background()); perr != nil {
+		t.Fatalf("OnPodDeleted error: %v", perr)
+	}
+	if len(fake.denyCalls) != 1 || fake.denyCalls[0] != testSubnet+"/"+testPodIP {
+		t.Errorf("expected deny via conf fallback, got: %#v", fake.denyCalls)
+	}
+}
+
+// TestCustomRoutingConfigChangeDeniesOld covers Phase 0.2 P1-1: when the
+// networkConf is mutated to point at a different (EG, subnet) tuple, the
+// next reconcile must Deny the old destination on the OLD EG before Allowing
+// the new one — otherwise mapping capacity leaks on the original EG.
+func TestCustomRoutingConfigChangeDeniesOld(t *testing.T) {
+	fake := newFakeAGA()
+	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
+
+	pod := newTestPod(testPodIP)
+	if _, perr := p.OnPodAdded(nil, pod, context.Background()); perr != nil {
+		t.Fatalf("first reconcile failed: %v", perr)
+	}
+	if len(fake.denyCalls) != 0 {
+		t.Fatalf("no Deny expected on first reconcile, got %#v", fake.denyCalls)
+	}
+
+	// Re-write networkConf with a NEW EG ARN + NEW subnet endpoint.
+	newEG := "arn:aws:globalaccelerator::123456789012:accelerator/zzzz/listener/9999/endpoint-group/aaaa"
+	newSubnet := "subnet-99999999"
+	newConf := []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: CustomRoutingEndpointGroupArnConfigName, Value: newEG},
+		{Name: CustomRoutingGamePortConfigName, Value: "7777"},
+		{Name: CustomRoutingProtocolConfigName, Value: "UDP"},
+		{Name: CustomRoutingEndpointIdConfigName, Value: newSubnet},
+	}
+	confBytes, _ := json.Marshal(newConf)
+	pod.Annotations[gamekruiseiov1alpha1.GameServerNetworkConf] = string(confBytes)
+	// Add a mapping for the new pair so reconcile reaches Ready.
+	fake.mappings[testPodIP] = []accSock{{accIP: "75.2.99.99", accPort: 60001}}
+
+	if _, perr := p.OnPodUpdated(nil, pod, context.Background()); perr != nil {
+		t.Fatalf("second reconcile failed: %v", perr)
+	}
+
+	// Deny must have hit the OLD subnet endpoint (not the new one).
+	if len(fake.denyCalls) != 1 || fake.denyCalls[0] != testSubnet+"/"+testPodIP {
+		t.Errorf("expected exactly one deny on the OLD subnet, got %#v", fake.denyCalls)
+	}
+	// Allow must include the NEW subnet endpoint.
+	foundNewAllow := false
+	for _, a := range fake.allowCalls {
+		if a == newSubnet+"/"+testPodIP {
+			foundNewAllow = true
+		}
+	}
+	if !foundNewAllow {
+		t.Errorf("expected an Allow on the NEW subnet, got %#v", fake.allowCalls)
+	}
+	cached := p.getCache("default/game-0")
+	if cached == nil || cached.endpointGroupArn != newEG || cached.endpointId != newSubnet {
+		t.Errorf("cache not refreshed to new identity: %#v", cached)
+	}
+}
+
+// TestCustomRoutingFixedIgnored covers Phase 0.2 P0-3: Fixed=true is parsed
+// (no error) but has no behavioural effect — the rest of the reconcile path
+// runs exactly as the Fixed=false case.
+func TestCustomRoutingFixedIgnored(t *testing.T) {
+	fake := newFakeAGA()
+	p := &CustomRoutingPlugin{aga: fake, cache: make(map[string]*allocatedEndpoint)}
+
+	pod := newTestPod(testPodIP)
+	conf := []gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: CustomRoutingEndpointGroupArnConfigName, Value: testEGArn},
+		{Name: CustomRoutingGamePortConfigName, Value: "7777"},
+		{Name: CustomRoutingProtocolConfigName, Value: "UDP"},
+		{Name: CustomRoutingEndpointIdConfigName, Value: testSubnet},
+		{Name: CustomRoutingFixedConfigName, Value: "true"},
+	}
+	confBytes, _ := json.Marshal(conf)
+	pod.Annotations[gamekruiseiov1alpha1.GameServerNetworkConf] = string(confBytes)
+
+	out, perr := p.OnPodAdded(nil, pod, context.Background())
+	if perr != nil {
+		t.Fatalf("OnPodAdded with Fixed=true returned error: %v", perr)
+	}
+	ns := getNetworkStatus(t, out)
+	if ns == nil || ns.CurrentNetworkState != gamekruiseiov1alpha1.NetworkReady {
+		t.Fatalf("expected Ready, got %#v", ns)
+	}
+	if len(fake.allowCalls) != 1 {
+		t.Errorf("Fixed=true should NOT change allow semantics, got %#v", fake.allowCalls)
+	}
+
+	// And OnPodDeleted MUST still Deny regardless of Fixed=true (Custom Routing
+	// has no notion of "preserve allocation while GSS alive" since port
+	// mappings are statically generated).
+	if perr := p.OnPodDeleted(nil, pod, context.Background()); perr != nil {
+		t.Fatalf("OnPodDeleted error: %v", perr)
+	}
+	if len(fake.denyCalls) != 1 {
+		t.Errorf("expected Deny even with Fixed=true, got %#v", fake.denyCalls)
 	}
 }
