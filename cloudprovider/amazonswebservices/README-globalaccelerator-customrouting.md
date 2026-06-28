@@ -159,9 +159,21 @@ The controller's pod must be able to call four Global Accelerator APIs:
 
 > Custom routing accelerators do not support resource-level IAM policies on the Allow/Deny APIs; `Resource: "*"` is the only working scope. Tighten exposure with separate AWS accounts / OUs if needed.
 
-> **Production recommendation: IRSA (Option B below)** — it binds the AWS identity to the controller's ServiceAccount, instead of letting every Pod on the node share the node instance profile. Node-profile-based auth still works (Pod hop-limit 2 + node role policy) but is documented only as a fallback for legacy clusters.
+The plugin uses [`aws-sdk-go-v2`'s default credential chain](https://aws.github.io/aws-sdk-go-v2/docs/configuring-sdk/), so **any** EKS auth path works without code changes. Two practical methods are documented below; pick by the trade-off you prefer:
 
-The plugin uses [`aws-sdk-go-v2`'s default credential chain](https://aws.github.io/aws-sdk-go-v2/docs/configuring-sdk/), so **both EKS auth methods work without code changes**:
+| Dimension | Method 1 — IRSA / Pod Identity (recommended) | Method 2 — Node instance profile |
+| --- | --- | --- |
+| Credential scope | **Per ServiceAccount** — only pods of `kruise-game-controller-manager` carry these AGA permissions | **Per node** — every pod on the node implicitly inherits the same permissions |
+| Requires cluster OIDC | Yes (default since EKS 1.14) for IRSA; or the Pod Identity Agent add-on | No |
+| Pod rescheduled to a different node | Transparent — identity is bound to the SA | Each node's instance profile must carry the policy |
+| Needs to open Pod ↔ node IMDS path | No | Yes — set `HttpPutResponseHopLimit=2` on every node (EKS default is `1`, which blocks pods from reaching the node metadata service) |
+| CloudTrail accountability (`userIdentity` field) | Shows the exact SA-bound role | Shows the node's instance profile; the SA is invisible |
+| Setup steps | 4 (create role + policy + annotate SA + restart deploy) | 2 (put-role-policy on node role + flip IMDS hop limit) |
+| Best fit | Production / multi-tenant / regulated | One-off PoC, single tenant, OIDC unavailable |
+
+**Recommendation: Method 1 (IRSA / Pod Identity)** — it implements least-privilege at the ServiceAccount layer instead of "leaking" the AGA permission set onto every workload colocated on the node, and CloudTrail can attribute each AGA call to the exact SA. Method 2 is supported and may be the right call for legacy clusters or short-lived sandboxes.
+
+### Method 1 — ServiceAccount-bound (IRSA / Pod Identity)
 
 #### Option A — EKS Pod Identity (recommended for new clusters)
 
@@ -212,6 +224,34 @@ No annotation on the service account is required; the agent injects credentials 
      eks.amazonaws.com/role-arn=arn:aws:iam::<account>:role/<role-name>
    ```
 4. Restart the controller deployment so the projected token is mounted.
+
+### Method 2 — Node instance profile
+
+Simpler to set up (no SA changes, no OIDC dependency) but trades off the dimensions called out in the comparison table above. Worth picking when the cluster lacks an OIDC provider, when the controller will be the only meaningful workload on the node pool, or for short-lived PoC clusters.
+
+1. Attach the same policy (the JSON above) to the IAM role used by the node group's instance profile:
+   ```sh
+   aws iam put-role-policy \
+     --role-name <node-instance-profile-role> \
+     --policy-name OkgCustomRoutingPlugin \
+     --policy-document file://policy.json
+   ```
+2. EKS sets `HttpPutResponseHopLimit=1` by default on the EC2 instance metadata service, which prevents pods from reaching IMDS via the node interface. Raise it to 2 on every node that will run the controller:
+   ```sh
+   for iid in $(aws ec2 describe-instances --region <region> \
+       --filters "Name=tag:eks:cluster-name,Values=<cluster>" \
+       --query 'Reservations[].Instances[?State.Name==`running`].InstanceId' --output text); do
+     aws ec2 modify-instance-metadata-options \
+       --region <region> --instance-id "$iid" \
+       --http-put-response-hop-limit 2 --http-endpoint enabled
+   done
+   ```
+   For Karpenter / Managed Node Group autoscaling, codify `httpPutResponseHopLimit: 2` in the EC2NodeClass / launch template so newly provisioned nodes inherit it.
+3. No SA annotation, no controller restart needed; the next credential refresh in the SDK picks up the node profile.
+
+#### Switching between methods
+
+The two methods are not exclusive — the SDK credential chain prefers `AWS_WEB_IDENTITY_TOKEN_FILE` (Method 1) over `EC2 IMDS` (Method 2) when both exist. Remove the SA annotation and roll the deployment to fall back to Method 2.
 
 #### Other environments
 

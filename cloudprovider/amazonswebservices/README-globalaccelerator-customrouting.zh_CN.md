@@ -162,7 +162,21 @@ Controller pod 需能调用四个 Global Accelerator API：
 
 > **生产推荐:IRSA(下文 方式 B)** —— 它把 AWS 凭证粒度收敛到 ServiceAccount,而不是把权限"溢"到节点 instance profile(节点上**所有** Pod 共享)。节点 IAM 角色 + IMDS hop limit=2 的旧做法虽然仍能工作,但仅作为不支持 OIDC 的旧集群兜底方案。
 
-插件用 [`aws-sdk-go-v2` 默认 credential chain](https://aws.github.io/aws-sdk-go-v2/docs/configuring-sdk/)，**EKS 两种身份方式都原生支持，不需代码改动**：
+插件用 [`aws-sdk-go-v2` 默认 credential chain](https://aws.github.io/aws-sdk-go-v2/docs/configuring-sdk/)，**EKS 上有两条主流路径,二选一即可,代码无需任何改动**：
+
+| 维度 | 方式 1：IRSA / Pod Identity（推荐） | 方式 2：节点 instance profile |
+| --- | --- | --- |
+| 凭证粒度 | **SA 级**——仅 `kruise-game-controller-manager` SA 的 Pod 持有 AGA 权限 | **节点级**——节点上**所有** Pod 默认继承同一份权限 |
+| 是否需要集群 OIDC | 是（EKS 1.14+ 默认有）；Pod Identity 需要 add-on | 否 |
+| Pod 重调度到不同节点 | 透明，凭证绑在 SA 上 | 每个节点的 instance profile 都要带这份策略 |
+| 是否需要打开 Pod 访问节点 IMDS 的口子 | 否 | 是——节点 `HttpPutResponseHopLimit=1`（EKS 默认）会让 Pod 拿不到凭证，须改为 `2` |
+| CloudTrail 追责（`userIdentity`） | 看到具体 SA assumed-role | 看到节点 instance，SA 信息丢失 |
+| 配置步骤 | 4 步（建 role + policy + annotate SA + 重启 deploy） | 2 步（节点 role put-role-policy + 改 IMDS hop limit） |
+| 适用场景 | 生产、多租户、合规 | PoC、单租户、OIDC 不可用 |
+
+**推荐:方式 1（IRSA / Pod Identity）**——把最小特权落到 SA 层而不是"溢"到节点上其他工作负载;CloudTrail 也能精确归因到具体 SA 的每一次 AGA 调用。方式 2 同样支持,适合旧集群或短期沙箱。
+
+### 方式 1——ServiceAccount 绑定（IRSA / Pod Identity）
 
 #### 方式 A——EKS Pod Identity（新集群推荐）
 
@@ -213,6 +227,34 @@ ServiceAccount 上不需 annotation；agent 会注入 `AWS_CONTAINER_CREDENTIALS
      eks.amazonaws.com/role-arn=arn:aws:iam::<account>:role/<role-name>
    ```
 4. 重启 controller deployment，让 projected token 重新 mount。
+
+### 方式 2——节点 instance profile
+
+配置步骤少（无需改 SA、不依赖 OIDC），但牺牲上面对比表里那几个维度。当集群没有 OIDC、控制器是节点池上少数 / 唯一的工作负载、或者只是临时 PoC 集群时合理选用。
+
+1. 把同一份 policy（上面的 JSON）挂到节点 group 的 instance profile 角色：
+   ```sh
+   aws iam put-role-policy \
+     --role-name <节点 instance profile 角色> \
+     --policy-name OkgCustomRoutingPlugin \
+     --policy-document file://policy.json
+   ```
+2. EKS 默认节点 IMDS `HttpPutResponseHopLimit=1`，Pod 进不去节点 metadata；要把所有运行 controller 的节点改成 `2`：
+   ```sh
+   for iid in $(aws ec2 describe-instances --region <region> \
+       --filters "Name=tag:eks:cluster-name,Values=<cluster>" \
+       --query 'Reservations[].Instances[?State.Name==`running`].InstanceId' --output text); do
+     aws ec2 modify-instance-metadata-options \
+       --region <region> --instance-id "$iid" \
+       --http-put-response-hop-limit 2 --http-endpoint enabled
+   done
+   ```
+   Karpenter / Managed Node Group 自动扩容时新节点也得带这一设置——在 EC2NodeClass / launch template 里固化 `httpPutResponseHopLimit: 2`。
+3. 无需 annotate SA、无需重启控制器；下一次 SDK 凭证刷新就会走节点 instance profile。
+
+#### 方式间切换
+
+两种方式不互斥，SDK 默认 chain 优先级是 `AWS_WEB_IDENTITY_TOKEN_FILE`（方式 1）→ `EC2 IMDS`（方式 2）。同时存在时优先用方式 1。要回退到方式 2，删 SA annotation 滚动重启即可。
 
 #### 其他环境
 
