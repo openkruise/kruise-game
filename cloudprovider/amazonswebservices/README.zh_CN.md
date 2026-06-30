@@ -195,3 +195,7 @@ networkStatus:
     lastTransitionTime: "2024-05-30T03:34:14Z"
     networkType: AmazonWebServices-NLB
 ```
+
+## 参见
+
+- [`AmazonWebServices-GlobalAcceleratorCustomRouting`](./README-globalaccelerator-customrouting.zh_CN.md) —— 通过 AWS Global Accelerator **自定义路由（custom routing）** 暴露 Pod，面向低延迟游戏场景（数据面无 NLB；保留真实客户端 IP；需预先创建 accelerator + endpoint group）。

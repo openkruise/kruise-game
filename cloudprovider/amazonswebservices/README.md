@@ -197,3 +197,7 @@ networkStatus:
     lastTransitionTime: "2024-05-30T03:34:14Z"
     networkType: AmazonWebServices-NLB
 ```
+
+## See also
+
+- [`AmazonWebServices-GlobalAcceleratorCustomRouting`](./README-globalaccelerator-customrouting.md) — expose Pods via AWS Global Accelerator **custom routing** for low-latency game servers (no NLB on the data path; preserves real client IP; pre-created accelerator + endpoint group required).
