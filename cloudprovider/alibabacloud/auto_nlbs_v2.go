@@ -14,6 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+//+kubebuilder:rbac:groups=nlboperator.alibabacloud.com,resources=nlbs;servergroups;listeners,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=nlboperator.alibabacloud.com,resources=nlbs/status;servergroups/status;listeners/status,verbs=get;list;watch
+//+kubebuilder:rbac:groups=eip.alibabacloud.com,resources=eips,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=eip.alibabacloud.com,resources=eips/status,verbs=get;list;watch
+
 package alibabacloud
 
 import (
