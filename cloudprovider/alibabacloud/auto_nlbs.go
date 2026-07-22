@@ -50,6 +50,7 @@ const (
 	BlockPortsConfigName    = "BlockPorts"
 	// EIP 高防护相关配置
 	SecurityProtectionTypesConfigName = "SecurityProtectionTypes" // EIP 安全防护类型，多个用逗号分隔
+	EipBandwidthConfigName            = "EipBandwidth"            // EIP 带宽，单位 Mbps，默认 5
 
 	NLBZoneMapsServiceAnnotationKey = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-zone-maps"
 	NLBAddressTypeAnnotationKey     = "service.beta.kubernetes.io/alibaba-cloud-loadbalancer-address-type"
@@ -75,6 +76,7 @@ type autoNLBsConfig struct {
 	externalTrafficPolicy   corev1.ServiceExternalTrafficPolicyType
 	retainNLBOnDelete       bool     // 是否在 GSS 删除时保留 NLB 和 EIP 资源（默认 true）
 	securityProtectionTypes []string // EIP 安全防护类型（如 AntiDDoS_Enhanced）
+	eipBandwidth           string   // EIP 带宽，单位 Mbps，默认 "5"
 	*nlbHealthConfig
 }
 
@@ -475,6 +477,7 @@ func parseAutoNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*autoNL
 	minPort := int32(1000)
 	maxPort := int32(1499)
 	securityProtectionTypes := make([]string, 0) // 默认为空，不启用高防护
+	eipBandwidth := "5"                           // 默认带宽 5Mbps
 
 	for _, c := range conf {
 		switch c.Name {
@@ -532,6 +535,10 @@ func parseAutoNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*autoNL
 					securityProtectionTypes[i] = strings.TrimSpace(securityProtectionTypes[i])
 				}
 			}
+		case EipBandwidthConfigName:
+			if c.Value != "" {
+				eipBandwidth = c.Value
+			}
 		}
 	}
 
@@ -566,5 +573,6 @@ func parseAutoNLBsConfig(conf []gamekruiseiov1alpha1.NetworkConfParams) (*autoNL
 		externalTrafficPolicy:   externalTrafficPolicy,
 		retainNLBOnDelete:       retainNLBOnDelete,
 		securityProtectionTypes: securityProtectionTypes,
+		eipBandwidth:           eipBandwidth,
 	}, nil
 }
