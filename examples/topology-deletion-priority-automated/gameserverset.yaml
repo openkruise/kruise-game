@@ -1,0 +1,21 @@
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: gs-topology-automated
+  namespace: default
+spec:
+  replicas: 10
+  topologyDeletionPriority:
+    basePriority: 100
+    podCountWeight: 10
+    ownerCountWeight: 5
+  
+  gameServerTemplate:
+    spec:
+      containers:
+      - name: minecraft
+        image: minecraft:latest
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
