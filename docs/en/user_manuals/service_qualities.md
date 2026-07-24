@@ -32,14 +32,17 @@ spec:
       containerName: minecraft
       permanent: false
       # Similar to the native probe feature, a script is executed to probe whether a game server is idle, that is, whether no player joins the game server.
+      # The script outputs different messages based on the state and always returns exit code 0.
       exec:
-        command: ["bash", "./idle.sh"]
+        command: ["bash", "-c", "if ./idle.sh; then echo 'active'; else echo 'idle'; fi"]
       serviceQualityAction:
-          # If no player joins the game server, the O&M status of the game server is set to WaitToBeDeleted.
+          # If no player joins the game server (result is 'idle'), set the O&M status to WaitToBeDeleted.
         - state: true
+          result: idle
           opsState: WaitToBeDeleted
-          # If players join the game server, the O&M status of the game server is set to None.
-        - state: false
+          # If players join the game server (result is 'active'), set the O&M status to None.
+        - state: true
+          result: active
           opsState: None
 EOF
 ```
@@ -86,18 +89,21 @@ spec:
       podUpdatePolicy: InPlaceIfPossible
       maxUnavailable: 100%
   serviceQualities: # Set the service quality named healthy.
-    - name: idle
+    - name: healthy
       containerName: minecraft
       permanent: false
       # Similar to the native probe feature, a script is executed to probe whether a game server is healthy.
+      # The script outputs different messages based on the health state and always returns exit code 0.
       exec:
-        command: ["bash", "./healthy.sh"]
+        command: ["bash", "-c", "./healthy.sh && echo 'healthy' || echo 'unhealthy'"]
       serviceQualityAction:
-          # If the game server is healthy, the O&M status of the game server is set to None.
+          # If the game server is healthy (result is 'healthy'), set the O&M status to None.
         - state: true
+          result: healthy
           opsState: None
-          # If the game server is unhealthy, the O&M status of the game server is set to Maintaining.
-        - state: false
+          # If the game server is unhealthy (result is 'unhealthy'), set the O&M status to Maintaining.
+        - state: true
+          result: unhealthy
           opsState: Maintaining
 EOF
 ```
@@ -123,5 +129,6 @@ demo-gs-2   Ready   None         0     0
 In this case, the game server controller sends the event "GameServer demo-gs-0 Warning". You can use the [kube-event project](https://github.com/AliyunContainerService/kube-eventer) to implement exception notification.
 
 ![](../../images/warning-ding.png)
+
 
 In addition, OpenKruiseGame will integrate the tools that are used to automatically troubleshoot and recover game servers in the future to enhance automated O&M capabilities for game servers.
