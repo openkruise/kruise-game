@@ -97,6 +97,14 @@ OpenKruiseGame has the following core features:
         <td style="border: none;"><center><img src="./docs/images/gale-logo.png" width="100" alt="Gale Logo" /></center></td>
         <td style="border: none;"><center><img src="./docs/images/dhf-logo.png" width="100" alt="DHF Logo" /></center></td>
     </tr>
+    <tr style="border: none;">
+        <td style="border: none;"><center><img src="./docs/images/bingchuan-logo.png" width="100" alt="Bingchuan Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/lrgame-logo.png" width="100" alt="LRGame Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/kunlun-logo.png" width="100" alt="Kunlun Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/gbits-logo.png" width="100" alt="Gbits Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/forever9-logo.png" width="100" alt="Forever9 Logo" /></center></td>
+        <td style="border: none;"><center><img src="./docs/images/yaoji-logo.png" width="100" alt="Yaoji Logo" /></center></td>
+    </tr>
 </table>
 
 ### What to do next
