@@ -7,7 +7,8 @@ type HwCloudOptions struct {
 }
 
 type CCEELBOptions struct {
-	ELBOptions ELBOptions `toml:"elb"`
+	ELBOptions      ELBOptions `toml:"elb"`
+	MultiELBOptions ELBOptions `toml:"multi-elb"`
 }
 
 type ELBOptions struct {
@@ -35,7 +36,7 @@ func (e ELBOptions) valid(skipPortRangeCheck bool) bool {
 func (o HwCloudOptions) Valid() bool {
 	elbOptions := o.ELBOptions
 	cceElbOptions := o.CCEELBOptions
-	return elbOptions.valid(false) && cceElbOptions.ELBOptions.valid(true)
+	return elbOptions.valid(false) && cceElbOptions.ELBOptions.valid(true) && cceElbOptions.MultiELBOptions.valid(true)
 }
 
 func (o HwCloudOptions) Enabled() bool {

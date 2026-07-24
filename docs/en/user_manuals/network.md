@@ -144,6 +144,7 @@ OpenKruiseGame supports the following network plugins:
 - Volcengine-EIP
 - HwCloud-ELB
 - HwCloud-CCE-ELB
+- HwCloud-Multi-ELBs
 - HwCloud-CCE-EIP
 
 ---
@@ -2444,6 +2445,184 @@ kubectl get svc |grep hw-cce-elb-auto-performance
 hw-cce-elb-auto-performance-0                    LoadBalancer   10.247.50.xxx    192.168.1.xxx,49.0.251.xxx      1:30918/TCP                       4m29s
 hw-cce-elb-auto-performance-1                    LoadBalancer   10.247.196.xxx   150.40.245.xxx,192.168.1.xxx    1:30942/TCP                       4m29s
 ```
+
+---
+
+### HwCloud-Multi-ELBs
+
+#### Plugin name
+
+`HwCloud-Multi-ELBs`
+
+#### Cloud Provider
+
+HuaweiCloud
+
+#### Plugin description
+
+- HwCloud-Multi-ELBs is applicable to Huawei Cloud CCE Standard and CCE Turbo clusters.
+- It reuses existing Huawei Cloud ELB instances and creates one LoadBalancer Service per selected ELB/name binding for each Pod.
+- It is designed for multi-line access, multi-ISP access, or multiple ELB fault domains. The names in `ElbIdNames` are user-defined logical names, such as `line-a` and `line-b`.
+- This network plugin supports network isolation.
+
+#### Network parameters
+
+ElbIdNames
+
+- Meaning: the ELB instance ID and Name(self-define name). You can fill in multiple ids & names.
+- Value: in the format of `{elb-id-0}/{name-0},{elb-id-1}/{name-1}`. An example value can be: "elb-line-a-0/line-a,elb-line-b-0/line-b"
+- Configuration change supported or not: no.
+
+PortProtocols
+
+- Meaning: the ports in the pod to be exposed and the protocols. You can specify multiple ports and protocols.
+- Value: in the format of port1/protocol1,port2/protocol2,... The protocol names must be in uppercase letters. support protocol types: TCP, UDP, TCPUDP(means use same port for TCP & UDP at same time)
+- Configuration change supported or not: yes.
+
+AllocatePolicy
+
+- Meaning: the allocation policy for selecting an ELB group.
+- Value: default or balanced. Default value is default.
+- Configuration change supported or not: yes.
+
+Fixed
+
+- Meaning: whether the mapping relationship is fixed. If the mapping relationship is fixed, the mapping relationship remains unchanged even if the pod is deleted and recreated.
+- Value: false or true.
+- Configuration change supported or not: yes.
+
+ExternalTrafficPolicyType
+
+- Meaning: Service LB forward type. If Local, Service LB just forwards traffic to local node Pod, and source IP can be preserved without SNAT.
+- Value: Local or Cluster. Default value is Cluster.
+- Configuration change supported or not: no.
+
+AllocateLoadBalancerNodePorts
+
+- Meaning: whether to allocate NodePorts for generated LoadBalancer Services.
+- Value: false or true. Default value is false.
+- Configuration change supported or not: yes.
+
+ElbClass
+
+- Meaning: the ELB instance class.
+- Value: performance or union. Default value is performance.
+- Configuration change supported or not: yes.
+
+ReadinessGate
+
+- Meaning: whether to inject target-health readiness gates into Pods.
+- Value: false or true. Default value is false. Only supported in CCE Turbo passthrough scenarios using dedicated (performance) ELBs.
+- Configuration change supported or not: no.
+
+LBHealthCheckFlag
+
+- Meaning: Whether to enable health check.
+- Value: "on" means on, "off" means off. Default is on.
+- Configuration change supported or not: yes.
+
+LBHealthCheckConfig
+
+- Meaning: health check configuration.
+- Value: JSON array. Use pod_target_port in the GameServerSet config.
+- Configuration change supported or not: yes.
+
+UserDefine
+
+- Meaning: custom annotations for generated Services.
+- Value: JSON object string.
+- Configuration change supported or not: yes.
+
+AllowNotReadyContainers
+
+- Meaning: the container names that are allowed not ready when inplace updating, when traffic will not be cut.
+- Value: {containerName_0},{containerName_1},... Example:sidecar
+- Configuration change supported or not: It cannot be changed during the in-place updating process.
+
+#### Design
+
+1. **ELB grouping**: `ElbIdNames` groups ELBs by logical name. Each Pod gets one allocation group, and the plugin creates one Service for each ELB/name pair in that group.
+2. **Port allocation**: the plugin allocates ports from `[min_port, max_port]` in `[hwcloud.cce.multi-elb]`, skipping `block_ports`. The same allocated Service port is used on every ELB/name pair of the selected group.
+3. **Stable allocation snapshot**: once a Pod is allocated, its ELB IDs, logical names, external ports, target ports, and protocols are kept as a snapshot. Later config changes do not migrate existing Pods to another ELB group or reserve extra ports for them.
+4. **Service naming**: generated Services are named `{podName}-{elbName}` and are labeled with `game.kruise.io/network-type=HwCloud-Multi-ELBs`.
+5. **Network status**: the GameServer becomes `Ready` only after every generated Service has LoadBalancer ingress and the Pod is Ready. `externalAddresses[].endPoint` contains a comma-separated list of `{host}/{elbName}` entries.
+
+#### Plugin configuration
+
+The Multi-ELBs plugin uses `[hwcloud.cce.multi-elb]` as its port allocation range. Keep the other Huawei Cloud ELB option blocks present when enabling the Huawei Cloud provider.
+
+```toml
+[hwcloud]
+enable = true
+
+[hwcloud.elb]
+max_port = 700
+min_port = 500
+block_ports = []
+
+[hwcloud.cce.elb]
+max_port = 65535
+min_port = 32768
+block_ports = []
+
+[hwcloud.cce.multi-elb]
+max_port = 65535
+min_port = 32700
+block_ports = []
+```
+
+#### Example
+
+The following example exposes every Pod through two user-defined logical lines, `line-a` and `line-b`. The first Pod is allocated to one ELB from each line, and the generated Services use the same allocated external port on both ELBs.
+
+```yaml
+apiVersion: game.kruise.io/v1alpha1
+kind: GameServerSet
+metadata:
+  name: hw-multi-elbs-nginx
+  namespace: default
+spec:
+  replicas: 2
+  updateStrategy:
+    rollingUpdate:
+      podUpdatePolicy: InPlaceIfPossible
+  network:
+    networkType: HwCloud-Multi-ELBs
+    networkConf:
+      - name: ElbIdNames
+        value: elb-line-a-0/line-a,elb-line-a-1/line-a,elb-line-b-0/line-b,elb-line-b-1/line-b
+      - name: PortProtocols
+        value: "80/TCPUDP"
+      - name: AllocatePolicy
+        value: balanced
+      - name: ElbClass
+        value: performance
+      - name: ReadinessGate
+        value: "true"
+      - name: LBHealthCheckFlag
+        value: "on"
+      - name: LBHealthCheckConfig
+        value: '[{"protocol":"tcp","pod_target_port":"TCP:80","monitor_port":"8080"}]'
+      - name: UserDefine
+        value: '{"kubernetes.io/elb.lb-algorithm":"ROUND_ROBIN"}'
+  gameServerTemplate:
+    spec:
+      containers:
+        - image: nginx
+          name: nginx
+```
+
+After reconciliation, each Pod has one Service per logical name:
+
+```bash
+kubectl get svc | grep hw-multi-elbs-nginx-0
+hw-multi-elbs-nginx-0-line-a   LoadBalancer   10.247.1.xxx   121.1.1.xxx   32700:30xxx/TCP,32700:30xxx/UDP
+hw-multi-elbs-nginx-0-line-b   LoadBalancer   10.247.2.xxx   122.1.1.xxx   32700:31xxx/TCP,32700:31xxx/UDP
+```
+
+---
+
+### HwCloud-CCE-EIP
 
 #### Plugin Name
 `HwCloud-EIP`

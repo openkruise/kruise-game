@@ -25,6 +25,10 @@ block_ports = []
 max_port = 65535
 min_port = 32768
 block_ports = []
+[hwcloud.cce.multi-elb]
+max_port = 65535
+min_port = 32700
+block_ports = []
 
 [volcengine]
 enable = true
