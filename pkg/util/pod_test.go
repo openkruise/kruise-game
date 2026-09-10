@@ -287,3 +287,107 @@ func TestGetDiffContainerNames(t *testing.T) {
 		}
 	}
 }
+
+// TestGetDiffContainerNamesWithInitContainers covers the restartable init containers (native
+// sidecar containers). They report their status in pod.Status.InitContainerStatuses, so they used
+// to be invisible to GetDiffContainerNames and the GameServerUpdatingContainers annotation ended
+// up empty, leaving the Pod blocked in the PreparingUpdate state.
+func TestGetDiffContainerNamesWithInitContainers(t *testing.T) {
+	restartAlways := corev1.ContainerRestartPolicyAlways
+
+	podOf := func(initImages, containerImages map[string]string) *corev1.Pod {
+		pod := &corev1.Pod{}
+		// keep a deterministic order: setup, sidecar
+		for _, name := range []string{"setup", "sidecar"} {
+			if image, ok := initImages[name]; ok {
+				pod.Status.InitContainerStatuses = append(pod.Status.InitContainerStatuses,
+					corev1.ContainerStatus{Name: name, Image: image})
+			}
+		}
+		for _, name := range []string{"main"} {
+			if image, ok := containerImages[name]; ok {
+				pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses,
+					corev1.ContainerStatus{Name: name, Image: image})
+			}
+		}
+		return pod
+	}
+
+	gssOf := func(sidecarImage string, sidecarRestartable bool, setupImage, mainImage string) *gameKruiseV1alpha1.GameServerSet {
+		sidecar := corev1.Container{Name: "sidecar", Image: sidecarImage}
+		if sidecarRestartable {
+			sidecar.RestartPolicy = &restartAlways
+		}
+		return &gameKruiseV1alpha1.GameServerSet{
+			Spec: gameKruiseV1alpha1.GameServerSetSpec{
+				GameServerTemplate: gameKruiseV1alpha1.GameServerTemplate{
+					PodTemplateSpec: corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{
+							InitContainers: []corev1.Container{
+								{Name: "setup", Image: setupImage},
+								sidecar,
+							},
+							Containers: []corev1.Container{{Name: "main", Image: mainImage}},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	runningInit := map[string]string{"setup": "setup1", "sidecar": "foo1"}
+	runningMain := map[string]string{"main": "main1"}
+
+	tests := []struct {
+		name     string
+		pod      *corev1.Pod
+		gss      *gameKruiseV1alpha1.GameServerSet
+		expected []string
+	}{
+		{
+			name:     "restartable init container image differs",
+			pod:      podOf(runningInit, runningMain),
+			gss:      gssOf("foo2", true, "setup1", "main1"),
+			expected: []string{"sidecar"},
+		},
+		{
+			name:     "regular init container image differs is skipped",
+			pod:      podOf(runningInit, runningMain),
+			gss:      gssOf("foo1", true, "setup2", "main1"),
+			expected: nil,
+		},
+		{
+			name:     "non restartable init container is skipped even when the image differs",
+			pod:      podOf(runningInit, runningMain),
+			gss:      gssOf("foo2", false, "setup1", "main1"),
+			expected: nil,
+		},
+		{
+			name:     "init container comes before the regular container",
+			pod:      podOf(runningInit, runningMain),
+			gss:      gssOf("foo2", true, "setup1", "main2"),
+			expected: []string{"sidecar", "main"},
+		},
+		{
+			name:     "nothing differs",
+			pod:      podOf(runningInit, runningMain),
+			gss:      gssOf("foo1", true, "setup1", "main1"),
+			expected: nil,
+		},
+		{
+			name:     "nil gss returns nil instead of panicking",
+			pod:      podOf(runningInit, runningMain),
+			gss:      nil,
+			expected: nil,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual := GetDiffContainerNames(test.pod, test.gss)
+			if !reflect.DeepEqual(actual, test.expected) {
+				t.Errorf("expect GetDiffContainerNames is %v but actually got %v", test.expected, actual)
+			}
+		})
+	}
+}
