@@ -35,11 +35,43 @@ func GetPodConditionFromList(conditions []corev1.PodCondition, conditionType cor
 	return -1, nil
 }
 
+// isRestartableInitContainer returns true if the init container is a restartable init container,
+// a.k.a. the native sidecar container that has `restartPolicy: Always`.
+//
+// Only such an init container can be in-place updated: kubelet restarts an init container on
+// image change only when its restartPolicy is Always, so changing the image of a regular init
+// container makes the workload controller recreate the Pod instead.
+func isRestartableInitContainer(container *corev1.Container) bool {
+	return container.RestartPolicy != nil && *container.RestartPolicy == corev1.ContainerRestartPolicyAlways
+}
+
 // GetDiffContainerNames returns the names of containers whose current image
-// (from pod.Status.ContainerStatuses) differs from the desired image
-// (from gss.Spec.GameServerTemplate.Spec.Containers).
+// (from pod.Status.ContainerStatuses / pod.Status.InitContainerStatuses) differs from the desired
+// image (from gss.Spec.GameServerTemplate.Spec.Containers / .Spec.InitContainers).
+//
+// Restartable init containers (native sidecar containers) are covered as well, because they can be
+// in-place updated too. They report their status in pod.Status.InitContainerStatuses rather than in
+// pod.Status.ContainerStatuses, so looking up the latter only would return an empty result and the
+// GameServerUpdatingContainers annotation would tell nothing to the lifecycle hooks, leaving the
+// Pod blocked in the PreparingUpdate state forever.
+//
+// Regular init containers are skipped on purpose: their image change is not in-place updatable, so
+// reporting them as "updating" would be misleading.
 func GetDiffContainerNames(pod *corev1.Pod, gss *gameKruiseV1alpha1.GameServerSet) []string {
+	if pod == nil || gss == nil {
+		return nil
+	}
+
 	var diffNames []string
+	// Init containers come first, matching the order of the Pod spec.
+	for _, actual := range pod.Status.InitContainerStatuses {
+		for i := range gss.Spec.GameServerTemplate.Spec.InitContainers {
+			expect := &gss.Spec.GameServerTemplate.Spec.InitContainers[i]
+			if actual.Name == expect.Name && actual.Image != expect.Image && isRestartableInitContainer(expect) {
+				diffNames = append(diffNames, actual.Name)
+			}
+		}
+	}
 	for _, actual := range pod.Status.ContainerStatuses {
 		for _, expect := range gss.Spec.GameServerTemplate.Spec.Containers {
 			if actual.Name == expect.Name && actual.Image != expect.Image {
