@@ -45,7 +45,7 @@ func (gvh *GssValidaatingHandler) Handle(ctx context.Context, req admission.Requ
 	}
 
 	if allowed, reason := validatingGss(gss, gvh.Client); !allowed {
-		admission.ValidationResponse(allowed, reason)
+		return admission.ValidationResponse(allowed, reason)
 	}
 
 	switch req.Operation {
