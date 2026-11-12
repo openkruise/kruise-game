@@ -28,6 +28,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -283,6 +284,19 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	span.SetAttributes(attribute.Int(telemetryfields.FieldPodsCount, len(podList.Items)))
 
 	gsm.SyncStsAndPodList(asts, podList.Items)
+	// 恢复普通更新前先清理已取消的进度，即使调谐在此中断、随后重新添加策略，也不会沿用旧的 updateProgress。
+	if !util.HasCompletionPolicy(gss) && (gss.Status.UpdateProgress != nil ||
+		meta.FindStatusCondition(gss.Status.Conditions, updateProgressingCondition) != nil) {
+		span.SetAttributes(tracing.AttrReconcileAction("cancel_gated_update"))
+		if err := gsm.SyncStatus(ctx); err != nil {
+			logger.Error(err, "failed to clear cancelled ServiceQuality update progress")
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to clear cancelled update progress")
+			return reconcile.Result{}, err
+		}
+		span.SetStatus(codes.Ok, "Cancelled ServiceQuality update progress cleared")
+		return reconcile.Result{Requeue: true}, nil
+	}
 
 	// kill game servers
 	newReplicas := gsm.GetReplicasAfterKilling()

@@ -30,6 +30,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
@@ -387,6 +388,14 @@ func SyncGameServer(ctx context.Context, logger logr.Logger, gss *gameKruiseV1al
 }
 
 func (manager *GameServerSetManager) IsNeedToUpdateWorkload() bool {
+	gss := manager.gameServerSet
+	// 配置了 completionPolicy 但没有 updateProgress 时，partition 按普通更新策略管理；
+	// 取消后即使在更新工作负载前重新添加策略，也会把 partition 同步回 GSS 配置的目标值。
+	if util.HasCompletionPolicy(gss) && gss.Status.UpdateProgress == nil &&
+		manager.asts.Spec.UpdateStrategy.RollingUpdate != nil &&
+		ptr.Deref(manager.asts.Spec.UpdateStrategy.RollingUpdate.Partition, 0) != ptr.Deref(gss.Spec.UpdateStrategy.RollingUpdate.Partition, 0) {
+		return true
+	}
 	return manager.asts.GetAnnotations()[gameKruiseV1alpha1.AstsHashKey] != util.GetAstsHash(manager.gameServerSet)
 }
 
@@ -592,9 +601,9 @@ func (manager *GameServerSetManager) SyncStatus(ctx context.Context) error {
 		LabelSelector:           asts.Status.LabelSelector,
 		ObservedGeneration:      gss.GetGeneration(),
 	}
-	if !util.HasCompletionPolicy(gss) {
-		// Ignore gated metadata when comparing counters, without including it
-		// in the legacy patch below.
+	if !util.HasCompletionPolicy(gss) && gss.Status.UpdateProgress == nil &&
+		meta.FindStatusCondition(gss.Status.Conditions, updateProgressingCondition) == nil {
+		// 没有门控状态的 GSS 沿用原来的计数 Merge Patch，不改动与本功能无关的 Condition。
 		comparisonStatus := status
 		comparisonStatus.UpdateProgress = gss.Status.UpdateProgress
 		comparisonStatus.Conditions = gss.Status.Conditions
@@ -618,6 +627,12 @@ func (manager *GameServerSetManager) SyncStatus(ctx context.Context) error {
 		}
 		status.UpdateProgress = current.Status.UpdateProgress
 		status.Conditions = current.Status.Conditions
+		if !util.HasCompletionPolicy(current) {
+			// 清理已取消的进度，避免之后重新添加策略时被误判为门控更新仍在进行；
+			// 只移除 UpdateProgressing Condition，其他 Condition 保持不变。
+			status.UpdateProgress = nil
+			meta.RemoveStatusCondition(&status.Conditions, updateProgressingCondition)
+		}
 		if equality.Semantic.DeepEqual(current.Status, status) {
 			gss.Status = current.Status
 			gss.ResourceVersion = current.ResourceVersion

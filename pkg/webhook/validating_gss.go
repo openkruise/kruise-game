@@ -47,9 +47,13 @@ func (gvh *GssValidaatingHandler) Handle(ctx context.Context, req admission.Requ
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
+	if allowed, reason := validatingGss(gss, gvh.Client); !allowed {
+		admission.ValidationResponse(allowed, reason)
+	}
+
 	// Enforce the new validation only for opted-in GSS objects; preserve the
 	// existing admission behavior for objects without completionPolicy.
-	if allowed, reason := validatingGss(gss, gvh.Client); !allowed && util.HasCompletionPolicy(gss) {
+	if allowed, reason := validateCompletionPolicy(gss); !allowed {
 		return admission.ValidationResponse(allowed, reason)
 	}
 
@@ -184,40 +188,38 @@ func validatingUpdate(newGss, oldGss *gamekruiseiov1alpha1.GameServerSet) admiss
 			return admission.ValidationResponse(false, "change network type is not allowed")
 		}
 	}
-	if util.IsServiceQualityGatedUpdateActive(oldGss) {
+	// 移除 completionPolicy 即显式取消门控，后续按普通 updateStrategy 处理。
+	if util.IsServiceQualityGatedUpdateActive(oldGss) && util.HasCompletionPolicy(newGss) {
 		oldPolicy := oldGss.Spec.UpdateStrategy.RollingUpdate.CompletionPolicy
 		newStrategy := newGss.Spec.UpdateStrategy.RollingUpdate
-		if newStrategy == nil || newStrategy.CompletionPolicy == nil {
-			return admission.ValidationResponse(false, "cannot remove completionPolicy during an active update")
-		}
-		if ptr.Deref(oldGss.Spec.UpdateStrategy.RollingUpdate.Partition, 0) != ptr.Deref(newStrategy.Partition, 0) {
+		oldPartition := ptr.Deref(oldGss.Spec.UpdateStrategy.RollingUpdate.Partition, 0)
+		newPartition := ptr.Deref(newStrategy.Partition, 0)
+		// 缩容时允许把 partition 降到新副本数（旧 partition 必须超出新副本数），不会额外放开更新。
+		partitionAdjustedForScaleDown := oldGss.Spec.Replicas != nil && newGss.Spec.Replicas != nil &&
+			*newGss.Spec.Replicas < *oldGss.Spec.Replicas && oldPartition > *newGss.Spec.Replicas &&
+			newPartition == *newGss.Spec.Replicas
+		if oldPartition != newPartition && !partitionAdjustedForScaleDown {
 			return admission.ValidationResponse(false, "rollingUpdate.partition cannot change during an active update")
 		}
 		if equality.Semantic.DeepEqual(oldGss.Spec.GameServerTemplate, newGss.Spec.GameServerTemplate) {
-			if !completionPoliciesEqual(oldPolicy, newStrategy.CompletionPolicy) ||
-				!referencedServiceQualitiesEqual(oldGss, newGss, oldPolicy) {
-				return admission.ValidationResponse(false, "observation window, completion conditions, and referenced ServiceQuality configuration cannot change without a new PodTemplate during an active update")
+			if !completionConditionsEqual(oldPolicy.ServiceQualities, newStrategy.CompletionPolicy.ServiceQualities) ||
+				!referencedServiceQualityProbesEqual(oldGss, newGss, oldPolicy) {
+				return admission.ValidationResponse(false, "completion conditions and referenced ServiceQuality probe configuration cannot change without a new PodTemplate during an active update")
 			}
 		}
 	}
 	return admission.ValidationResponse(true, "validatingUpdate success")
 }
 
-func completionPoliciesEqual(a, b *gamekruiseiov1alpha1.UpdateCompletionPolicy) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	if len(a.ServiceQualities) != len(b.ServiceQualities) {
+func completionConditionsEqual(a, b []gamekruiseiov1alpha1.ServiceQualityCompletionCondition) bool {
+	if len(a) != len(b) {
 		return false
 	}
-	if !equality.Semantic.DeepEqual(a.ObservationWindowSeconds, b.ObservationWindowSeconds) {
-		return false
-	}
-	byName := make(map[string]gamekruiseiov1alpha1.ServiceQualityCompletionCondition, len(a.ServiceQualities))
-	for _, condition := range a.ServiceQualities {
+	byName := make(map[string]gamekruiseiov1alpha1.ServiceQualityCompletionCondition, len(a))
+	for _, condition := range a {
 		byName[condition.Name] = condition
 	}
-	for _, condition := range b.ServiceQualities {
+	for _, condition := range b {
 		if old, exists := byName[condition.Name]; !exists || old != condition {
 			return false
 		}
@@ -225,7 +227,7 @@ func completionPoliciesEqual(a, b *gamekruiseiov1alpha1.UpdateCompletionPolicy) 
 	return true
 }
 
-func referencedServiceQualitiesEqual(oldGss, newGss *gamekruiseiov1alpha1.GameServerSet, policy *gamekruiseiov1alpha1.UpdateCompletionPolicy) bool {
+func referencedServiceQualityProbesEqual(oldGss, newGss *gamekruiseiov1alpha1.GameServerSet, policy *gamekruiseiov1alpha1.UpdateCompletionPolicy) bool {
 	for _, condition := range policy.ServiceQualities {
 		var oldSQ, newSQ *gamekruiseiov1alpha1.ServiceQuality
 		for i := range oldGss.Spec.ServiceQualities {
@@ -240,7 +242,8 @@ func referencedServiceQualitiesEqual(oldGss, newGss *gamekruiseiov1alpha1.GameSe
 				break
 			}
 		}
-		if oldSQ == nil || newSQ == nil || !equality.Semantic.DeepEqual(oldSQ, newSQ) {
+		if oldSQ == nil || newSQ == nil || oldSQ.ContainerName != newSQ.ContainerName ||
+			!equality.Semantic.DeepEqual(oldSQ.Probe, newSQ.Probe) {
 			return false
 		}
 	}

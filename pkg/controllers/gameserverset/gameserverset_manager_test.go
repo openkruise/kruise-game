@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/testr"
@@ -15,6 +16,7 @@ import (
 	kruiseV1beta1 "github.com/openkruise/kruise-api/apps/v1beta1"
 	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -1705,6 +1707,84 @@ func TestGameServerSetManager_SyncPodProbeMarker(t *testing.T) {
 	}
 }
 
+func TestGatedScaleDownAdjustsTargetPartition(t *testing.T) {
+	for _, replicas := range []int32{3, 0} {
+		t.Run(fmt.Sprintf("replicas-%d", replicas), func(t *testing.T) {
+			ctx := context.Background()
+			gss := testGatedGSS()
+			gss.Spec.Replicas = ptr.To[int32](10)
+			gss.Spec.UpdateStrategy.RollingUpdate.Partition = ptr.To[int32](5)
+			gss.Status.UpdateProgress = &gameKruiseV1alpha1.GameServerSetUpdateProgress{UpdateGeneration: gss.Generation, StartedAt: metav1.Now()}
+			gss.Status.Conditions = []metav1.Condition{{Type: updateProgressingCondition, Status: metav1.ConditionTrue, Reason: "Updating", LastTransitionTime: metav1.Now()}}
+			asts := util.GetNewAstsFromGss(gss.DeepCopy(), &kruiseV1beta1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: gss.Name, Namespace: gss.Namespace}})
+			asts.Spec.Replicas = ptr.To[int32](10)
+			asts.Spec.UpdateStrategy.RollingUpdate.Partition = ptr.To[int32](6)
+			asts.Status.UpdateRevision = "revision"
+			setAstsHash(asts, gss)
+			gss.Spec.Replicas = ptr.To(replicas)
+			gss.Spec.UpdateStrategy.RollingUpdate.Partition = ptr.To(replicas)
+			gss.Generation++
+			c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&gameKruiseV1alpha1.GameServerSet{}, &kruiseV1beta1.StatefulSet{}).WithObjects(gss, asts).Build()
+			manager := NewGameServerSetManager(gss, c, record.NewFakeRecorder(10), logr.Discard())
+			manager.SyncStsAndPodList(asts, nil)
+			if err := manager.GameServerScale(ctx); err != nil {
+				t.Fatal(err)
+			}
+			key := client.ObjectKeyFromObject(gss)
+			if err := c.Get(ctx, key, asts); err != nil {
+				t.Fatal(err)
+			}
+			if *asts.Spec.Replicas != replicas || *asts.Spec.UpdateStrategy.RollingUpdate.Partition != replicas {
+				t.Fatal("scale down must keep the partition within the new replica count without opening new slots")
+			}
+			pods := make([]corev1.Pod, int(replicas))
+			r := &GameServerSetReconciler{Client: c}
+			for i := 0; i < 2; i++ {
+				if _, _, err := r.reconcileGatedUpdate(ctx, gss, asts, pods); err != nil {
+					t.Fatal(err)
+				}
+				if err := c.Get(ctx, key, asts); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if gss.Status.Conditions[0].Reason != "Completed" || gss.Status.UpdateProgress.UpdateGeneration != 3 {
+				t.Fatalf("scale down must converge without invalidating the round: %+v", gss.Status)
+			}
+		})
+	}
+}
+
+func TestWorkloadPartitionSyncWithoutGatedRound(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		withoutPolicy bool
+		activeRound   bool
+		wantUpdate    bool
+	}{
+		{name: "policy added without a round", wantUpdate: true},
+		{name: "active round owns partition", activeRound: true},
+		{name: "unconfigured keeps legacy behavior", withoutPolicy: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gss := testGatedGSS()
+			if tc.withoutPolicy {
+				gss.Spec.UpdateStrategy.RollingUpdate.CompletionPolicy = nil
+			}
+			if tc.activeRound {
+				gss.Status.UpdateProgress = &gameKruiseV1alpha1.GameServerSetUpdateProgress{UpdateGeneration: gss.Generation}
+			}
+			asts := util.GetNewAstsFromGss(gss.DeepCopy(), &kruiseV1beta1.StatefulSet{})
+			setAstsHash(asts, gss)
+			asts.Spec.UpdateStrategy.RollingUpdate.Partition = ptr.To[int32](1)
+			manager := NewGameServerSetManager(gss, nil, nil, logr.Discard())
+			manager.SyncStsAndPodList(asts, nil)
+			if manager.IsNeedToUpdateWorkload() != tc.wantUpdate {
+				t.Fatalf("unexpected partition ownership: want update=%v", tc.wantUpdate)
+			}
+		})
+	}
+}
+
 func TestSyncStatusPreservesConcurrentUpdateProgress(t *testing.T) {
 	ctx := context.Background()
 	gss := testGatedGSS()
@@ -1756,8 +1836,7 @@ func TestSyncStatusWithoutPolicyPreservesLegacyPatchBehavior(t *testing.T) {
 	ctx := context.Background()
 	gss := testGatedGSS()
 	gss.Spec.UpdateStrategy.RollingUpdate.CompletionPolicy = nil
-	gss.Status.UpdateProgress = &gameKruiseV1alpha1.GameServerSetUpdateProgress{UpdateGeneration: 3, StartedAt: metav1.Now()}
-	gss.Status.Conditions = []metav1.Condition{{Type: updateProgressingCondition, Status: metav1.ConditionFalse, Reason: "Completed", LastTransitionTime: metav1.Now()}}
+	gss.Status.Conditions = []metav1.Condition{{Type: "OtherCondition", Status: metav1.ConditionTrue, Reason: "Ready", LastTransitionTime: metav1.Now()}}
 	asts := &kruiseV1beta1.StatefulSet{}
 	client := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&gameKruiseV1alpha1.GameServerSet{}).WithObjects(gss).Build()
 	manager := NewGameServerSetManager(gss, client, nil, logr.Discard())
@@ -1769,8 +1848,91 @@ func TestSyncStatusWithoutPolicyPreservesLegacyPatchBehavior(t *testing.T) {
 	if err := client.Get(ctx, types.NamespacedName{Name: gss.Name, Namespace: gss.Namespace}, stored); err != nil {
 		t.Fatal(err)
 	}
-	if stored.Status.Replicas != 2 || stored.Status.UpdateProgress == nil || len(stored.Status.Conditions) != 1 {
-		t.Fatal("legacy merge patch must update counters without managing gated status fields")
+	if stored.Status.Replicas != 2 || stored.Status.UpdateProgress != nil || !reflect.DeepEqual(stored.Status.Conditions, gss.Status.Conditions) {
+		t.Fatal("legacy merge patch must update counters without changing unrelated conditions")
+	}
+}
+
+func TestSyncStatusWithoutPolicyClearsGatedStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		withProgress  bool
+		withCondition bool
+	}{
+		{name: "progress and condition", withProgress: true, withCondition: true},
+		{name: "progress only", withProgress: true},
+		{name: "condition only", withCondition: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			gss := testGatedGSS()
+			gss.Spec.UpdateStrategy.RollingUpdate.CompletionPolicy = nil
+			c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&gameKruiseV1alpha1.GameServerSet{}).WithObjects(gss).Build()
+			manager := NewGameServerSetManager(gss, c, nil, logr.Discard())
+			manager.SyncStsAndPodList(&kruiseV1beta1.StatefulSet{}, nil)
+			if err := manager.SyncStatus(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(gss), gss); err != nil {
+				t.Fatal(err)
+			}
+			other := metav1.Condition{Type: "OtherCondition", Status: metav1.ConditionTrue, Reason: "Ready", LastTransitionTime: metav1.NewTime(time.Unix(100, 0))}
+			gss.Status.Conditions = []metav1.Condition{other}
+			if tc.withProgress {
+				gss.Status.UpdateProgress = &gameKruiseV1alpha1.GameServerSetUpdateProgress{UpdateGeneration: gss.Generation, PendingCompletionReplicas: 1}
+			}
+			if tc.withCondition {
+				gss.Status.Conditions = append(gss.Status.Conditions, metav1.Condition{Type: updateProgressingCondition, Status: metav1.ConditionTrue, Reason: "WaitingForBusinessObservation", LastTransitionTime: metav1.Now()})
+			}
+			if err := c.Status().Update(ctx, gss); err != nil {
+				t.Fatal(err)
+			}
+			manager = NewGameServerSetManager(gss, c, nil, logr.Discard())
+			manager.SyncStsAndPodList(&kruiseV1beta1.StatefulSet{}, nil)
+			if err := manager.SyncStatus(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(gss), gss); err != nil {
+				t.Fatal(err)
+			}
+			if gss.Status.UpdateProgress != nil || !equality.Semantic.DeepEqual(gss.Status.Conditions, []metav1.Condition{other}) {
+				t.Fatalf("cancellation must clear only gated status even with unchanged counters: %+v", gss.Status)
+			}
+			version := gss.ResourceVersion
+			if err := manager.SyncStatus(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(gss), gss); err != nil {
+				t.Fatal(err)
+			}
+			if gss.ResourceVersion != version {
+				t.Fatal("cleanup must not keep writing unchanged status")
+			}
+		})
+	}
+}
+
+func TestSyncStatusCancellationSkipsNewerGeneration(t *testing.T) {
+	ctx := context.Background()
+	stale := testGatedGSS()
+	stale.Spec.UpdateStrategy.RollingUpdate.CompletionPolicy = nil
+	stale.Status.UpdateProgress = &gameKruiseV1alpha1.GameServerSetUpdateProgress{UpdateGeneration: stale.Generation}
+	current := testGatedGSS()
+	current.Generation++
+	current.Status.UpdateProgress = &gameKruiseV1alpha1.GameServerSetUpdateProgress{UpdateGeneration: current.Generation, PendingCompletionReplicas: 1}
+	current.Status.Conditions = []metav1.Condition{{Type: updateProgressingCondition, Status: metav1.ConditionTrue, Reason: "Updating", LastTransitionTime: metav1.NewTime(time.Unix(100, 0))}}
+	want := current.DeepCopy()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&gameKruiseV1alpha1.GameServerSet{}).WithObjects(current).Build()
+	manager := NewGameServerSetManager(stale, c, nil, logr.Discard())
+	manager.SyncStsAndPodList(&kruiseV1beta1.StatefulSet{}, nil)
+	if err := manager.SyncStatus(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(current), current); err != nil {
+		t.Fatal(err)
+	}
+	if !equality.Semantic.DeepEqual(current.Status, want.Status) {
+		t.Fatal("a stale cancellation must not clear progress from a newer rollout")
 	}
 }
 
@@ -1856,6 +2018,9 @@ func TestSyncStatusWithoutPolicySkipsUnchangedCounters(t *testing.T) {
 			if err := c.Get(ctx, client.ObjectKeyFromObject(gss), gss); err != nil {
 				t.Fatal(err)
 			}
+			if gss.Status.UpdateProgress != nil || len(gss.Status.Conditions) != 0 {
+				t.Fatal("policy removal must clear gated status before ordinary counter synchronization")
+			}
 			c.patches = 0
 			manager = NewGameServerSetManager(gss, c, nil, logr.Discard())
 			manager.SyncStsAndPodList(&kruiseV1beta1.StatefulSet{}, nil)
@@ -1891,8 +2056,8 @@ func TestSyncStatusWithoutPolicySkipsUnchangedCounters(t *testing.T) {
 				if gss.Status.ReadyReplicas != ready {
 					t.Fatalf("ready=%d, want %d", gss.Status.ReadyReplicas, ready)
 				}
-				if residual && (gss.Status.UpdateProgress == nil || len(gss.Status.Conditions) != 1) {
-					t.Fatal("counter sync changed residual metadata")
+				if gss.Status.UpdateProgress != nil || len(gss.Status.Conditions) != 0 {
+					t.Fatal("counter sync must not restore cancelled progress")
 				}
 				c.patches = 0
 				if err := manager.SyncStatus(ctx); err != nil {

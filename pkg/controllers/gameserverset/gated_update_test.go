@@ -30,11 +30,13 @@ import (
 	"github.com/openkruise/kruise-game/pkg/util"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -411,7 +413,7 @@ func TestGatedUpdateClosesWindowBeforeTemplateChange(t *testing.T) {
 	if _, _, err := r.reconcileGatedUpdate(ctx, gss, asts, nil); err != nil {
 		t.Fatal(err)
 	}
-	gss, asts = reload()
+	_, asts = reload()
 	if asts.Spec.Template.Spec.Containers[0].Image != "v2" || *asts.Spec.UpdateStrategy.RollingUpdate.Partition != 2 {
 		t.Fatal("new template must be installed with a closed update window")
 	}
@@ -521,6 +523,192 @@ func TestGatedUpdateClosesWindowBeforeTemplateChange(t *testing.T) {
 	gss, _ = reload()
 	if gss.Status.Conditions[0].Status != metav1.ConditionFalse {
 		t.Fatal("health changes after completion must not reopen rollout")
+	}
+}
+
+func TestGatedUpdateCancellationRestoresOrdinaryStrategy(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		partition      *int32
+		paused         bool
+		removeStrategy bool
+		readdEarly     bool
+	}{
+		{name: "default partition"},
+		{name: "explicit partition", partition: ptr.To[int32](1)},
+		{name: "paused remains paused", paused: true},
+		{name: "remove rolling update", removeStrategy: true},
+		{name: "readd immediately after cleanup", readdEarly: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			gss := testGatedGSS()
+			gss.Spec.UpdateStrategy.RollingUpdate.Partition = tc.partition
+			gss.Spec.UpdateStrategy.RollingUpdate.Paused = tc.paused
+			gss.Spec.UpdateStrategy.RollingUpdate.MaxUnavailable = ptr.To(intstr.FromInt(2))
+			gss.Spec.UpdateStrategy.RollingUpdate.PodUpdatePolicy = kruisev1beta1.InPlaceIfPossiblePodUpdateStrategyType
+			gss.Status.UpdateProgress = &gamev1alpha1.GameServerSetUpdateProgress{UpdateGeneration: gss.Generation, PendingCompletionReplicas: 1}
+			gss.Status.Conditions = []metav1.Condition{{Type: updateProgressingCondition, Status: metav1.ConditionTrue, Reason: "WaitingForBusinessObservation", LastTransitionTime: metav1.Now()}}
+			asts := util.GetNewAstsFromGss(gss.DeepCopy(), &kruisev1beta1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: gss.Name, Namespace: gss.Namespace}})
+			asts.Spec.Replicas = gss.Spec.Replicas
+			setAstsHash(asts, gss)
+			asts.Spec.UpdateStrategy.RollingUpdate.Partition = ptr.To[int32](2)
+			asts.Status.UpdateRevision = "new-revision"
+			beforeTemplate := asts.Spec.Template.DeepCopy()
+			policy := gss.Spec.UpdateStrategy.RollingUpdate.CompletionPolicy.DeepCopy()
+			gss.Spec.UpdateStrategy.RollingUpdate.CompletionPolicy = nil
+			if tc.removeStrategy {
+				gss.Spec.UpdateStrategy.RollingUpdate = nil
+			}
+			gss.Generation++
+			want := util.GetNewAstsFromGss(gss.DeepCopy(), asts.DeepCopy())
+			pods := []corev1.Pod{
+				{ObjectMeta: metav1.ObjectMeta{Name: "test-0", Namespace: gss.Namespace, Labels: map[string]string{gamev1alpha1.GameServerOwnerGssKey: gss.Name}}},
+				{ObjectMeta: metav1.ObjectMeta{Name: "test-1", Namespace: gss.Namespace, Labels: map[string]string{gamev1alpha1.GameServerOwnerGssKey: gss.Name}}},
+			}
+			for i := range pods {
+				pods[i].Status.Conditions = []corev1.PodCondition{{Type: "game.kruise.io/ready", Status: corev1.ConditionFalse}}
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).
+				WithStatusSubresource(&gamev1alpha1.GameServerSet{}, &kruisev1beta1.StatefulSet{}, &corev1.Pod{}).
+				WithObjects(gss, asts, createPpm(gss), &pods[0], &pods[1]).Build()
+			r := &GameServerSetReconciler{Client: c, Scheme: scheme, recorder: record.NewFakeRecorder(100)}
+			key := client.ObjectKeyFromObject(gss)
+			// 取消时先清理进度，再恢复工作负载的 partition。
+			if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Get(ctx, key, gss); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Get(ctx, key, asts); err != nil {
+				t.Fatal(err)
+			}
+			if gss.Status.UpdateProgress != nil || len(gss.Status.Conditions) != 0 || *asts.Spec.UpdateStrategy.RollingUpdate.Partition != 2 {
+				t.Fatal("old progress must be cleared before restoring the workload partition")
+			}
+			if tc.readdEarly {
+				gss.Spec.UpdateStrategy.RollingUpdate.CompletionPolicy = policy
+				gss.Generation++
+				if err := c.Update(ctx, gss); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for i := 0; i < 2; i++ {
+				if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := c.Get(ctx, key, asts); err != nil {
+				t.Fatal(err)
+			}
+			if !equality.Semantic.DeepEqual(asts.Spec.UpdateStrategy, want.Spec.UpdateStrategy) || !equality.Semantic.DeepEqual(asts.Spec.Template, *beforeTemplate) {
+				t.Fatalf("cancellation must restore the configured strategy without changing the target template: %+v", asts.Spec.UpdateStrategy)
+			}
+			if _, exists := asts.Annotations[gatedTemplateHashKey]; exists && !tc.readdEarly {
+				t.Fatal("cancellation must clear the gated template fingerprint")
+			}
+			if err := c.Get(ctx, key, gss); err != nil {
+				t.Fatal(err)
+			}
+			if gss.Status.UpdateProgress != nil || len(gss.Status.Conditions) != 0 {
+				t.Fatalf("cancellation left stale gated status: %+v", gss.Status)
+			}
+			for i := range pods {
+				current := &corev1.Pod{}
+				if err := c.Get(ctx, client.ObjectKeyFromObject(&pods[i]), current); err != nil {
+					t.Fatal(err)
+				}
+				if !equality.Semantic.DeepEqual(current.Status, pods[i].Status) {
+					t.Fatal("cancellation must not fake passing business conditions")
+				}
+			}
+			if !tc.removeStrategy && !tc.readdEarly {
+				gss.Spec.UpdateStrategy.RollingUpdate.CompletionPolicy = policy
+				gss.Generation++
+				if err := c.Update(ctx, gss); err != nil {
+					t.Fatal(err)
+				}
+				for i := 0; i < 3; i++ {
+					if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := c.Get(ctx, key, gss); err != nil {
+					t.Fatal(err)
+				}
+				if gss.Status.UpdateProgress != nil {
+					t.Fatal("adding a policy without a new template must not resurrect the cancelled rollout")
+				}
+			}
+		})
+	}
+}
+
+func TestGatedUpdateStrategyEditsKeepObservationRound(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		window        *int32
+		changeActions bool
+		wantPartition int32
+	}{
+		{name: "extend window", window: ptr.To[int32](60), wantPartition: 1},
+		{name: "shorten window", window: ptr.To[int32](1)},
+		{name: "restore default window"},
+		{name: "change actions", window: ptr.To[int32](1), changeActions: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			now := time.Now()
+			gss := testGatedGSS()
+			gss.Spec.UpdateStrategy.RollingUpdate.Partition = ptr.To[int32](0)
+			gss.Spec.UpdateStrategy.RollingUpdate.CompletionPolicy.ObservationWindowSeconds = ptr.To[int32](1)
+			gss.Status.UpdateProgress = &gamev1alpha1.GameServerSetUpdateProgress{UpdateGeneration: gss.Generation, StartedAt: metav1.NewTime(now.Add(-time.Minute))}
+			gss.Status.Conditions = []metav1.Condition{{Type: updateProgressingCondition, Status: metav1.ConditionTrue, Reason: "WaitingForBusinessObservation", LastTransitionTime: metav1.Now()}}
+			asts := util.GetNewAstsFromGss(gss.DeepCopy(), &kruisev1beta1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: gss.Name, Namespace: gss.Namespace}})
+			asts.Spec.Replicas = gss.Spec.Replicas
+			setAstsHash(asts, gss)
+			asts.Spec.UpdateStrategy.RollingUpdate.Partition = ptr.To[int32](1)
+			asts.Status.UpdateRevision = "new-revision"
+			checkpoint := observationCheckpoint{UpdateGeneration: gss.Generation, PodUID: "pod-1", Revision: "new-revision", ObservedAt: metav1.NewTime(now.Add(-30 * time.Second))}
+			raw, err := json.Marshal(checkpoint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pods := []corev1.Pod{
+				{ObjectMeta: metav1.ObjectMeta{Name: "test-0", Namespace: gss.Namespace, Labels: map[string]string{appsv1.ControllerRevisionHashLabelKey: "old-revision"}}},
+				{ObjectMeta: metav1.ObjectMeta{Name: "test-1", Namespace: gss.Namespace, UID: "pod-1", Labels: map[string]string{appsv1.ControllerRevisionHashLabelKey: "new-revision"}, Annotations: map[string]string{observationCheckpointKey: string(raw)}}, Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{{Name: "main", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-time.Minute))}}}},
+					Conditions:        []corev1.PodCondition{{Type: "game.kruise.io/ready", Status: corev1.ConditionTrue, Message: "ready", LastTransitionTime: metav1.NewTime(now.Add(-2 * time.Minute))}},
+				}},
+			}
+			gss.Generation++
+			gss.Spec.UpdateStrategy.RollingUpdate.CompletionPolicy.ObservationWindowSeconds = tc.window
+			if tc.changeActions {
+				gss.Spec.ServiceQualities[0].Permanent = true
+				gss.Spec.ServiceQualities[0].ServiceQualityAction = []gamev1alpha1.ServiceQualityAction{{State: true, Labels: map[string]string{"delete-block": "false"}}}
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&gamev1alpha1.GameServerSet{}, &kruisev1beta1.StatefulSet{}).WithObjects(gss, asts, &pods[0], &pods[1]).Build()
+			r := &GameServerSetReconciler{Client: c}
+			key := client.ObjectKeyFromObject(gss)
+			for i := 0; i < 2; i++ {
+				if _, _, err := r.reconcileGatedUpdate(ctx, gss, asts, pods); err != nil {
+					t.Fatal(err)
+				}
+				if err := c.Get(ctx, key, asts); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if *asts.Spec.UpdateStrategy.RollingUpdate.Partition != tc.wantPartition || gss.Status.UpdateProgress.UpdateGeneration != checkpoint.UpdateGeneration {
+				t.Fatalf("strategy edit must use the current window without resetting progress: partition=%d progress=%+v", *asts.Spec.UpdateStrategy.RollingUpdate.Partition, gss.Status.UpdateProgress)
+			}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(&pods[1]), &pods[1]); err != nil {
+				t.Fatal(err)
+			}
+			if pods[1].Annotations[observationCheckpointKey] != string(raw) {
+				t.Fatal("strategy edits must not reset the observation checkpoint")
+			}
+		})
 	}
 }
 

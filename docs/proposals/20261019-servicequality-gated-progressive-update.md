@@ -289,11 +289,13 @@ currentPartition == targetPartition
 | GSS 首次创建或普通扩容 | `completionPolicy` 不限制 Pod 创建并发，继续使用现有 scaleStrategy 和 ASTS 行为 |
 | 已有 GSS 单独新增 completionPolicy | 只启用策略，不追溯接管当前版本、不创建 `updateProgress`；若 ASTS 正在执行原有更新，该更新仍按原策略完成，`completionPolicy` 从下一次 PodTemplate 变化开始生效 |
 | 新目标版本或回退 | 建立新的更新时间边界，将新模板与 `partition=replicas` 写入 ASTS；旧轮检查点不得复用，再按正常流程放量 |
-| 用户修改 partition | 活动门禁更新中禁止修改，包括同时更新模板；完成后可调整。未配置 completionPolicy 不增加限制 |
+| 用户修改 partition | 活动门禁更新中禁止任意修改，包括同时更新模板；缩容时旧 partition 超过新副本数，可同步降到新副本数；完成后可调整。未配置 completionPolicy 不增加限制 |
 | 用户修改 maxUnavailable | 立即用于后续窗口；减小后如果当前已超限，只停止新增放量 |
+| 用户修改 observationWindowSeconds | 允许单独调整为正数或移除自定义值，复用本轮检查点按新窗口判断，不建立新轮进度 |
+| 用户修改被引用 ServiceQuality 的动作或 permanent | 允许调整，继续使用原有动作处理机制；这些字段不参与门禁完成判断 |
 | 用户设置 paused | 同一目标版本内保持 ASTS 当前 partition，不撤销已经发生的更新；暂停期间出现新 PodTemplate 时，仍先建立新一轮更新并将 partition 重置为 `replicas`，但不开放首个窗口 |
 | 活跃更新中扩缩容 | 扩缩容本身不受 `completionPolicy` 节流；先冻结新增更新放量，并按新副本数调整 partition，尽量保持 `replicas-currentPartition` 不变；等待 ASTS 与 Pod 集合收敛后，按实际 Revision 和完成状态重新统计再继续推进 |
-| 活跃更新中删除 completionPolicy | 拒绝删除，避免绕过尚未完成的业务门禁；必须先完成本轮更新 |
+| 活跃更新中移除 completionPolicy | 显式取消业务门禁，不要求先暂停；先清理本轮进度及 UpdateProgressing Condition，再恢复 GSS 配置的普通更新策略和目标 partition，不表示业务已 Ready |
 | 活跃更新中单独修改完成条件或被引用探针 | 拒绝修改，避免中途改变完成标准 |
 | 新 PodTemplate 与完成条件或被引用探针同时变化 | 视为新一轮更新，允许新一轮使用新的完成标准；正在进行的旧目标被新目标取代 |
 | Controller 重启 | 使用持久化的 `updateProgress`、Pod 观察检查点以及 GSS、ASTS、Pod 事实继续调谐；检查点无效时重新等待观察窗口，不立即开放名额 |
@@ -309,7 +311,7 @@ clamp(newReplicas - 已开放容量, targetPartition, newReplicas)
 
 这一步只用于避免副本数变化意外扩大更新窗口；Pod 集合稳定后，仍以实际 Revision 和 ServiceQuality 完成状态重新计算下一步放量。
 
-当前不提供通过修改 partition 提前结束活动门禁更新的路径。需要暂时停止后续放量时使用 `paused=true`，已放行对象仍可能继续更新，暂停不会将本轮标记为 Completed。需要切换目标版本或回退镜像时可修改 PodTemplate，partition 保持原值，新轮仍按门禁推进。移除策略应在本轮完成后执行，不增加独立的取消状态机。
+当前不提供通过修改 partition 提前结束活动门禁更新的路径。需要暂时停止后续放量时使用 `paused=true`，已放行对象仍可能继续更新，暂停不会将本轮标记为 Completed。需要切换目标版本或回退镜像时可修改 PodTemplate，partition 保持原值，新轮仍按门禁推进。需要取消业务门禁时可直接移除 `completionPolicy`，后续更新按 GSS 的普通更新策略继续，仍遵守 `paused`、目标 partition、`maxUnavailable` 及 ASTS 自身的更新限制；不增加独立的取消状态机。
 
 配置 `completionPolicy` 即启用业务门禁，无需额外启动参数；未配置时行为完全不变。活跃更新期间不得降级到不识别该字段的旧 Controller。
 
@@ -354,7 +356,7 @@ status:
 - `False`：本轮受控更新已结束，即 ASTS 已到达目标 partition，且所有已放行 GameServer 均已通过观察；
 - `Unknown`：事实冲突或证据不足，Controller 已停止继续放量。
 
-`updateProgress` 在受控更新开始时创建，完成后保留最后结果，下一轮更新时覆盖；移除 `completionPolicy` 后残留记录不参与控制。普通 status 同步仅比较副本计数等自身字段，忽略残留进度，实际 Merge Patch 不包含进度和 Condition，避免无效写入或覆盖残留状态。仅更新开始、暂停、恢复、完成及新出现或原因变化的异常产生 Event；正常等待阶段切换和计数变化只更新 Condition，实际放量记录日志，不增加独立 phase、策略哈希或进度超时状态机。
+`updateProgress` 在受控更新开始时创建，完成后保留最后结果，下一轮更新时覆盖；移除 `completionPolicy` 后先清理该进度及 `UpdateProgressing` Condition，保留其他 Condition，再恢复普通更新。清理采用带版本冲突重试和 generation 校验的状态更新，避免旧轮覆盖新轮；即使清理后重启或立即重新添加策略，没有门禁轮次时仍按 GSS 配置同步普通 partition，避免遗留旧门禁边界。清理后普通 status 同步保持原有副本计数 Merge Patch 行为，稳定计数不重复写入。仅更新开始、暂停、恢复、完成及新出现或原因变化的异常产生 Event；正常等待阶段切换和计数变化只更新 Condition，实际放量记录日志，不增加独立 phase、策略哈希或进度超时状态机。
 
 ## 10. 实现与验证
 
@@ -367,7 +369,7 @@ status:
 - 在 ASTS annotation 中记录模板指纹，用于区分真正的模板变更和 API Server 默认字段；
 - 增加单 Pod 观察判定器和窗口计算器；首次观察到本轮 Pod 更新结束后写入一次 Pod 检查点，不为每次探测写入；
 - 复用现有 Pod 与 ASTS Watch；观察窗口尚未到期时设置定时重新调谐，业务条件变化时也重新计算；
-- Admission Webhook 校验静态字段，并禁止活动更新中修改 partition、删除 `completionPolicy`，或单独修改完成条件及其引用的 ServiceQuality 探针。partition 校验直接比较新旧 GSS，无需查询 ASTS。
+- Admission Webhook 只增加 completionPolicy 的静态校验，不附带收紧 reserveGameServerIds 的存量准入行为。活动更新允许取消门禁、调整观察窗口和服务质量动作，以及缩容所需的 partition 调整；其余 partition 变更、单独修改完成条件或被引用探针仍拒绝。partition 校验直接比较新旧 GSS，无需查询 ASTS。
 
 每个 Pod 每轮至少持久化一次观察 checkpoint，单次 Reconcile 最多执行 32 次 checkpoint Patch，写入采用乐观锁；后续调谐复用有效记录。每轮扫描当前 Pod 集合，暂不增加无界并发写入或新的云资源。规模较大时需要评估 API QPS 和 worker 占用，不能将窗口容量等同于已测量的吞吐。
 
@@ -389,10 +391,10 @@ status:
 
 - 已放行但尚未开始更新、Pod 尚未创建或暂时缺失的名额仍占用窗口；业务条件退化后重新占用名额，窗口满或超限时停止新增放量。
 - Controller 在状态写入和 ASTS 更新的各阶段重启，以及 API 冲突、缓存延迟时，都不会重复放量；Pod 检查点无效时重新等待，活动更新状态缺失或矛盾时报告 `Unknown`。
-- 连续模板变更和回退不复用旧轮完成结果；扩缩容、暂停及 `maxUnavailable` 动态调整符合第 8 章规则；活动门禁更新期间修改 partition 被拒绝，完成后可调整。
+- 连续模板变更和回退不复用旧轮完成结果；扩缩容、暂停及 `maxUnavailable` 动态调整符合第 8 章规则；活动门禁更新期间仅放开缩容所需的 partition 调整，完成后可任意调整合法值。
 - ASTS 到达目标 partition 但仍有名额未通过观察时保持更新中；全部通过后结束，后续日常健康波动不重新打开更新。
-- 活跃更新中删除 `completionPolicy` 或单独修改完成条件会被拒绝；新 PodTemplate 可以携带新的完成条件建立新一轮更新。
-- 移除策略后的残留进度不阻塞普通更新、不触发稳定计数的无效 Patch；计数变化及降为 0 时仍正常同步。
+- 活跃更新中允许移除 `completionPolicy`，恢复普通策略并清理门禁状态；仍保留策略时单独修改完成条件会被拒绝，新 PodTemplate 可以携带新的完成条件建立新一轮更新。
+- 移除策略后先清理旧进度及自身 Condition，保留其他 Condition；稳定计数不重复写入，计数变化及降为 0 时仍正常同步；清理后重启或立即重新添加策略不接管旧轮次、不遗留旧 partition。调整观察窗口及动作不重置进度或检查点；缩到较小副本数及 0 时可同步调整目标 partition 并正常收敛。
 
 ## 11. 版本依据
 
@@ -412,6 +414,6 @@ status:
 
 ECI 存量 Pod 的探针配置可能不会随 GSS/PodProbeMarker 修改而更新。启用前应确认所需探针已在 Pod 创建时注入且正常上报；新增或调整探针应通过适当的新建或重建路径生效。升级 OKG 组件本身不要求重建业务 Pod。
 
-退出功能时先完成活动更新，在新 Controller 仍运行时移除策略，再恢复旧镜像；可保留新增的可选 CRD 字段。`paused=true` 只暂停后续放量，不将活动更新标记为完成，不应在暂停状态直接降级组件。
+退出功能时，在支持取消门禁的新 Controller 仍运行时移除策略，确认 ASTS 已恢复 GSS 配置的普通更新策略且门禁状态已清理，再恢复旧镜像；可保留新增的可选 CRD 字段。`paused=true` 只暂停后续放量，不将活动更新标记为完成；移除策略后仍保留暂停设置，需单独恢复。
 
 升级 OpenKruise 前应验证这些版本依赖。若任一假设变化，应先评估兼容逻辑，通过验证后再对配置了 `completionPolicy` 的 GSS 执行更新。
