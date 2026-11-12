@@ -19,6 +19,7 @@ package util
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -207,8 +208,15 @@ func GetAstsHash(gss *gameKruiseV1alpha1.GameServerSet) string {
 	if gss.Spec.Network != nil {
 		networkConfigs = gss.Spec.Network.NetworkConf
 	}
+	strategy := gss.Spec.UpdateStrategy
+	if HasCompletionPolicy(gss) {
+		strategy = *strategy.DeepCopy()
+		sort.Slice(strategy.RollingUpdate.CompletionPolicy.ServiceQualities, func(i, j int) bool {
+			return strategy.RollingUpdate.CompletionPolicy.ServiceQualities[i].Name < strategy.RollingUpdate.CompletionPolicy.ServiceQualities[j].Name
+		})
+	}
 	return GetHash(astsToUpdate{
-		UpdateStrategy: gss.Spec.UpdateStrategy,
+		UpdateStrategy: strategy,
 		Template:       gss.Spec.GameServerTemplate,
 		NetworkConfigs: networkConfigs,
 	})

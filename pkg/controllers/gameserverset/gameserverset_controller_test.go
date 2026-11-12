@@ -211,6 +211,9 @@ func TestInitAsts(t *testing.T) {
 			test.asts.Annotations = make(map[string]string)
 		}
 		test.asts.Annotations[gameKruiseV1alpha1.AstsHashKey] = util.GetAstsHash(test.gss)
+		if util.HasCompletionPolicy(test.gss) {
+			test.asts.Annotations[gatedTemplateHashKey] = util.GetHash(test.asts.Spec.Template)
+		}
 		if !reflect.DeepEqual(initAsts, test.asts) {
 			t.Errorf("expect asts %v but got %v", test.asts, initAsts)
 		}

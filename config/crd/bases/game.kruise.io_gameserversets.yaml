@@ -953,6 +953,51 @@ spec:
                     description: RollingUpdate is used to communicate parameters when
                       Type is RollingUpdateStatefulSetStrategyType.
                     properties:
+                      completionPolicy:
+                        description: CompletionPolicy gates further rollout on ServiceQuality
+                          observations.
+                        properties:
+                          observationWindowSeconds:
+                            description: |-
+                              ObservationWindowSeconds overrides the wait before accepting unchanged matching conditions.
+                              Timing starts when Pod update completion is observed and the probed container
+                              has started. If omitted, probe timing determines the window.
+                              Fresh matching conditions may pass earlier; expiry still requires all conditions to match.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          serviceQualities:
+                            description: ServiceQualities lists the conditions that
+                              must all be satisfied.
+                            items:
+                              description: ServiceQualityCompletionCondition references
+                                one ServiceQuality probe.
+                              properties:
+                                name:
+                                  description: Name references a ServiceQuality in
+                                    spec.serviceQualities.
+                                  minLength: 1
+                                  type: string
+                                result:
+                                  description: Result is the expected probe output.
+                                    If omitted, only State is checked.
+                                  type: string
+                                state:
+                                  description: 'State is the required probe condition
+                                    status: true for True, false for False.'
+                                  type: boolean
+                              required:
+                              - name
+                              - state
+                              type: object
+                            minItems: 1
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                        required:
+                        - serviceQualities
+                        type: object
                       inPlaceUpdateStrategy:
                         description: |-
                           UnorderedUpdate contains strategies for non-ordered update.
@@ -1023,6 +1068,66 @@ spec:
               availableReplicas:
                 format: int32
                 type: integer
+              conditions:
+                description: Conditions describe the current update state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
               currentReplicas:
                 format: int32
                 type: integer
@@ -1047,6 +1152,34 @@ spec:
                 description: replicas from advancedStatefulSet
                 format: int32
                 type: integer
+              updateProgress:
+                description: UpdateProgress describes the latest ServiceQuality-gated
+                  update.
+                properties:
+                  completedReplicas:
+                    description: CompletedReplicas counts updated replicas that passed
+                      business observation.
+                    format: int32
+                    type: integer
+                  pendingCompletionReplicas:
+                    description: PendingCompletionReplicas counts replicas released
+                      for update that have not passed business observation.
+                    format: int32
+                    type: integer
+                  startedAt:
+                    description: StartedAt is when the controller recorded the start
+                      of this update.
+                    format: date-time
+                    type: string
+                  updateGeneration:
+                    description: UpdateGeneration is the GSS generation that started
+                      this update.
+                    format: int64
+                    type: integer
+                required:
+                - startedAt
+                - updateGeneration
+                type: object
               updatedReadyReplicas:
                 format: int32
                 type: integer
