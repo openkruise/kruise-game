@@ -645,6 +645,87 @@ func TestGatedUpdateCancellationRestoresOrdinaryStrategy(t *testing.T) {
 	}
 }
 
+func TestGatedUpdateCancellationWithScaleDown(t *testing.T) {
+	for _, replicas := range []int32{3, 0} {
+		t.Run(fmt.Sprintf("replicas-%d", replicas), func(t *testing.T) {
+			ctx := context.Background()
+			gss := testGatedGSS()
+			gss.Spec.Replicas = ptr.To[int32](10)
+			gss.Spec.UpdateStrategy.RollingUpdate.Partition = ptr.To[int32](5)
+			gss.Status.UpdateProgress = &gamev1alpha1.GameServerSetUpdateProgress{UpdateGeneration: gss.Generation, PendingCompletionReplicas: 1}
+			gss.Status.Conditions = []metav1.Condition{
+				{Type: updateProgressingCondition, Status: metav1.ConditionTrue, Reason: "WaitingForBusinessObservation", LastTransitionTime: metav1.Now()},
+				{Type: "OtherHealthy", Status: metav1.ConditionTrue, Reason: "Healthy", LastTransitionTime: metav1.Now()},
+			}
+			asts := util.GetNewAstsFromGss(gss.DeepCopy(), &kruisev1beta1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: gss.Name, Namespace: gss.Namespace}})
+			asts.Spec.Replicas = ptr.To[int32](10)
+			setAstsHash(asts, gss)
+			asts.Spec.UpdateStrategy.RollingUpdate.Partition = ptr.To[int32](6)
+			beforeTemplate := asts.Spec.Template.DeepCopy()
+			// 同一次修改取消门控、缩容，并把目标 partition 调整到新副本数。
+			gss.Spec.UpdateStrategy.RollingUpdate.CompletionPolicy = nil
+			gss.Spec.UpdateStrategy.RollingUpdate.Partition = ptr.To(replicas)
+			gss.Spec.Replicas = ptr.To(replicas)
+			gss.Generation++
+			objects := []client.Object{gss, asts, createPpm(gss)}
+			for i := 0; i < 10; i++ {
+				objects = append(objects, &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("test-%d", i), Namespace: gss.Namespace, Labels: map[string]string{gamev1alpha1.GameServerOwnerGssKey: gss.Name}},
+					Status:     corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: "game.kruise.io/ready", Status: corev1.ConditionFalse}}},
+				})
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).
+				WithStatusSubresource(&gamev1alpha1.GameServerSet{}, &kruisev1beta1.StatefulSet{}, &corev1.Pod{}).
+				WithObjects(objects...).Build()
+			r := &GameServerSetReconciler{Client: c, Scheme: scheme, recorder: record.NewFakeRecorder(100)}
+			key := client.ObjectKeyFromObject(gss)
+			if err := c.Get(ctx, key, gss); err != nil {
+				t.Fatal(err)
+			}
+			otherCondition := gss.Status.Conditions[1]
+			reconcile := func() {
+				t.Helper()
+				if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+					t.Fatal(err)
+				}
+				if err := c.Get(ctx, key, gss); err != nil {
+					t.Fatal(err)
+				}
+				if err := c.Get(ctx, key, asts); err != nil {
+					t.Fatal(err)
+				}
+				if gss.Status.UpdateProgress != nil || !equality.Semantic.DeepEqual(gss.Status.Conditions, []metav1.Condition{otherCondition}) {
+					t.Fatalf("cancelled progress must stay cleared without removing other conditions: %+v", gss.Status)
+				}
+			}
+			// 首轮只清理进度，下一轮缩容时暂时保留原来的有效 partition。
+			reconcile()
+			if *asts.Spec.Replicas != 10 || *asts.Spec.UpdateStrategy.RollingUpdate.Partition != 6 {
+				t.Fatal("progress cleanup must precede workload changes")
+			}
+			reconcile()
+			if *asts.Spec.Replicas != replicas || *asts.Spec.UpdateStrategy.RollingUpdate.Partition != 6 {
+				t.Fatal("ordinary scaling must not use the cancelled gated partition adjustment")
+			}
+			// 再次调谐恢复普通策略，不能因临时 partition 超出副本数而卡住。
+			reconcile()
+			reconcile()
+			if *asts.Spec.UpdateStrategy.RollingUpdate.Partition != replicas || !equality.Semantic.DeepEqual(asts.Spec.Template, *beforeTemplate) {
+				t.Fatal("cancellation and scaling must converge to the configured partition without changing the template")
+			}
+			for i := 0; i < 10; i++ {
+				pod := &corev1.Pod{}
+				if err := c.Get(ctx, client.ObjectKey{Namespace: gss.Namespace, Name: fmt.Sprintf("test-%d", i)}, pod); err != nil {
+					t.Fatal(err)
+				}
+				if pod.Status.Conditions[0].Status != corev1.ConditionFalse {
+					t.Fatal("cancellation must not fabricate passing business conditions")
+				}
+			}
+		})
+	}
+}
+
 func TestGatedUpdateStrategyEditsKeepObservationRound(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
