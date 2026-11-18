@@ -526,6 +526,10 @@ func (manager GameServerManager) syncNetworkStatus() gameKruiseV1alpha1.NetworkS
 
 	gsNetworkStatus.InternalAddresses = podNetworkStatus.InternalAddresses
 	gsNetworkStatus.ExternalAddresses = podNetworkStatus.ExternalAddresses
+	// 实际网络状态变化后重新计时，让原地更新后的网络恢复能够继续触发检查。
+	if gsNetworkStatus.CurrentNetworkState != podNetworkStatus.CurrentNetworkState {
+		gsNetworkStatus.LastTransitionTime = metav1.Now()
+	}
 	gsNetworkStatus.CurrentNetworkState = podNetworkStatus.CurrentNetworkState
 
 	if gsNetworkStatus.DesiredNetworkState != desiredNetworkState(nm.GetNetworkDisabled()) {

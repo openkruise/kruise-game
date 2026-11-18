@@ -150,6 +150,37 @@ type RollingUpdateStatefulSetStrategy struct {
 	// Default value is 0, max is 300.
 	// +optional
 	MinReadySeconds *int32 `json:"minReadySeconds,omitempty"`
+	// CompletionPolicy gates further rollout on ServiceQuality observations.
+	// +optional
+	CompletionPolicy *UpdateCompletionPolicy `json:"completionPolicy,omitempty"`
+}
+
+// UpdateCompletionPolicy defines the business conditions required to complete an update.
+type UpdateCompletionPolicy struct {
+	// ObservationWindowSeconds overrides the wait before accepting unchanged matching conditions.
+	// Timing starts when Pod update completion is observed and the probed container
+	// has started. If omitted, probe timing determines the window.
+	// Fresh matching conditions may pass earlier; expiry still requires all conditions to match.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	ObservationWindowSeconds *int32 `json:"observationWindowSeconds,omitempty"`
+	// ServiceQualities lists the conditions that must all be satisfied.
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MinItems=1
+	ServiceQualities []ServiceQualityCompletionCondition `json:"serviceQualities"`
+}
+
+// ServiceQualityCompletionCondition references one ServiceQuality probe.
+type ServiceQualityCompletionCondition struct {
+	// Name references a ServiceQuality in spec.serviceQualities.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+	// State is the required probe condition status: true for True, false for False.
+	State bool `json:"state"`
+	// Result is the expected probe output. If omitted, only State is checked.
+	// +optional
+	Result string `json:"result,omitempty"`
 }
 
 type ScaleStrategy struct {
@@ -194,6 +225,26 @@ type GameServerSetStatus struct {
 	PreDeleteReplicas       *int32 `json:"preDeleteReplicas,omitempty"`
 	// LabelSelector is label selectors for query over pods that should match the replica count used by HPA.
 	LabelSelector string `json:"labelSelector,omitempty"`
+	// UpdateProgress describes the latest ServiceQuality-gated update.
+	// +optional
+	UpdateProgress *GameServerSetUpdateProgress `json:"updateProgress,omitempty"`
+	// Conditions describe the current update state.
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// GameServerSetUpdateProgress describes a ServiceQuality-gated update.
+type GameServerSetUpdateProgress struct {
+	// UpdateGeneration is the GSS generation that started this update.
+	UpdateGeneration int64 `json:"updateGeneration"`
+	// CompletedReplicas counts updated replicas that passed business observation.
+	CompletedReplicas int32 `json:"completedReplicas,omitempty"`
+	// PendingCompletionReplicas counts replicas released for update that have not passed business observation.
+	PendingCompletionReplicas int32 `json:"pendingCompletionReplicas,omitempty"`
+	// StartedAt is when the controller recorded the start of this update.
+	StartedAt metav1.Time `json:"startedAt"`
 }
 
 //+genclient

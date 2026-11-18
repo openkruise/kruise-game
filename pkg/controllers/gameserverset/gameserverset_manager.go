@@ -30,6 +30,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
@@ -185,6 +186,17 @@ func (manager *GameServerSetManager) GameServerScale(ctx context.Context) error 
 	asts.Spec.Replicas = gss.Spec.Replicas
 	asts.Spec.ScaleStrategy = &kruiseV1beta1.StatefulSetScaleStrategy{
 		MaxUnavailable: gss.Spec.ScaleStrategy.MaxUnavailable,
+	}
+	if gss.Status.UpdateProgress != nil &&
+		gss.Spec.UpdateStrategy.RollingUpdate != nil && gss.Spec.UpdateStrategy.RollingUpdate.CompletionPolicy != nil &&
+		asts.Spec.UpdateStrategy.RollingUpdate != nil && asts.Spec.UpdateStrategy.RollingUpdate.Partition != nil {
+		if util.IsServiceQualityGatedUpdateActive(gss) {
+			target := ptr.Deref(gss.Spec.UpdateStrategy.RollingUpdate.Partition, 0)
+			partition := gatedPartitionAfterScale(int32(currentReplicas), *asts.Spec.UpdateStrategy.RollingUpdate.Partition, int32(expectedReplicas), target)
+			asts.Spec.UpdateStrategy.RollingUpdate.Partition = ptr.To(partition)
+		} else if *asts.Spec.UpdateStrategy.RollingUpdate.Partition > int32(expectedReplicas) {
+			asts.Spec.UpdateStrategy.RollingUpdate.Partition = ptr.To(int32(expectedReplicas))
+		}
 	}
 	err := c.Update(ctx, asts)
 	if err != nil {
@@ -376,6 +388,14 @@ func SyncGameServer(ctx context.Context, logger logr.Logger, gss *gameKruiseV1al
 }
 
 func (manager *GameServerSetManager) IsNeedToUpdateWorkload() bool {
+	gss := manager.gameServerSet
+	// 配置了 completionPolicy 但没有 updateProgress 时，partition 按普通更新策略管理；
+	// 取消后即使在更新工作负载前重新添加策略，也会把 partition 同步回 GSS 配置的目标值。
+	if util.HasCompletionPolicy(gss) && gss.Status.UpdateProgress == nil &&
+		manager.asts.Spec.UpdateStrategy.RollingUpdate != nil &&
+		ptr.Deref(manager.asts.Spec.UpdateStrategy.RollingUpdate.Partition, 0) != ptr.Deref(gss.Spec.UpdateStrategy.RollingUpdate.Partition, 0) {
+		return true
+	}
 	return manager.asts.GetAnnotations()[gameKruiseV1alpha1.AstsHashKey] != util.GetAstsHash(manager.gameServerSet)
 }
 
@@ -400,6 +420,12 @@ func (manager *GameServerSetManager) UpdateWorkload(ctx context.Context) error {
 		asts = util.GetNewAstsFromGss(gss.DeepCopy(), asts)
 		astsAns := asts.GetAnnotations()
 		astsAns[gameKruiseV1alpha1.AstsHashKey] = newHash
+		if util.HasCompletionPolicy(gss) {
+			astsAns[gatedTemplateHashKey] = util.GetHash(asts.Spec.Template)
+		} else {
+			// A stale fingerprint must not start a rollout when a policy is added later.
+			delete(astsAns, gatedTemplateHashKey)
+		}
 		asts.SetAnnotations(astsAns)
 
 		return manager.client.Update(ctx, asts)
@@ -575,13 +601,51 @@ func (manager *GameServerSetManager) SyncStatus(ctx context.Context) error {
 		LabelSelector:           asts.Status.LabelSelector,
 		ObservedGeneration:      gss.GetGeneration(),
 	}
-	if equality.Semantic.DeepEqual(gss.Status, status) {
+	if !util.HasCompletionPolicy(gss) && gss.Status.UpdateProgress == nil &&
+		meta.FindStatusCondition(gss.Status.Conditions, updateProgressingCondition) == nil {
+		// 没有门控状态的 GSS 沿用原来的计数 Merge Patch，不改动与本功能无关的 Condition。
+		comparisonStatus := status
+		comparisonStatus.UpdateProgress = gss.Status.UpdateProgress
+		comparisonStatus.Conditions = gss.Status.Conditions
+		if equality.Semantic.DeepEqual(gss.Status, comparisonStatus) {
+			return nil
+		}
+		patchStatus := map[string]interface{}{"status": status}
+		jsonPatch, err := json.Marshal(patchStatus)
+		if err != nil {
+			return err
+		}
+		return c.Status().Patch(ctx, gss, client.RawPatch(types.MergePatchType, jsonPatch))
+	}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		current := &gameKruiseV1alpha1.GameServerSet{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(gss), current); err != nil {
+			return err
+		}
+		if current.Generation != gss.Generation {
+			return nil // A newer GSS update will reconcile its own status.
+		}
+		status.UpdateProgress = current.Status.UpdateProgress
+		status.Conditions = current.Status.Conditions
+		if !util.HasCompletionPolicy(current) {
+			// 清理已取消的进度，避免之后重新添加策略时被误判为门控更新仍在进行；
+			// 只移除 UpdateProgressing Condition，其他 Condition 保持不变。
+			status.UpdateProgress = nil
+			meta.RemoveStatusCondition(&status.Conditions, updateProgressingCondition)
+		}
+		if equality.Semantic.DeepEqual(current.Status, status) {
+			gss.Status = current.Status
+			gss.ResourceVersion = current.ResourceVersion
+			return nil
+		}
+		current.Status = status
+		// A full update includes the CRD-required replica counters even when
+		// they are zero; retry preserves progress written earlier in this cycle.
+		if err := c.Status().Update(ctx, current); err != nil {
+			return err
+		}
+		gss.Status = current.Status
+		gss.ResourceVersion = current.ResourceVersion
 		return nil
-	}
-	patchStatus := map[string]interface{}{"status": status}
-	jsonPatch, err := json.Marshal(patchStatus)
-	if err != nil {
-		return err
-	}
-	return c.Status().Patch(ctx, gss, client.RawPatch(types.MergePatchType, jsonPatch))
+	})
 }

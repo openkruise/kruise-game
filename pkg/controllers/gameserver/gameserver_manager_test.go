@@ -2,9 +2,11 @@ package gameserver
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr/testr"
 	kruisePub "github.com/openkruise/kruise-api/apps/pub"
@@ -1203,6 +1205,57 @@ func TestSyncNetworkStatus(t *testing.T) {
 		if !reflect.DeepEqual(test.gsNetworkStatus, actual) {
 			t.Errorf("expect gsNetworkStatus is %v ,but actually is %v", test.gsNetworkStatus, actual)
 		}
+	}
+}
+
+func TestSyncNetworkStatusTransitionTime(t *testing.T) {
+	oldTime := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	for _, tc := range []struct {
+		name               string
+		oldState, newState gameKruiseV1alpha1.NetworkState
+	}{
+		{name: "ready to not ready", oldState: gameKruiseV1alpha1.NetworkReady, newState: gameKruiseV1alpha1.NetworkNotReady},
+		{name: "not ready to ready", oldState: gameKruiseV1alpha1.NetworkNotReady, newState: gameKruiseV1alpha1.NetworkReady},
+		{name: "unchanged ready", oldState: gameKruiseV1alpha1.NetworkReady, newState: gameKruiseV1alpha1.NetworkReady},
+		{name: "unchanged not ready", oldState: gameKruiseV1alpha1.NetworkNotReady, newState: gameKruiseV1alpha1.NetworkNotReady},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gs := &gameKruiseV1alpha1.GameServer{Status: gameKruiseV1alpha1.GameServerStatus{
+				NetworkStatus: gameKruiseV1alpha1.NetworkStatus{
+					NetworkType: "AlibabaCloud-Multi-NLBs", DesiredNetworkState: gameKruiseV1alpha1.NetworkReady,
+					CurrentNetworkState: tc.oldState, CreateTime: oldTime, LastTransitionTime: oldTime,
+				},
+			}}
+			data, err := json.Marshal(gameKruiseV1alpha1.NetworkStatus{CurrentNetworkState: tc.newState})
+			if err != nil {
+				t.Fatal(err)
+			}
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+				gameKruiseV1alpha1.GameServerNetworkType:   "AlibabaCloud-Multi-NLBs",
+				gameKruiseV1alpha1.GameServerNetworkStatus: string(data),
+			}}}
+			manager := &GameServerManager{gameServer: gs, pod: pod, logger: testr.New(t)}
+			before := time.Now()
+			actual := manager.syncNetworkStatus()
+			if actual.CurrentNetworkState != tc.newState || !actual.CreateTime.Equal(&oldTime) {
+				t.Fatalf("unexpected network state or creation time: %+v", actual)
+			}
+			if tc.oldState == tc.newState {
+				if !actual.LastTransitionTime.Equal(&oldTime) {
+					t.Fatal("unchanged state must preserve transition time")
+				}
+			} else {
+				if actual.LastTransitionTime.Before(&metav1.Time{Time: before}) || actual.LastTransitionTime.Time.After(time.Now()) {
+					t.Fatal("changed state must record the current transition time")
+				}
+				if tc.newState == gameKruiseV1alpha1.NetworkNotReady {
+					gs.Status.NetworkStatus = actual
+					if !manager.WaitOrNot() {
+						t.Fatal("a new NotReady transition must reopen periodic checks even for an old GS")
+					}
+				}
+			}
+		})
 	}
 }
 

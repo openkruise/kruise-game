@@ -28,6 +28,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -283,6 +284,19 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	span.SetAttributes(attribute.Int(telemetryfields.FieldPodsCount, len(podList.Items)))
 
 	gsm.SyncStsAndPodList(asts, podList.Items)
+	// 恢复普通更新前先清理已取消的进度，即使调谐在此中断、随后重新添加策略，也不会沿用旧的 updateProgress。
+	if !util.HasCompletionPolicy(gss) && (gss.Status.UpdateProgress != nil ||
+		meta.FindStatusCondition(gss.Status.Conditions, updateProgressingCondition) != nil) {
+		span.SetAttributes(tracing.AttrReconcileAction("cancel_gated_update"))
+		if err := gsm.SyncStatus(ctx); err != nil {
+			logger.Error(err, "failed to clear cancelled ServiceQuality update progress")
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to clear cancelled update progress")
+			return reconcile.Result{}, err
+		}
+		span.SetStatus(codes.Ok, "Cancelled ServiceQuality update progress cleared")
+		return reconcile.Result{Requeue: true}, nil
+	}
 
 	// kill game servers
 	newReplicas := gsm.GetReplicasAfterKilling()
@@ -316,6 +330,25 @@ func (r *GameServerSetReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		span.SetStatus(codes.Ok, "GameServers scaled successfully")
 		return reconcile.Result{}, nil
+	}
+
+	// A gated rollout owns the effective ASTS partition while it is active.
+	if handled, result, gatedErr := r.reconcileGatedUpdate(ctx, gss, asts, podList.Items); handled {
+		span.SetAttributes(tracing.AttrReconcileAction("gated_update"))
+		if gatedErr != nil {
+			logger.Error(gatedErr, "failed to reconcile ServiceQuality-gated update")
+			span.RecordError(gatedErr)
+			span.SetStatus(codes.Error, "failed to reconcile ServiceQuality-gated update")
+			return reconcile.Result{}, gatedErr
+		}
+		if err = gsm.SyncStatus(ctx); err != nil {
+			logger.Error(err, "failed to sync GameServerSet status during gated update")
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to sync GameServerSet status during gated update")
+			return reconcile.Result{}, err
+		}
+		span.SetStatus(codes.Ok, "ServiceQuality-gated update reconciled")
+		return result, nil
 	}
 
 	// update workload
@@ -398,6 +431,9 @@ func (r *GameServerSetReconciler) initAsts(ctx context.Context, gss *gamekruisei
 	}
 
 	asts = util.GetNewAstsFromGss(gss.DeepCopy(), asts)
+	if util.HasCompletionPolicy(gss) {
+		asts.Annotations[gatedTemplateHashKey] = util.GetHash(asts.Spec.Template)
+	}
 
 	return r.Create(ctx, asts)
 }
