@@ -146,6 +146,16 @@ func (r *GameServerSetReconciler) reconcileGatedUpdate(ctx context.Context, gss 
 			ctx, gss, "InvalidPartition", "GSS or ASTS partition is outside the valid range", metav1.ConditionUnknown,
 		)
 	}
+	// 已被 ASTS 保留序号排除的 Pod 不参与更新，即使仍在等待删除钩子或优雅退出。
+	if reserved := util.GetReserveOrdinalIntSet(asts.Spec.ReserveOrdinals); len(reserved) > 0 {
+		updatingPods := make([]corev1.Pod, 0, len(pods))
+		for i := range pods {
+			if !reserved.Has(util.GetIndexFromGsName(pods[i].Name)) {
+				updatingPods = append(updatingPods, pods[i])
+			}
+		}
+		pods = updatingPods
+	}
 	if *asts.Spec.Replicas != replicas || len(pods) != int(replicas) {
 		return true, ctrl.Result{RequeueAfter: 5 * time.Second}, r.updateGatedStatus(
 			ctx, gss, "WaitingForReplicas", "Waiting for ASTS and Pod count to converge", metav1.ConditionTrue,

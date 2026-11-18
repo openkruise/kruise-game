@@ -163,7 +163,7 @@ OKG 不创建独立版本，不改变 ASTS Revision 语义，也不向 PodTempla
 targetPartition <= currentPartition <= replicas
 ```
 
-副本数不变时，`currentPartition` 从 `replicas` 开始单调降低，最终与 `targetPartition` 一致。GSS PodTemplate 再次变化时可以重新设置为 `replicas`；扩缩容时可以随新副本数调整，但在 ASTS 和 Pod 集合收敛前不继续降低 partition。
+副本数不变时，`currentPartition` 从 `replicas` 开始单调降低，最终与 `targetPartition` 一致。GSS PodTemplate 再次变化时可以重新设置为 `replicas`；扩缩容时可以随新副本数调整，但在 ASTS 副本数与参与更新的 Pod 集合收敛前不继续降低 partition。Pod 集合排除 ASTS `reserveOrdinals` 指定的序号，不等待这些旧 Pod 实际删除。
 
 **提高 partition 不能撤销已经发生的更新**，因此不能作为回滚手段。用户直接修改 GSS 所属 ASTS 的 partition 不受支持。
 
@@ -226,6 +226,7 @@ ServiceQuality 结果由 PodProbeMarker 写入自定义 PodCondition，再同步
 | --- | --- |
 | 目标 PodTemplate、目标 partition、暂停和完成条件 | GSS spec |
 | ASTS 已接收的模板与当前放行边界 | ASTS 模板指纹 annotation 与 spec |
+| 已退出目标副本的 Pod 序号 | ASTS spec.reserveOrdinals，复用现有扩缩容结果 |
 | ASTS 是否已识别本次更新及目标 Revision | ASTS status |
 | 单个 Pod 当前 Revision、原地升级状态、探针容器启动信息及本轮观察检查点 | Pod label、annotation 和 status |
 | 当前业务信号 | 被引用的 ServiceQuality PodCondition |
@@ -240,10 +241,11 @@ GSS status 是必要的更新时间检查点和对外进度，不替代 ASTS、P
 1. 未配置 `completionPolicy` 时，完全使用现有 GSS 更新逻辑；
 2. 发现 GSS `spec.gameServerTemplate` 相比 ASTS 当前 PodTemplate 发生变化时，先记录本轮 `updateGeneration` 和 `startedAt`；模板是否变化通过 OKG 写在 ASTS 上的指纹判断，避免 API Server 补默认字段造成误判；
 3. 将目标 PodTemplate 与 `partition=replicas` 原子写入 ASTS，先关闭更新窗口；
-4. 等待 ASTS `status.observedGeneration` 追上，再从 `ASTS.status.updateRevision` 读取目标 Revision；
-5. 按第 6 章规则检查 Pod，统计目标 Revision 数量和当前通过观察的数量；对尚未到期的观察窗口设置定时重新调谐；
-6. 用户未暂停时，按 `maxUnavailable` 计算下一步 ASTS partition；
-7. 必要时更新 ASTS partition，并同步 GSS `updateProgress` 和 `UpdateProgressing` Condition。
+4. 排除 ASTS `reserveOrdinals` 中的 Pod，再检查 ASTS 副本数及剩余 Pod 数是否与 GSS 期望副本数一致；不一致时进入 `WaitingForReplicas`；
+5. 等待 ASTS `status.observedGeneration` 追上，再从 `ASTS.status.updateRevision` 读取目标 Revision；
+6. 对同一份过滤后的 Pod 集合按第 6 章规则检查，统计目标 Revision 数量和当前通过观察的数量；对尚未到期的观察窗口设置定时重新调谐；
+7. 用户未暂停时，按 `maxUnavailable` 计算下一步 ASTS partition；
+8. 必要时更新 ASTS partition，并同步 GSS `updateProgress` 和 `UpdateProgressing` Condition。
 
 调谐必须幂等。写入 GSS status 后、更新 ASTS 前重启时，Controller 根据本轮状态继续执行，不会提前放量；API 冲突、缓存延迟或无法确认事实时也不继续降低 partition。
 
@@ -294,7 +296,8 @@ currentPartition == targetPartition
 | 用户修改 observationWindowSeconds | 允许单独调整为正数或移除自定义值，复用本轮检查点按新窗口判断，不建立新轮进度 |
 | 用户修改被引用 ServiceQuality 的动作或 permanent | 允许调整，继续使用原有动作处理机制；这些字段不参与门禁完成判断 |
 | 用户设置 paused | 同一目标版本内保持 ASTS 当前 partition，不撤销已经发生的更新；暂停期间出现新 PodTemplate 时，仍先建立新一轮更新并将 partition 重置为 `replicas`，但不开放首个窗口 |
-| 活跃更新中扩缩容 | 扩缩容本身不受 `completionPolicy` 节流；先冻结新增更新放量，并按新副本数调整 partition，尽量保持 `replicas-currentPartition` 不变；等待 ASTS 与 Pod 集合收敛后，按实际 Revision 和完成状态重新统计再继续推进 |
+| 活跃更新中扩缩容 | 扩缩容本身不受 `completionPolicy` 节流；先冻结新增更新放量，并按新副本数调整 partition，尽量保持 `replicas-currentPartition` 不变；等待 ASTS 副本数与排除 reserveOrdinals 后的 Pod 集合收敛，再按实际 Revision 和完成状态重新统计并继续推进 |
+| 已退出目标副本的旧 Pod 尚未删除 | 序号已在 ASTS reserveOrdinals 中的 Pod 不参与数量检查、观察检查点写入或完成度统计；无论处于 PreDelete、Deleting 或仍为 Ready，都不额外阻塞 OKG 放量 |
 | 活跃更新中移除 completionPolicy | 显式取消业务门禁，不要求先暂停；先清理本轮进度及 UpdateProgressing Condition，再恢复 GSS 配置的普通更新策略和目标 partition，不表示业务已 Ready |
 | 活跃更新中单独修改完成条件或被引用探针 | 拒绝修改，避免中途改变完成标准 |
 | 新 PodTemplate 与完成条件或被引用探针同时变化 | 视为新一轮更新，允许新一轮使用新的完成标准；正在进行的旧目标被新目标取代 |
@@ -309,7 +312,9 @@ currentPartition == targetPartition
 clamp(newReplicas - 已开放容量, targetPartition, newReplicas)
 ```
 
-这一步只用于避免副本数变化意外扩大更新窗口；Pod 集合稳定后，仍以实际 Revision 和 ServiceQuality 完成状态重新计算下一步放量。
+这一步只用于避免副本数变化意外扩大更新窗口；排除 `reserveOrdinals` 后的 Pod 集合稳定后，仍以实际 Revision 和 ServiceQuality 完成状态重新计算下一步放量。
+
+例如从 10 缩到 8，选中回收的两个序号已写入 ASTS `reserveOrdinals`，但旧 Pod 因删除钩子或优雅退出仍存在。此时以剩余 8 个 Pod 检查数量和业务完成条件，不因总数仍为 10 而等待，也不能把两个待回收 Pod 的目标 Revision 或业务 True 计入完成名额。只按 ASTS 序号名单过滤，不按 PreDelete 等状态一律跳过：重建更新时仍需在同一序号补建的 Pod，若未在名单中，继续参与原有更新判断；目标 Pod 缺失时仍等待数量收敛。Kruise 原有的生命周期、更新及不可用数量约束继续生效。
 
 当前不提供通过修改 partition 提前结束活动门禁更新的路径。需要暂时停止后续放量时使用 `paused=true`，已放行对象仍可能继续更新，暂停不会将本轮标记为 Completed。需要切换目标版本或回退镜像时可修改 PodTemplate，partition 保持原值，新轮仍按门禁推进。需要取消业务门禁时可直接移除 `completionPolicy`，后续更新按 GSS 的普通更新策略继续，仍遵守 `paused`、目标 partition、`maxUnavailable` 及 ASTS 自身的更新限制；不增加独立的取消状态机。
 
@@ -392,6 +397,7 @@ status:
 - 已放行但尚未开始更新、Pod 尚未创建或暂时缺失的名额仍占用窗口；业务条件退化后重新占用名额，窗口满或超限时停止新增放量。
 - Controller 在状态写入和 ASTS 更新的各阶段重启，以及 API 冲突、缓存延迟时，都不会重复放量；Pod 检查点无效时重新等待，活动更新状态缺失或矛盾时报告 `Unknown`。
 - 连续模板变更和回退不复用旧轮完成结果；扩缩容、暂停及 `maxUnavailable` 动态调整符合第 8 章规则；活动门禁更新期间仅放开缩容所需的 partition 调整，完成后可任意调整合法值。
+- ASTS reserveOrdinals 中的旧 Pod 即使停在 PreDelete、Terminating 或仍为 Normal，也不阻塞正常批次；整数、区间及非连续序号使用同一解析规则。这些 Pod 不写入观察检查点，业务 True 不增加完成数、业务 False 不阻塞完成；过滤后目标 Pod 缺失或业务条件不满足时仍等待。
 - ASTS 到达目标 partition 但仍有名额未通过观察时保持更新中；全部通过后结束，后续日常健康波动不重新打开更新。
 - 活跃更新中允许移除 `completionPolicy`，恢复普通策略并清理门禁状态；仍保留策略时单独修改完成条件会被拒绝，新 PodTemplate 可以携带新的完成条件建立新一轮更新。
 - 移除策略后先清理旧进度及自身 Condition，保留其他 Condition；稳定计数不重复写入，计数变化及降为 0 时仍正常同步；清理后重启或立即重新添加策略不接管旧轮次、不遗留旧 partition。调整观察窗口及动作不重置进度或检查点；缩到较小副本数及 0 时可同步调整目标 partition 并正常收敛。

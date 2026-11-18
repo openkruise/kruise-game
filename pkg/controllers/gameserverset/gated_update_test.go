@@ -980,6 +980,114 @@ func TestGatedUpdateWithoutPolicyUsesLegacyPath(t *testing.T) {
 	}
 }
 
+func TestGatedUpdateExcludesReservedPods(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		reserved      []intstr.IntOrString
+		targetIDs     [2]int
+		reservedIDs   [2]int
+		lifecycle     appspub.LifecycleStateType
+		deleting      bool
+		missingTarget bool
+	}{
+		{name: "predelete", reserved: []intstr.IntOrString{intstr.FromInt(2), intstr.FromInt(3)}, targetIDs: [2]int{0, 1}, reservedIDs: [2]int{2, 3}, lifecycle: appspub.LifecycleStatePreparingDelete},
+		{name: "terminating", reserved: []intstr.IntOrString{intstr.FromString("2-3")}, targetIDs: [2]int{0, 1}, reservedIDs: [2]int{2, 3}, lifecycle: appspub.LifecycleStatePreparingDelete, deleting: true},
+		{name: "still normal", reserved: []intstr.IntOrString{intstr.FromInt(1), intstr.FromInt(3)}, targetIDs: [2]int{0, 2}, reservedIDs: [2]int{1, 3}, lifecycle: appspub.LifecycleStateNormal},
+		{name: "missing target", reserved: []intstr.IntOrString{intstr.FromString("2-3")}, targetIDs: [2]int{0, 1}, reservedIDs: [2]int{2, 3}, lifecycle: appspub.LifecycleStatePreparingDelete, missingTarget: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			now := time.Now()
+			gss := testGatedGSS()
+			gss.Status.UpdateProgress = &gamev1alpha1.GameServerSetUpdateProgress{UpdateGeneration: gss.Generation, StartedAt: metav1.NewTime(now.Add(-time.Minute))}
+			asts := util.GetNewAstsFromGss(gss.DeepCopy(), &kruisev1beta1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: gss.Name, Namespace: gss.Namespace}})
+			asts.Spec.ReserveOrdinals = tc.reserved
+			asts.Spec.Replicas = gss.Spec.Replicas
+			asts.Spec.UpdateStrategy.RollingUpdate.Partition = ptr.To[int32](2)
+			asts.Status.UpdateRevision = "new-revision"
+			setAstsHash(asts, gss)
+			var pods []corev1.Pod
+			objects := []client.Object{gss, asts}
+			for i, id := range append(tc.targetIDs[:], tc.reservedIDs[:]...) {
+				if tc.missingTarget && i == 1 {
+					continue
+				}
+				pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+					Name: fmt.Sprintf("test-%d", id), Namespace: gss.Namespace, UID: types.UID(fmt.Sprintf("pod-%d", id)),
+					Labels: map[string]string{appsv1.ControllerRevisionHashLabelKey: "old-revision"},
+				}, Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{{Name: "main", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-2 * time.Minute))}}}},
+					Conditions:        []corev1.PodCondition{{Type: "game.kruise.io/ready", Status: corev1.ConditionTrue, Message: "ready"}},
+				}}
+				if i >= 2 {
+					pod.Labels[appsv1.ControllerRevisionHashLabelKey] = "new-revision"
+					pod.Labels[appspub.LifecycleStateKey] = string(tc.lifecycle)
+					if tc.deleting {
+						pod.DeletionTimestamp = ptr.To(metav1.NewTime(now))
+						pod.Finalizers = []string{"test/hold"}
+					}
+				}
+				pods = append(pods, pod)
+				objects = append(objects, pod.DeepCopy())
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&gamev1alpha1.GameServerSet{}).WithObjects(objects...).Build()
+			r := &GameServerSetReconciler{Client: c}
+			key := client.ObjectKeyFromObject(gss)
+			check := func(wantPartition, wantCompleted int32, wantReason string) {
+				t.Helper()
+				if handled, _, err := r.reconcileGatedUpdate(ctx, gss, asts, pods); err != nil || !handled {
+					t.Fatalf("handled=%v err=%v", handled, err)
+				}
+				if err := c.Get(ctx, key, asts); err != nil {
+					t.Fatal(err)
+				}
+				if *asts.Spec.UpdateStrategy.RollingUpdate.Partition != wantPartition || gss.Status.UpdateProgress.CompletedReplicas != wantCompleted {
+					t.Fatalf("partition=%d progress=%+v", *asts.Spec.UpdateStrategy.RollingUpdate.Partition, gss.Status.UpdateProgress)
+				}
+				if len(gss.Status.Conditions) != 1 || gss.Status.Conditions[0].Reason != wantReason {
+					t.Fatalf("conditions=%v, want reason %s", gss.Status.Conditions, wantReason)
+				}
+				for _, id := range tc.reservedIDs {
+					pod := &corev1.Pod{}
+					if err := c.Get(ctx, client.ObjectKey{Namespace: gss.Namespace, Name: fmt.Sprintf("test-%d", id)}, pod); err != nil {
+						t.Fatal(err)
+					}
+					if pod.Annotations[observationCheckpointKey] != "" {
+						t.Fatal("reserved Pod must not receive an observation checkpoint")
+					}
+				}
+			}
+			if tc.missingTarget {
+				check(2, 0, "WaitingForReplicas")
+				return
+			}
+			// 待回收 Pod 已是目标版本且业务 Ready，也不能占用完成名额或跳过第一批。
+			check(1, 0, "Updating")
+			for i := 0; i < 2; i++ {
+				pods[i].Labels[appsv1.ControllerRevisionHashLabelKey] = "new-revision"
+				raw, err := json.Marshal(observationCheckpoint{UpdateGeneration: gss.Generation, PodUID: string(pods[i].UID), Revision: "new-revision", ObservedAt: metav1.NewTime(now.Add(-time.Minute))})
+				if err != nil {
+					t.Fatal(err)
+				}
+				pods[i].Annotations = map[string]string{observationCheckpointKey: string(raw)}
+				pods[i].Status.Conditions[0].Status = corev1.ConditionFalse
+				if i == 0 {
+					check(1, 0, "WaitingForBusinessObservation")
+					pods[i].Status.Conditions[0].Status = corev1.ConditionTrue
+					check(0, 1, "Updating")
+				} else {
+					for j := 2; j < len(pods); j++ {
+						pods[j].Status.Conditions[0].Status = corev1.ConditionFalse
+					}
+					check(0, 1, "WaitingForBusinessObservation")
+					pods[i].Status.Conditions[0].Status = corev1.ConditionTrue
+					check(0, 2, "Completed")
+				}
+			}
+		})
+	}
+}
+
 func TestInvalidProgressAndMissingPodHoldPartition(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
