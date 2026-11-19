@@ -269,7 +269,7 @@ func (s *ElbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context.C
 
 	// old svc remain
 	if svc.OwnerReferences[0].Kind == "Pod" && svc.OwnerReferences[0].UID != pod.UID {
-		log.Infof("[%s] waitting old svc %s/%s deleted. old owner pod uid is %s, but now is %s", ElbNetwork, svc.Namespace, svc.Name, svc.OwnerReferences[0].UID, pod.UID)
+		log.Infof("[%s] waiting old svc %s/%s deleted. old owner pod uid is %s, but now is %s", ElbNetwork, svc.Namespace, svc.Name, svc.OwnerReferences[0].UID, pod.UID)
 		return pod, nil
 	}
 
@@ -685,7 +685,7 @@ func (s *ElbPlugin) consSvc(sc *elbConfig, pod *corev1.Pod, c client.Client, ctx
 	} else {
 		lbId, ports = s.allocate(sc.lbIds, len(sc.targetPorts), podKey)
 		if lbId == "" && ports == nil {
-			return nil, fmt.Errorf("there are no avaialable ports for %v", sc.lbIds)
+			return nil, fmt.Errorf("there are no available ports for %v", sc.lbIds)
 		}
 	}
 

@@ -392,7 +392,7 @@ func (c *ClbPlugin) allocate(lbIds []string, num int, nsName string, enableClbSc
 			idx := (startIdx + i) % len(lbIds)
 			clbId := lbIds[idx]
 			if c.cache[clbId] == nil {
-				// we assume that an empty cache is allways allocatable
+				// we assume that an empty cache is always allocatable
 				c.newCacheForSingleLb(clbId)
 				lbId = clbId
 				c.lastScatterIdx = idx + 1 // 下次从下一个开始

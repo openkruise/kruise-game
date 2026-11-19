@@ -249,7 +249,7 @@ func (s *CCEElbPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx contex
 
 	// old svc remain
 	if svc.OwnerReferences[0].Kind == "Pod" && svc.OwnerReferences[0].UID != pod.UID {
-		log.Infof("[%s] waitting old svc %s/%s deleted. old owner pod uid is %s, but now is %s", CCEElbNetwork, svc.Namespace, svc.Name, svc.OwnerReferences[0].UID, pod.UID)
+		log.Infof("[%s] waiting old svc %s/%s deleted. old owner pod uid is %s, but now is %s", CCEElbNetwork, svc.Namespace, svc.Name, svc.OwnerReferences[0].UID, pod.UID)
 		return pod, nil
 	}
 
@@ -458,7 +458,7 @@ func (s *CCEElbPlugin) consSvc(sc *cceElbConfig, pod *corev1.Pod, c client.Clien
 			lbId, ports = s.allocate(sc.elbIds, len(sc.targetPorts), podKey)
 		}
 		if lbId == "" && ports == nil {
-			return nil, fmt.Errorf("there are no avaliable ports for %v", sc.elbIds)
+			return nil, fmt.Errorf("there are no available ports for %v", sc.elbIds)
 		}
 	}
 
