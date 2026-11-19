@@ -654,7 +654,7 @@ func (n *NlbPlugin) consSvc(nc *nlbConfig, pod *corev1.Pod, c client.Client, ctx
 	} else {
 		lbId, ports = n.allocate(ctx, pod, nc.lbIds, len(nc.targetPorts))
 		if lbId == "" && ports == nil {
-			return nil, fmt.Errorf("there are no avaialable ports for %v", nc.lbIds)
+			return nil, fmt.Errorf("there are no available ports for %v", nc.lbIds)
 		}
 	}
 
