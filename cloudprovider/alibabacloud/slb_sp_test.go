@@ -1,6 +1,8 @@
 package alibabacloud
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"sync"
@@ -10,6 +12,8 @@ import (
 	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestSlpSpAllocate(t *testing.T) {
@@ -161,5 +165,62 @@ func TestParsePortProtocols(t *testing.T) {
 		if !reflect.DeepEqual(actualProtocols, test.protocols) {
 			t.Errorf("case %d: expect protocols is %v, but actually is %v", i, test.protocols, actualProtocols)
 		}
+	}
+}
+
+func TestSlbSpOnPodUpdatedReturnsManagedServiceGetError(t *testing.T) {
+	const slbId = "lb-xxa"
+	networkConf, err := json.Marshal([]gamekruiseiov1alpha1.NetworkConfParams{
+		{Name: SlbIdsConfigName, Value: slbId},
+		{Name: PortProtocolsConfigName, Value: "80/TCP"},
+		{Name: ManagedServiceNamesConfigName, Value: "missing-service"},
+		{Name: ManagedServiceSelectorConfigName, Value: "game=test"},
+		{Name: gamekruiseiov1alpha1.AllowNotReadyContainersNetworkConfName, Value: "sidecar"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	networkStatus, err := json.Marshal(gamekruiseiov1alpha1.NetworkStatus{CurrentNetworkState: gamekruiseiov1alpha1.NetworkNotReady})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pod-0",
+			Namespace: "default",
+			Labels: map[string]string{
+				SlbIdLabelKey: slbId,
+				gamekruiseiov1alpha1.GameServerOwnerGssKey: "gss",
+			},
+			Annotations: map[string]string{
+				gamekruiseiov1alpha1.GameServerNetworkType:   SlbSPNetwork,
+				gamekruiseiov1alpha1.GameServerNetworkConf:   string(networkConf),
+				gamekruiseiov1alpha1.GameServerNetworkStatus: string(networkStatus),
+			},
+		},
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: slbId, Namespace: "default"},
+		Status: corev1.ServiceStatus{
+			LoadBalancer: corev1.LoadBalancerStatus{Ingress: []corev1.LoadBalancerIngress{{IP: "203.0.113.1"}}},
+		},
+	}
+	gss := &gamekruiseiov1alpha1.GameServerSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "gss", Namespace: "default"},
+		Spec: gamekruiseiov1alpha1.GameServerSetSpec{
+			Network: &gamekruiseiov1alpha1.Network{NetworkType: SlbSPNetwork},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = gamekruiseiov1alpha1.AddToScheme(scheme)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, svc, gss).Build()
+
+	plugin := &SlbSpPlugin{numBackends: map[string]int{}, podSlbId: map[string]string{}}
+	// The managed service does not exist, so getting it fails.
+	if _, pluginErr := plugin.OnPodUpdated(c, pod, context.Background()); pluginErr == nil {
+		t.Fatal("expected an error because the managed service could not be fetched, got nil")
 	}
 }
