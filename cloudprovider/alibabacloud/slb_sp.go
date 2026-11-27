@@ -159,7 +159,7 @@ func (s *SlbSpPlugin) OnPodUpdated(c client.Client, pod *corev1.Pod, ctx context
 				Name:      svcName,
 			}, managedSvc)
 			if getErr != nil {
-				return pod, cperrors.ToPluginError(err, cperrors.ApiCallError)
+				return pod, cperrors.ToPluginError(getErr, cperrors.ApiCallError)
 			}
 			toUpDateManagedSvc, err := utils.AllowNotReadyContainers(c, ctx, pod, managedSvc, true)
 			if err != nil {
