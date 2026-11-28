@@ -410,11 +410,18 @@ func (manager GameServerManager) SyncPodToGs(ctx context.Context, gss *gameKruis
 				attribute.Int("specFields", specFieldCount),
 				attribute.Bool("metadataChanged", metadataChanged),
 			)
+			addResourceVersionPrecondition(patch, gs.GetResourceVersion())
 			jsonPatchSpec, err := json.Marshal(patch)
 			if err != nil {
 				return err
 			}
 			err = manager.client.Patch(ctx, gs, client.RawPatch(types.MergePatchType, jsonPatchSpec))
+			if errors.IsConflict(err) {
+				manager.logger.V(4).Info("GameServer changed since it was read, retry spec/metadata patch",
+					telemetryfields.FieldGameServerNamespace, gs.GetNamespace(),
+					telemetryfields.FieldGameServerName, gs.GetName())
+				return err
+			}
 			if err != nil && !errors.IsNotFound(err) {
 				manager.logger.Error(err, "failed to patch GameServer spec/metadata",
 					telemetryfields.FieldGameServerNamespace, gs.GetNamespace(),
@@ -455,11 +462,18 @@ func (manager GameServerManager) SyncPodToGs(ctx context.Context, gss *gameKruis
 			attribute.String(telemetryfields.FieldNetworkDesired, string(newStatus.NetworkStatus.DesiredNetworkState)),
 			attribute.String(telemetryfields.FieldNetworkCurrent, string(newStatus.NetworkStatus.CurrentNetworkState)),
 		)
+		addResourceVersionPrecondition(patchStatus, gs.GetResourceVersion())
 		jsonPatchStatus, err := json.Marshal(patchStatus)
 		if err != nil {
 			return err
 		}
 		err = manager.client.Status().Patch(ctx, gs, client.RawPatch(types.MergePatchType, jsonPatchStatus))
+		if errors.IsConflict(err) {
+			manager.logger.V(4).Info("GameServer changed since it was read, retry status patch",
+				telemetryfields.FieldGameServerNamespace, gs.GetNamespace(),
+				telemetryfields.FieldGameServerName, gs.GetName())
+			return err
+		}
 		if err != nil && !errors.IsNotFound(err) {
 			manager.logger.Error(err, "failed to patch GameServer status",
 				telemetryfields.FieldGameServerNamespace, gs.GetNamespace(),
@@ -469,6 +483,21 @@ func (manager GameServerManager) SyncPodToGs(ctx context.Context, gss *gameKruis
 	}
 
 	return nil
+}
+
+// addResourceVersionPrecondition makes a merge patch conditional on the GameServer version it was
+// computed from. The GameServer usually comes from an informer cache; without the precondition a
+// patch based on an outdated copy silently overwrites newer labels or service quality results.
+func addResourceVersionPrecondition(patch map[string]interface{}, resourceVersion string) {
+	if resourceVersion == "" {
+		return
+	}
+	metadata, _ := patch["metadata"].(map[string]interface{})
+	if metadata == nil {
+		metadata = map[string]interface{}{}
+		patch["metadata"] = metadata
+	}
+	metadata["resourceVersion"] = resourceVersion
 }
 
 func (manager GameServerManager) WaitOrNot() bool {
@@ -555,6 +584,13 @@ func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, 
 		newSqCondition.Name = sq.Name
 		index, podCondition := util.GetPodConditionFromList(podConditions, corev1.PodConditionType(util.AddPrefixGameKruise(sq.Name)))
 		if index != -1 {
+			if recorded, exist := sqConditionsMap[sq.Name]; exist && isStaleProbeCondition(podCondition, &recorded) {
+				// The Pod may come from an informer cache that lags behind a newer Pod read earlier.
+				// Re-running actions for an older probe result would undo the newer one, e.g. a stale
+				// PreparingUpdate result releasing a lifecycle hook again after Updated restored it.
+				newGsConditions = append(newGsConditions, recorded)
+				continue
+			}
 			podConditionMessage := strings.ReplaceAll(podCondition.Message, "|", "")
 			podConditionMessage = strings.ReplaceAll(podConditionMessage, "\n", "")
 			newSqCondition.Status = string(podCondition.Status)
@@ -644,6 +680,16 @@ func syncServiceQualities(serviceQualities []gameKruiseV1alpha1.ServiceQuality, 
 		newGsConditions = append(newGsConditions, newSqCondition)
 	}
 	return newGsConditions
+}
+
+// isStaleProbeCondition reports whether the Pod condition is older than the probe result already
+// recorded in the GameServer status. Conditions without a probe time cannot be ordered and are
+// never treated as stale.
+func isStaleProbeCondition(podCondition *corev1.PodCondition, recorded *gameKruiseV1alpha1.ServiceQualityCondition) bool {
+	if podCondition.LastProbeTime.IsZero() || recorded.LastProbeTime.IsZero() {
+		return false
+	}
+	return podCondition.LastProbeTime.Before(&recorded.LastProbeTime)
 }
 
 func (manager GameServerManager) syncPodContainers(gsContainers []gameKruiseV1alpha1.GameServerContainer, podContainers []corev1.Container) []corev1.Container {
