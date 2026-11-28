@@ -10,6 +10,7 @@ const (
 	EventGameServerReconcileSyncGsToPodSuccess    = "gameserver.reconcile.sync_gs_to_pod.success"
 	EventGameServerReconcileSyncPodToGsStart      = "gameserver.reconcile.sync_pod_to_gs.start"
 	EventGameServerReconcileSyncPodToGsSuccess    = "gameserver.reconcile.sync_pod_to_gs.success"
+	EventGameServerReconcileSyncPodToGsConflict   = "gameserver.reconcile.sync_pod_to_gs.conflict"
 	EventGameServerReconcileWaitNetworkState      = "gameserver.reconcile.wait_network_state"
 
 	EventGameServerSetReconcileSyncPodProbeMarkerStart   = "gameserverset.reconcile.sync_podprobemarker.start"

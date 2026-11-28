@@ -18,18 +18,22 @@ package gameserver
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
@@ -214,5 +218,52 @@ func TestGameServerReconcile(t *testing.T) {
 		if !reflect.DeepEqual(expectGsSpec, actualGsSpec) {
 			t.Errorf("case %d: expect Spec %v, but actually got %v", i, expectGsSpec, actualGsSpec)
 		}
+	}
+}
+
+func TestGameServerReconcileRequeuesOnConflict(t *testing.T) {
+	gss := &gameKruiseV1alpha1.GameServerSet{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "xxx", Name: "xxx"},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "xxx",
+			Name:      "xxx-0",
+			Labels:    map[string]string{gameKruiseV1alpha1.GameServerOwnerGssKey: "xxx"},
+		},
+		Spec: corev1.PodSpec{NodeName: "node-A"},
+	}
+	gs := &gameKruiseV1alpha1.GameServer{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "xxx",
+			Name:      "xxx-0",
+			Labels:    map[string]string{gameKruiseV1alpha1.GameServerOwnerGssKey: "xxx"},
+		},
+	}
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-A"}}
+
+	statusPatches := 0
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(gss, pod, gs, node).WithStatusSubresource(gs).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(ctx context.Context, c client.Client, subResourceName string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				statusPatches++
+				return errors.NewConflict(schema.GroupResource{Group: "game.kruise.io", Resource: "gameservers"},
+					obj.GetName(), fmt.Errorf("the object has been modified"))
+			},
+		}).Build()
+	recon := GameServerReconciler{Client: c, recorder: record.NewFakeRecorder(100)}
+
+	result, err := recon.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "xxx", Name: "xxx-0"},
+	})
+	if err != nil {
+		t.Fatalf("expect conflict to be retried without error, got %v", err)
+	}
+	if statusPatches == 0 {
+		t.Fatal("expect GameServer status to be patched")
+	}
+	if !result.Requeue {
+		t.Errorf("expect requeue after conflict, got %+v", result)
 	}
 }

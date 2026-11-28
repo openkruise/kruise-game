@@ -377,6 +377,13 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			tracing.AttrGameServerName(gs.GetName()),
 		))
 	err = gsm.SyncPodToGs(ctx, gss)
+	if errors.IsConflict(err) {
+		// The GameServer was changed after it was read from the cache. Recompute from a newer copy
+		// instead of overwriting the newer state.
+		span.AddEvent(tracing.EventGameServerReconcileSyncPodToGsConflict)
+		span.SetAttributes(tracing.AttrReconcileRequeue(true))
+		return reconcile.Result{Requeue: true}, nil
+	}
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "SyncPodToGs failed")

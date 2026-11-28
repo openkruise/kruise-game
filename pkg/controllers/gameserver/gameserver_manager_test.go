@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr/testr"
 	kruisePub "github.com/openkruise/kruise-api/apps/pub"
@@ -13,12 +14,14 @@ import (
 	gameKruiseV1alpha1 "github.com/openkruise/kruise-game/apis/v1alpha1"
 	"github.com/openkruise/kruise-game/pkg/util"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -1418,5 +1421,289 @@ func TestSyncPodToGs(t *testing.T) {
 		if !isConditionsEqual(test.gsStatus.Conditions, gs.Status.Conditions) {
 			t.Errorf("case %d: expect conditions is %v, but actually %v", i, test.gsStatus.Conditions, gs.Status.Conditions)
 		}
+	}
+}
+
+const testLifecycleBlockKey = "gs-sync/lifecycle-block"
+
+var (
+	testPreparingUpdateProbeTime = metav1.NewTime(time.Date(2026, 11, 28, 6, 25, 38, 0, time.UTC))
+	testUpdatedProbeTime         = metav1.NewTime(time.Date(2026, 11, 28, 6, 26, 3, 0, time.UTC))
+	testUpdatedActionTime        = metav1.NewTime(time.Date(2026, 11, 28, 6, 26, 18, 0, time.UTC))
+)
+
+// newIdleServiceQuality mirrors an idle probe whose results drive an in-place update lifecycle hook:
+// PreparingUpdate releases the hook, Updated or a failed probe restores it.
+func newIdleServiceQuality() gameKruiseV1alpha1.ServiceQuality {
+	return gameKruiseV1alpha1.ServiceQuality{
+		Name:      "idle",
+		Permanent: false,
+		ServiceQualityAction: []gameKruiseV1alpha1.ServiceQualityAction{
+			{
+				State:          false,
+				GameServerSpec: gameKruiseV1alpha1.GameServerSpec{OpsState: gameKruiseV1alpha1.None},
+				Labels:         map[string]string{testLifecycleBlockKey: "true"},
+			},
+			{State: true, Result: "PreparingDelete", Labels: map[string]string{testLifecycleBlockKey: "false"}},
+			{State: true, Result: "PreparingUpdate", Labels: map[string]string{testLifecycleBlockKey: "false"}},
+			{State: true, Result: "Updated", Labels: map[string]string{testLifecycleBlockKey: "true"}},
+		},
+	}
+}
+
+func newIdlePodCondition(status corev1.ConditionStatus, message string, probeTime metav1.Time) corev1.PodCondition {
+	return corev1.PodCondition{
+		Type:          corev1.PodConditionType(util.AddPrefixGameKruise("idle")),
+		Status:        status,
+		Message:       message,
+		LastProbeTime: probeTime,
+	}
+}
+
+func newIdleSqCondition(result string, probeTime, actionTime metav1.Time) gameKruiseV1alpha1.ServiceQualityCondition {
+	return gameKruiseV1alpha1.ServiceQualityCondition{
+		Name:                     "idle",
+		Status:                   string(corev1.ConditionTrue),
+		Result:                   result,
+		LastProbeTime:            probeTime,
+		LastTransitionTime:       actionTime,
+		LastActionTransitionTime: actionTime,
+	}
+}
+
+func TestSyncServiceQualitiesIgnoresStaleProbeCondition(t *testing.T) {
+	tests := []struct {
+		name            string
+		podCondition    corev1.PodCondition
+		recorded        gameKruiseV1alpha1.ServiceQualityCondition
+		blocked         string
+		expectBlocked   string
+		expectStatus    string
+		expectResult    string
+		expectProbeTime metav1.Time
+		expectNewAction bool
+	}{
+		{
+			name:            "an older PreparingUpdate result does not release the hook restored by Updated",
+			podCondition:    newIdlePodCondition(corev1.ConditionTrue, "PreparingUpdate", testPreparingUpdateProbeTime),
+			recorded:        newIdleSqCondition("Updated", testUpdatedProbeTime, testUpdatedActionTime),
+			blocked:         "true",
+			expectBlocked:   "true",
+			expectStatus:    string(corev1.ConditionTrue),
+			expectResult:    "Updated",
+			expectProbeTime: testUpdatedProbeTime,
+		},
+		{
+			name:            "a newer Updated result restores the hook",
+			podCondition:    newIdlePodCondition(corev1.ConditionTrue, "Updated", testUpdatedProbeTime),
+			recorded:        newIdleSqCondition("PreparingUpdate", testPreparingUpdateProbeTime, testPreparingUpdateProbeTime),
+			blocked:         "false",
+			expectBlocked:   "true",
+			expectStatus:    string(corev1.ConditionTrue),
+			expectResult:    "Updated",
+			expectProbeTime: testUpdatedProbeTime,
+			expectNewAction: true,
+		},
+		{
+			name:            "a result changed at the same probe time is not stale",
+			podCondition:    newIdlePodCondition(corev1.ConditionTrue, "Updated", testUpdatedProbeTime),
+			recorded:        newIdleSqCondition("PreparingUpdate", testUpdatedProbeTime, testPreparingUpdateProbeTime),
+			blocked:         "false",
+			expectBlocked:   "true",
+			expectStatus:    string(corev1.ConditionTrue),
+			expectResult:    "Updated",
+			expectProbeTime: testUpdatedProbeTime,
+			expectNewAction: true,
+		},
+		{
+			name:            "a condition without probe time is never treated as stale",
+			podCondition:    newIdlePodCondition(corev1.ConditionFalse, "", metav1.Time{}),
+			recorded:        newIdleSqCondition("Updated", testUpdatedProbeTime, testUpdatedActionTime),
+			blocked:         "false",
+			expectBlocked:   "true",
+			expectStatus:    string(corev1.ConditionFalse),
+			expectResult:    "",
+			expectProbeTime: metav1.Time{},
+			expectNewAction: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gs := &gameKruiseV1alpha1.GameServer{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{testLifecycleBlockKey: test.blocked},
+				},
+				Status: gameKruiseV1alpha1.GameServerStatus{
+					ServiceQualitiesCondition: []gameKruiseV1alpha1.ServiceQualityCondition{test.recorded},
+				},
+			}
+
+			conditions := syncServiceQualities([]gameKruiseV1alpha1.ServiceQuality{newIdleServiceQuality()},
+				[]corev1.PodCondition{test.podCondition}, gs, record.NewFakeRecorder(10))
+
+			if got := gs.GetLabels()[testLifecycleBlockKey]; got != test.expectBlocked {
+				t.Errorf("expect %s=%s, got %s", testLifecycleBlockKey, test.expectBlocked, got)
+			}
+			if len(conditions) != 1 {
+				t.Fatalf("expect 1 service quality condition, got %d", len(conditions))
+			}
+			got := conditions[0]
+			if got.Status != test.expectStatus || got.Result != test.expectResult || !got.LastProbeTime.Equal(&test.expectProbeTime) {
+				t.Errorf("expect status %q result %q probe time %v, got %+v", test.expectStatus, test.expectResult, test.expectProbeTime, got)
+			}
+			newAction := !got.LastActionTransitionTime.Equal(&test.recorded.LastActionTransitionTime)
+			if newAction != test.expectNewAction {
+				t.Errorf("expect new action %v, got last action time %v (recorded %v)", test.expectNewAction, got.LastActionTransitionTime, test.recorded.LastActionTransitionTime)
+			}
+			if !test.expectNewAction && !reflect.DeepEqual(got, test.recorded) {
+				t.Errorf("expect recorded condition kept as is, got %+v", got)
+			}
+		})
+	}
+}
+
+type idleSyncFixture struct {
+	client client.Client
+	gss    *gameKruiseV1alpha1.GameServerSet
+	pod    *corev1.Pod
+	key    types.NamespacedName
+}
+
+func newIdleSyncFixture(t *testing.T, podCondition corev1.PodCondition, blocked string, recorded gameKruiseV1alpha1.ServiceQualityCondition) *idleSyncFixture {
+	t.Helper()
+	gss := &gameKruiseV1alpha1.GameServerSet{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "xxx", Name: "xxx"},
+		Spec: gameKruiseV1alpha1.GameServerSetSpec{
+			ServiceQualities: []gameKruiseV1alpha1.ServiceQuality{newIdleServiceQuality()},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "xxx",
+			Name:      "xxx-0",
+			Labels:    map[string]string{gameKruiseV1alpha1.GameServerOwnerGssKey: "xxx"},
+		},
+		Spec:   corev1.PodSpec{NodeName: "node-A"},
+		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{podCondition}},
+	}
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-A"}}
+	gs := &gameKruiseV1alpha1.GameServer{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "xxx",
+			Name:      "xxx-0",
+			Labels: map[string]string{
+				gameKruiseV1alpha1.GameServerOwnerGssKey: "xxx",
+				gameKruiseV1alpha1.GameServerNodeNameKey: "node-A",
+				testLifecycleBlockKey:                    blocked,
+			},
+			Annotations: map[string]string{
+				gameKruiseV1alpha1.GsTemplateMetadataHashKey: util.GetGsTemplateMetadataHash(gss),
+			},
+		},
+		Status: gameKruiseV1alpha1.GameServerStatus{
+			ServiceQualitiesCondition: []gameKruiseV1alpha1.ServiceQualityCondition{recorded},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(gs, pod, node, gss).WithStatusSubresource(gs).Build()
+	return &idleSyncFixture{
+		client: c,
+		gss:    gss,
+		pod:    pod,
+		key:    types.NamespacedName{Namespace: "xxx", Name: "xxx-0"},
+	}
+}
+
+func (f *idleSyncFixture) getGameServer(t *testing.T) *gameKruiseV1alpha1.GameServer {
+	t.Helper()
+	gs := &gameKruiseV1alpha1.GameServer{}
+	if err := f.client.Get(context.TODO(), f.key, gs); err != nil {
+		t.Fatal(err)
+	}
+	return gs
+}
+
+func (f *idleSyncFixture) syncPodToGs(t *testing.T, gs *gameKruiseV1alpha1.GameServer) error {
+	t.Helper()
+	manager := &GameServerManager{
+		client:        f.client,
+		gameServer:    gs,
+		pod:           f.pod.DeepCopy(),
+		eventRecorder: record.NewFakeRecorder(100),
+		logger:        testr.New(t),
+	}
+	return manager.SyncPodToGs(context.TODO(), f.gss)
+}
+
+// TestSyncPodToGsRejectsOutdatedGameServer reproduces a lost update: after a newer write released the
+// hook again, a reconcile based on an outdated GameServer copy must not write its older service
+// quality result back, otherwise the action restoring the hook never runs again.
+func TestSyncPodToGsRejectsOutdatedGameServer(t *testing.T) {
+	ctx := context.TODO()
+	f := newIdleSyncFixture(t,
+		newIdlePodCondition(corev1.ConditionTrue, "Updated", testUpdatedProbeTime),
+		"true",
+		newIdleSqCondition("Updated", testUpdatedProbeTime, testUpdatedActionTime))
+
+	// The cache still holds the version written when Updated restored the hook.
+	outdated := f.getGameServer(t)
+
+	// A newer write released the hook again and recorded PreparingUpdate.
+	latest := f.getGameServer(t)
+	released := latest.DeepCopy()
+	released.Labels[testLifecycleBlockKey] = "false"
+	if err := f.client.Patch(ctx, released, client.MergeFrom(latest)); err != nil {
+		t.Fatal(err)
+	}
+	releasedStatus := released.DeepCopy()
+	releasedStatus.Status.ServiceQualitiesCondition = []gameKruiseV1alpha1.ServiceQualityCondition{
+		newIdleSqCondition("PreparingUpdate", testPreparingUpdateProbeTime, metav1.NewTime(testUpdatedActionTime.Add(3*time.Second))),
+	}
+	if err := f.client.Status().Patch(ctx, releasedStatus, client.MergeFrom(released)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.syncPodToGs(t, outdated); !apierrors.IsConflict(err) {
+		t.Fatalf("expect conflict when syncing an outdated GameServer, got %v", err)
+	}
+	if got := f.getGameServer(t).Status.ServiceQualitiesCondition; len(got) != 1 || got[0].Result != "PreparingUpdate" {
+		t.Fatalf("outdated GameServer overwrote the newer service quality result: %+v", got)
+	}
+
+	// Retrying with the latest GameServer runs the Updated action again and restores the hook.
+	if err := f.syncPodToGs(t, f.getGameServer(t)); err != nil {
+		t.Fatal(err)
+	}
+	gs := f.getGameServer(t)
+	if got := gs.Labels[testLifecycleBlockKey]; got != "true" {
+		t.Errorf("expect %s=true after retry, got %s", testLifecycleBlockKey, got)
+	}
+	if got := gs.Status.ServiceQualitiesCondition; len(got) != 1 || got[0].Result != "Updated" {
+		t.Errorf("expect idle result Updated after retry, got %+v", got)
+	}
+}
+
+// TestSyncPodToGsIgnoresStalePodCondition covers a Pod read from a lagging informer cache: its older
+// PreparingUpdate result must not release the hook that a newer Updated result already restored.
+func TestSyncPodToGsIgnoresStalePodCondition(t *testing.T) {
+	recorded := newIdleSqCondition("Updated", testUpdatedProbeTime, testUpdatedActionTime)
+	f := newIdleSyncFixture(t,
+		newIdlePodCondition(corev1.ConditionTrue, "PreparingUpdate", testPreparingUpdateProbeTime),
+		"true",
+		recorded)
+
+	if err := f.syncPodToGs(t, f.getGameServer(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	gs := f.getGameServer(t)
+	if got := gs.Labels[testLifecycleBlockKey]; got != "true" {
+		t.Errorf("stale PreparingUpdate released the hook: %s=%s", testLifecycleBlockKey, got)
+	}
+	got := gs.Status.ServiceQualitiesCondition
+	if len(got) != 1 || got[0].Result != "Updated" || !got[0].LastProbeTime.Equal(&recorded.LastProbeTime) ||
+		!got[0].LastActionTransitionTime.Equal(&recorded.LastActionTransitionTime) {
+		t.Errorf("expect recorded idle condition kept, got %+v", got)
 	}
 }
